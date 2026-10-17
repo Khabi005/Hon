@@ -41,12 +41,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   Offset? _pointerDownPos;
   DateTime? _pointerDownTime;
   DateTime? _sessionStartTime;
+  bool _isForegrounded = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Do NOT start timer during loading/validation! Timer starts once PDF document is open and readable.
+    // Do NOT start timer during loading/validation! Timer starts once PDF document is open, readable, AND foregrounded.
     _sessionStartTime = null;
     _initPdf();
   }
@@ -54,8 +55,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _isForegrounded = false;
       _pauseReadingSession();
     } else if (state == AppLifecycleState.resumed) {
+      _isForegrounded = true;
       _resumeReadingSession();
     }
   }
@@ -72,7 +75,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
 
   void _resumeReadingSession() {
     // Only restart timer if PDF has valid, readable document in foreground
-    if (!_isLoading && _errorMessage == null && !_isUnsupportedPlatform) {
+    if (!_isLoading && _errorMessage == null && !_isUnsupportedPlatform && _isForegrounded) {
       _sessionStartTime = DateTime.now();
     }
   }
@@ -174,7 +177,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
-            _sessionStartTime = DateTime.now();
+            if (_isForegrounded) {
+              _sessionStartTime = DateTime.now();
+            } else {
+              _sessionStartTime = null;
+            }
           });
         }
       } else {
@@ -189,7 +196,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
-            _sessionStartTime = DateTime.now();
+            if (_isForegrounded) {
+              _sessionStartTime = DateTime.now();
+            } else {
+              _sessionStartTime = null;
+            }
           });
         }
       }

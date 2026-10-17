@@ -324,5 +324,34 @@ void main() {
 
       expect(ReadiumReaderService.activeSessionStartTime, isNull);
     });
+
+    test('Loading completion while backgrounded (isForegrounded: false) does NOT start session timer', () async {
+      ReadiumReaderService.activeSessionStartTime = null;
+
+      final readyMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderReady', {
+          'bookId': bookId,
+          'requestId': 'req_bg_race',
+          'isForegrounded': false,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', readyMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNull);
+      expect(ReadiumReaderService.isForegrounded, isFalse);
+
+      // When reader is subsequently resumed by user returning to foreground:
+      final resumeMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderResumed', {
+          'bookId': bookId,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', resumeMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNotNull);
+      expect(ReadiumReaderService.isForegrounded, isTrue);
+    });
   });
 }

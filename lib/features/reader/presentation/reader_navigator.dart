@@ -16,6 +16,7 @@ class ReaderNavigator {
     int? initialPageIndex,
     double? initialScrollOffset,
     String? locator,
+    String? initialChapterContent,
   }) async {
     // If not explicitly provided, look up saved progress from DatabaseService
     final savedProgress = DatabaseService.instance.getProgress(book.id);
@@ -87,6 +88,7 @@ class ReaderNavigator {
                 initialPageIndex: targetPageIndex,
                 initialScrollOffset: targetScrollOffset,
                 initialLocator: targetLocator,
+                initialChapterContent: initialChapterContent,
               ),
             ),
           );
@@ -101,6 +103,7 @@ class ReaderNavigator {
             initialPageIndex: targetPageIndex,
             initialScrollOffset: targetScrollOffset,
             initialLocator: targetLocator,
+            initialChapterContent: initialChapterContent,
           ),
         ),
       );

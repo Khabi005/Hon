@@ -429,11 +429,16 @@ class DatabaseService {
     return _chapters[bookId] ?? [];
   }
 
+  List<Chapter> getChapters(String bookId) => getChaptersForBook(bookId);
+
   Future<void> setChaptersForBook(String bookId, List<Chapter> chapters) async {
     _chapters[bookId] = chapters;
     await _saveToDisk();
     _notify();
   }
+
+  Future<void> saveChapters(String bookId, List<Chapter> chapters) =>
+      setChaptersForBook(bookId, chapters);
 
   // --- Bookmarks ---
   List<Bookmark> getBookmarks(String bookId) {

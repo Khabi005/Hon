@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../../../app/theme/hon_colors.dart';
 import '../../../core/database/database_service.dart';
+import '../../../core/files/storage_service.dart';
 import '../../../core/models/book.dart';
-import '../../../core/models/download_job.dart';
+import '../../../core/models/chapter.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/source_registry.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
@@ -23,10 +25,19 @@ class SourceCatalogScreen extends StatefulWidget {
 }
 
 class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
-  final String _selectedListing = 'Hot Novel';
+  final String _selectedListing = 'Browse';
   String _searchQuery = '';
   bool _isSearching = false;
+  bool _isLoading = false;
+  String? _errorMessage;
+  List<SourceNovelSummary> _novels = [];
   final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialCatalog();
+  }
 
   @override
   void dispose() {
@@ -34,20 +45,44 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
     super.dispose();
   }
 
+  Future<void> _loadInitialCatalog() async {
+    await _performSearch('pride');
+  }
+
+  Future<void> _performSearch(String query) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final results = await SourceRegistry.instance.searchSource(
+        widget.sourceMeta.id,
+        query.trim().isEmpty ? 'pride' : query.trim(),
+      );
+      if (mounted) {
+        setState(() {
+          _novels = results;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceFirst('SourceNetworkException: ', '');
+          _isLoading = false;
+          _novels = [];
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
     final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
-
-    final allNovels = SourceRegistry.instance.getNovelsForSource(widget.sourceMeta.id);
-    final displayedNovels = _searchQuery.trim().isEmpty
-        ? allNovels
-        : allNovels.where((n) {
-            final q = _searchQuery.toLowerCase();
-            return n.title.toLowerCase().contains(q) ||
-                (n.author?.toLowerCase().contains(q) ?? false);
-          }).toList();
 
     return Scaffold(
       backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
@@ -64,7 +99,10 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                 autofocus: true,
                 style: TextStyle(color: textPrimary),
                 placeholder: 'Search ${widget.sourceMeta.name}...',
-                onChanged: (val) => setState(() => _searchQuery = val),
+                onSubmitted: (val) {
+                  _searchQuery = val;
+                  _performSearch(val);
+                },
               )
             : Text(
                 widget.sourceMeta.name,
@@ -87,6 +125,7 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                 if (!_isSearching) {
                   _searchQuery = '';
                   _searchController.clear();
+                  _loadInitialCatalog();
                 }
               });
             },
@@ -99,7 +138,7 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
         label: const Text('Filter', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
         onPressed: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Filter presets: All genres, Completed & Ongoing')),
+            const SnackBar(content: Text('Filter presets: All languages, Popular & New')),
           );
         },
       ),
@@ -140,8 +179,53 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
             ),
           ),
 
-          // Novels Grid (3 Columns, matching reference screenshot)
-          if (displayedNovels.isEmpty)
+          // Content section
+          if (_isLoading)
+            const SliverFillRemaining(
+              child: Center(
+                child: CupertinoActivityIndicator(radius: 14),
+              ),
+            )
+          else if (_errorMessage != null)
+            SliverFillRemaining(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        CupertinoIcons.exclamationmark_triangle_fill,
+                        color: HonColors.accentOrange,
+                        size: 44,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Failed to load catalog',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        icon: const Icon(CupertinoIcons.refresh, size: 16),
+                        label: const Text('Retry'),
+                        onPressed: () => _performSearch(_searchQuery),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else if (_novels.isEmpty)
             SliverFillRemaining(
               child: Center(
                 child: Padding(
@@ -149,7 +233,7 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                   child: Text(
                     _searchQuery.isNotEmpty
                         ? 'No novels found matching "$_searchQuery"'
-                        : 'No online novels in this source catalog.\nUpstream Lua runtime will fetch live novels in Phase 0C.',
+                        : 'No novels available in this catalog.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: textSecondary, height: 1.5),
                   ),
@@ -168,10 +252,10 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    final novel = displayedNovels[index];
+                    final novel = _novels[index];
                     return _buildNovelCard(novel, textPrimary, textSecondary);
                   },
-                  childCount: displayedNovels.length,
+                  childCount: _novels.length,
                 ),
               ),
             ),
@@ -220,6 +304,7 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
       MaterialPageRoute(
         builder: (_) => SourceNovelDetailsScreen(
           novel: novel,
+          sourceId: widget.sourceMeta.id,
           sourceName: widget.sourceMeta.name,
         ),
       ),
@@ -229,11 +314,13 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
 
 class SourceNovelDetailsScreen extends StatefulWidget {
   final SourceNovelSummary novel;
+  final String sourceId;
   final String sourceName;
 
   const SourceNovelDetailsScreen({
     super.key,
     required this.novel,
+    required this.sourceId,
     required this.sourceName,
   });
 
@@ -242,59 +329,163 @@ class SourceNovelDetailsScreen extends StatefulWidget {
 }
 
 class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
-  final List<String> _chapters = List.generate(
-    15,
-    (i) => 'Chapter ${i + 1}',
-  );
+  bool _isLoadingDetails = true;
+  String? _detailsError;
+  NovelDetails? _novelDetails;
+  bool _isOpeningChapter = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNovelDetails();
+  }
+
+  Future<void> _loadNovelDetails() async {
+    setState(() {
+      _isLoadingDetails = true;
+      _detailsError = null;
+    });
+
+    try {
+      final details = await SourceRegistry.instance.getNovelDetails(
+        widget.sourceId,
+        widget.novel.id,
+        loadChapters: true,
+      );
+      if (mounted) {
+        setState(() {
+          _novelDetails = details;
+          _isLoadingDetails = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _detailsError = e.toString().replaceFirst('SourceNetworkException: ', '');
+          _isLoadingDetails = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openChapter(SourceChapter chapter, int chapterIndex) async {
+    setState(() => _isOpeningChapter = true);
+    try {
+      final chapterUrl = chapter.url ?? chapter.id;
+      final passageHtml = await SourceRegistry.instance.getChapterPassage(
+        widget.sourceId,
+        chapterUrl,
+      );
+
+      final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+      final book = Book(
+        id: bookId,
+        title: _novelDetails?.title ?? widget.novel.title,
+        author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
+        description: _novelDetails?.description ?? widget.novel.description ?? '',
+        format: BookFormat.webNovel,
+        sourceId: widget.sourceName,
+        totalChapters: _novelDetails?.chapters.length ?? 1,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      // Save book record
+      await DatabaseService.instance.saveBook(book);
+
+      if (mounted) {
+        setState(() => _isOpeningChapter = false);
+        await ReaderNavigator.openBook(
+          context,
+          book,
+          initialChapterIndex: chapterIndex,
+          initialChapterContent: passageHtml,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isOpeningChapter = false);
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Error Loading Chapter'),
+            content: Text('Failed to load chapter content from source:\n$e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
 
   Future<void> _handleDownloadChapters() async {
-    final db = DatabaseService.instance;
-    final bookId = 'novel_${widget.novel.id}';
+    final chapters = _novelDetails?.chapters ?? [];
+    if (chapters.isEmpty) return;
+    final ch = chapters.first;
 
-    // 1. Durably record or update novel record
-    final book = Book(
-      id: bookId,
-      title: widget.novel.title,
-      author: widget.novel.author ?? widget.sourceName,
-      description: widget.novel.description ?? '',
-      format: BookFormat.webNovel,
-      sourceId: widget.sourceName,
-      totalChapters: _chapters.length,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    await db.saveBook(book);
-
-    // 2. Queue download job with correct model fields
-    final job = DownloadJob(
-      id: 'job_${DateTime.now().millisecondsSinceEpoch}',
-      bookId: bookId,
-      chapterId: 'ch1',
-      chapterTitle: 'Chapter 1',
-      sourceId: widget.sourceName,
-      status: DownloadStatus.queued,
-      progress: 0.0,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    await db.enqueueDownload(job);
-
-    // 3. Prompt logic: If not in library, prompt "Add to Library?"
-    if (mounted) {
-      await AddToLibraryPrompt.checkAndPrompt(
-        context,
-        novelId: bookId,
-        novelTitle: widget.novel.title,
-        onAddToLibrary: () async {
-          await db.setLibraryMembership(bookId, true);
-        },
+    try {
+      final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+      final passageHtml = await SourceRegistry.instance.getChapterPassage(
+        widget.sourceId,
+        ch.url ?? ch.id,
       );
-    }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Downloading Chapter 1 of "${widget.novel.title}"...')),
+      // Save to managed chapters directory
+      final storage = StorageService.instance;
+      final chFile = File('${storage.chaptersDir.path}/${bookId}_ch1.html');
+      await chFile.writeAsString(passageHtml);
+
+      // Save book and chapter records
+      final book = Book(
+        id: bookId,
+        title: _novelDetails?.title ?? widget.novel.title,
+        author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
+        description: _novelDetails?.description ?? widget.novel.description ?? '',
+        format: BookFormat.webNovel,
+        sourceId: widget.sourceName,
+        totalChapters: chapters.length,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
       );
+      await DatabaseService.instance.saveBook(book);
+
+      final dbChapter = Chapter(
+        id: '${bookId}_ch1',
+        bookId: bookId,
+        sourceChapterId: ch.id,
+        title: ch.title,
+        chapterIndex: 0,
+        url: ch.url,
+        localFilePath: chFile.path,
+        downloadState: ChapterDownloadState.downloaded,
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
+      if (mounted) {
+        await AddToLibraryPrompt.checkAndPrompt(
+          context,
+          novelId: bookId,
+          novelTitle: widget.novel.title,
+          onAddToLibrary: () async {
+            await DatabaseService.instance.setLibraryMembership(bookId, true);
+          },
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to download chapter: $e')),
+        );
+      }
     }
   }
 
@@ -304,7 +495,13 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
     final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
 
-    final inLibrary = DatabaseService.instance.isBookInLibrary('novel_${widget.novel.id}');
+    final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+    final inLibrary = DatabaseService.instance.isBookInLibrary(bookId);
+
+    final title = _novelDetails?.title ?? widget.novel.title;
+    final author = _novelDetails?.author ?? widget.novel.author ?? widget.sourceName;
+    final description = _novelDetails?.description ?? widget.novel.description ?? 'No description available for this novel.';
+    final chapters = _novelDetails?.chapters ?? [];
 
     return Scaffold(
       backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
@@ -316,201 +513,225 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
-          widget.novel.title,
+          title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ),
-      body: ListView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        children: [
-          // Cover & Metadata
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              BookCoverWidget(
-                title: widget.novel.title,
-                author: widget.novel.author ?? widget.sourceName,
-                width: 90,
-                height: 135,
-                borderRadius: 8,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.novel.title,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      widget.novel.author ?? 'Unknown Author',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: textSecondary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Source: ${widget.sourceName}',
-                      style: const TextStyle(fontSize: 12, color: HonColors.accentOrange),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Add to Library Button
-                    OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: inLibrary ? HonColors.accentGreen : textPrimary,
-                        side: BorderSide(
-                          color: inLibrary ? HonColors.accentGreen : (isDark ? Colors.white24 : Colors.black26),
+      body: _isLoadingDetails
+          ? const Center(child: CupertinoActivityIndicator(radius: 14))
+          : _detailsError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(CupertinoIcons.exclamationmark_triangle_fill, color: HonColors.accentOrange, size: 44),
+                        const SizedBox(height: 12),
+                        Text('Failed to load novel details', style: TextStyle(color: textPrimary, fontSize: 17, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Text(_detailsError!, textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 13)),
+                        const SizedBox(height: 16),
+                        OutlinedButton.icon(
+                          icon: const Icon(CupertinoIcons.refresh, size: 16),
+                          label: const Text('Retry'),
+                          onPressed: _loadNovelDetails,
                         ),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      ),
-                      icon: Icon(
-                        inLibrary ? CupertinoIcons.checkmark_alt : CupertinoIcons.heart,
-                        size: 16,
-                      ),
-                      label: Text(inLibrary ? 'In Library' : 'Add to Library'),
-                      onPressed: () async {
-                        final bookId = 'novel_${widget.novel.id}';
-                        final db = DatabaseService.instance;
-                        final newStatus = !inLibrary;
-                        await db.setLibraryMembership(bookId, newStatus);
-                        setState(() {});
-                      },
+                      ],
                     ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 20),
-
-          // Synopsis
-          Text(
-            'Synopsis',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            widget.novel.description ?? 'No description available for this novel.',
-            style: TextStyle(fontSize: 13, height: 1.45, color: textSecondary),
-          ),
-
-          const SizedBox(height: 24),
-
-          // Action row
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HonColors.accentOrange,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  icon: const Icon(CupertinoIcons.book, size: 18),
-                  label: const Text('Read Online'),
-                  onPressed: () {
-                    final book = Book(
-                      id: 'novel_${widget.novel.id}',
-                      title: widget.novel.title,
-                      author: widget.novel.author ?? widget.sourceName,
-                      description: widget.novel.description ?? '',
-                      format: BookFormat.webNovel,
-                      sourceId: widget.sourceName,
-                      totalChapters: _chapters.length,
-                      createdAt: DateTime.now(),
-                      updatedAt: DateTime.now(),
-                    );
-                    ReaderNavigator.openBook(context, book);
-                  },
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: textPrimary,
-                    side: BorderSide(color: isDark ? Colors.white24 : Colors.black26),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  icon: const Icon(CupertinoIcons.arrow_down_circle, size: 18),
-                  label: const Text('Download Ch 1'),
-                  onPressed: _handleDownloadChapters,
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 28),
-
-          // Chapter List Header
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Chapters (${_chapters.length})',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
-              ),
-              IconButton(
-                icon: const Icon(CupertinoIcons.sort_down, size: 18),
-                onPressed: () {},
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-
-          // Chapters list
-          ..._chapters.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final chTitle = entry.value;
-
-            return InkWell(
-              onTap: () {
-                final book = Book(
-                  id: 'novel_${widget.novel.id}',
-                  title: widget.novel.title,
-                  author: widget.novel.author ?? widget.sourceName,
-                  description: widget.novel.description ?? '',
-                  format: BookFormat.webNovel,
-                  sourceId: widget.sourceName,
-                  totalChapters: _chapters.length,
-                  createdAt: DateTime.now(),
-                  updatedAt: DateTime.now(),
-                );
-                ReaderNavigator.openBook(context, book, initialChapterIndex: idx);
-              },
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                )
+              : Stack(
                   children: [
-                    Text(
-                      chTitle,
-                      style: TextStyle(fontSize: 14, color: textPrimary, fontWeight: FontWeight.w500),
+                    ListView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      children: [
+                        // Cover & Metadata
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            BookCoverWidget(
+                              title: title,
+                              author: author,
+                              coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
+                              width: 90,
+                              height: 135,
+                              borderRadius: 8,
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    author,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: textSecondary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Source: ${widget.sourceName}',
+                                    style: const TextStyle(fontSize: 12, color: HonColors.accentOrange),
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  // Add to Library Button
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: inLibrary ? HonColors.accentGreen : textPrimary,
+                                      side: BorderSide(
+                                        color: inLibrary ? HonColors.accentGreen : (isDark ? Colors.white24 : Colors.black26),
+                                      ),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    ),
+                                    icon: Icon(
+                                      inLibrary ? CupertinoIcons.checkmark_alt : CupertinoIcons.heart,
+                                      size: 16,
+                                    ),
+                                    label: Text(inLibrary ? 'In Library' : 'Add to Library'),
+                                    onPressed: () async {
+                                      final db = DatabaseService.instance;
+                                      final newStatus = !inLibrary;
+                                      await db.setLibraryMembership(bookId, newStatus);
+                                      setState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        // Synopsis
+                        Text(
+                          'Synopsis',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          description,
+                          style: TextStyle(fontSize: 13, height: 1.45, color: textSecondary),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // Action row
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: HonColors.accentOrange,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(CupertinoIcons.book, size: 18),
+                                label: const Text('Read Online'),
+                                onPressed: chapters.isNotEmpty
+                                    ? () => _openChapter(chapters.first, 0)
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: textPrimary,
+                                  side: BorderSide(color: isDark ? Colors.white24 : Colors.black26),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(CupertinoIcons.arrow_down_circle, size: 18),
+                                label: const Text('Download Ch 1'),
+                                onPressed: chapters.isNotEmpty ? _handleDownloadChapters : null,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 28),
+
+                        // Chapter List Header
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Chapters (${chapters.length})',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
+                            ),
+                            IconButton(
+                              icon: const Icon(CupertinoIcons.sort_down, size: 18),
+                              onPressed: () {},
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+
+                        // Chapters list
+                        ...chapters.asMap().entries.map((entry) {
+                          final idx = entry.key;
+                          final ch = entry.value;
+
+                          return InkWell(
+                            onTap: () => _openChapter(ch, idx),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      ch.title,
+                                      style: TextStyle(fontSize: 14, color: textPrimary, fontWeight: FontWeight.w500),
+                                    ),
+                                  ),
+                                  Icon(CupertinoIcons.arrow_down_circle, size: 18, color: textSecondary),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
                     ),
-                    Icon(CupertinoIcons.arrow_down_circle, size: 18, color: textSecondary),
+
+                    if (_isOpeningChapter)
+                      Container(
+                        color: Colors.black45,
+                        child: const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CupertinoActivityIndicator(radius: 16, color: Colors.white),
+                              SizedBox(height: 12),
+                              Text(
+                                'Loading chapter content from source...',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 ),
-              ),
-            );
-          }),
-        ],
-      ),
     );
   }
 }

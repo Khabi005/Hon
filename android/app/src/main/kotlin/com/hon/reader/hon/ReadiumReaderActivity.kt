@@ -202,7 +202,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
             val fragment = supportFragmentManager.findFragmentById(R.id.readium_fragment_container) as? EpubNavigatorFragment
             if (fragment != null) {
                 setupFragment(fragment, cachedPub)
-                HonReaderBridge.instance?.reportReady(bookId, requestId)
+                val isFg = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                HonReaderBridge.instance?.reportReady(bookId, requestId, isFg)
             }
             return
         }
@@ -259,7 +260,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 .commitNow()
 
             setupFragment(fragment, pub)
-            HonReaderBridge.instance?.reportReady(bookId, requestId)
+            val isFg = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+            HonReaderBridge.instance?.reportReady(bookId, requestId, isFg)
         }
     }
 

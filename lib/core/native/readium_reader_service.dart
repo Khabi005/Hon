@@ -46,12 +46,19 @@ class ReadiumReaderService {
 
   // Active foreground session time tracking
   static DateTime? _activeSessionStartTime;
+  static bool _isForegrounded = true;
 
   @visibleForTesting
   static DateTime? get activeSessionStartTime => _activeSessionStartTime;
 
   @visibleForTesting
   static set activeSessionStartTime(DateTime? val) => _activeSessionStartTime = val;
+
+  @visibleForTesting
+  static bool get isForegrounded => _isForegrounded;
+
+  @visibleForTesting
+  static set isForegrounded(bool val) => _isForegrounded = val;
 
   static bool get isAndroidNativeSupported => Platform.isAndroid;
 
@@ -94,7 +101,16 @@ class ReadiumReaderService {
           if (args != null) {
             final bookId = args['bookId'] as String? ?? '';
             final reqId = args['requestId'] as String? ?? '';
-            _activeSessionStartTime = DateTime.now();
+            final isFg = (args['isForegrounded'] as bool?) ?? true;
+            _isForegrounded = isFg;
+
+            // Timer starts ONLY if both readable content is ready AND the reader is foregrounded!
+            if (isFg) {
+              _activeSessionStartTime = DateTime.now();
+            } else {
+              _activeSessionStartTime = null;
+            }
+
             lastErrorNotifier.value = null;
             onReadyCallback?.call(bookId);
 
@@ -119,6 +135,7 @@ class ReadiumReaderService {
             final code = args['code'] as String? ?? 'UNKNOWN_ERROR';
             final message = args['message'] as String? ?? 'An error occurred in Readium';
             // Clear timer on error: error screen must not accumulate reading time!
+            _isForegrounded = false;
             _activeSessionStartTime = null;
             lastErrorNotifier.value = '$code: $message';
             onErrorCallback?.call(bookId, code, message);
@@ -146,6 +163,7 @@ class ReadiumReaderService {
             final progression = (args['totalProgression'] as num?)?.toDouble() ??
                 (args['progression'] as num?)?.toDouble();
 
+            _isForegrounded = false;
             // Save elapsed foreground reading time and STOP timer!
             // Crucial: do NOT leave timer running in the background!
             if (_activeSessionStartTime != null) {
@@ -179,6 +197,7 @@ class ReadiumReaderService {
           final args = call.arguments as Map<dynamic, dynamic>?;
           if (args != null) {
             // Restart timer only when reader returns to the foreground with readable content
+            _isForegrounded = true;
             _activeSessionStartTime = DateTime.now();
           }
           break;
@@ -190,6 +209,7 @@ class ReadiumReaderService {
             final locatorJson = args['locator'] as String?;
             final progression = (args['totalProgression'] as num?)?.toDouble();
 
+            _isForegrounded = false;
             // Accumulate any remaining reading time before closing
             if (_activeSessionStartTime != null) {
               final elapsed = DateTime.now().difference(_activeSessionStartTime!).inSeconds;

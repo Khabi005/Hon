@@ -25,6 +25,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
   final int initialPageIndex;
   final double? initialScrollOffset;
   final String? initialLocator;
+  final String? initialChapterContent;
 
   const ReaderScreen({
     super.key,
@@ -33,6 +34,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
     this.initialPageIndex = 0,
     this.initialScrollOffset,
     this.initialLocator,
+    this.initialChapterContent,
   });
 
   @override
@@ -55,12 +57,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
   late ScrollController _scrollController;
   Timer? _saveDebounceTimer;
   DateTime? _sessionStartTime;
+  bool _isForegrounded = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Do NOT start timer during loading! Timer starts once content is parsed and readable.
+    // Do NOT start timer during loading! Timer starts once content is parsed, readable, AND foregrounded.
     _sessionStartTime = null;
     _currentChapterIndex = widget.initialChapterIndex;
     _currentPageIndex = widget.initialPageIndex;
@@ -74,8 +77,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _isForegrounded = false;
       _pauseReadingSession();
     } else if (state == AppLifecycleState.resumed) {
+      _isForegrounded = true;
       _resumeReadingSession();
     }
   }
@@ -92,7 +97,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
 
   void _resumeReadingSession() {
     // Only restart timer if reader has valid, readable content in foreground
-    if (!_isLoading && _errorMessage == null) {
+    if (!_isLoading && _errorMessage == null && _isForegrounded) {
       _sessionStartTime = DateTime.now();
     }
   }
@@ -126,6 +131,55 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
         }
         _currentPageIndex = savedProgress.pageIndex;
         _totalPages = savedProgress.totalPages > 0 ? savedProgress.totalPages : 1;
+      }
+
+      if (widget.book.format == BookFormat.webNovel) {
+        final dbChapters = DatabaseService.instance.getChapters(widget.book.id);
+        final loadedChapters = <EpubChapterItem>[];
+
+        if (widget.initialChapterContent != null && widget.initialChapterContent!.isNotEmpty) {
+          final title = dbChapters.isNotEmpty && _currentChapterIndex < dbChapters.length
+              ? dbChapters[_currentChapterIndex].title
+              : widget.book.title;
+          loadedChapters.add(EpubChapterItem(
+            id: 'ch_$_currentChapterIndex',
+            title: title,
+            contentHref: 'webnovel_ch_$_currentChapterIndex',
+            htmlContent: widget.initialChapterContent!,
+          ));
+        } else if (dbChapters.isNotEmpty) {
+          for (int i = 0; i < dbChapters.length; i++) {
+            final ch = dbChapters[i];
+            String body = '';
+            if (ch.localFilePath != null && File(ch.localFilePath!).existsSync()) {
+              body = File(ch.localFilePath!).readAsStringSync();
+            }
+            if (body.isNotEmpty) {
+              loadedChapters.add(EpubChapterItem(
+                id: ch.id,
+                title: ch.title,
+                contentHref: ch.url ?? ch.id,
+                htmlContent: body,
+              ));
+            }
+          }
+        }
+
+        if (loadedChapters.isNotEmpty && mounted) {
+          setState(() {
+            _chapters = loadedChapters;
+            _totalPages = loadedChapters.length;
+            _currentChapterIndex = _currentChapterIndex.clamp(0, loadedChapters.length - 1);
+            _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, _currentChapterIndex);
+            _isLoading = false;
+            if (_isForegrounded) {
+              _sessionStartTime = DateTime.now();
+            } else {
+              _sessionStartTime = null;
+            }
+          });
+          return;
+        }
       }
 
       File? file;
@@ -179,8 +233,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
               _isBookmarked = DatabaseService.instance
                   .isBookmarked(widget.book.id, _currentChapterIndex);
               _isLoading = false;
-              // Start timer only when content is loaded and readable
-              _sessionStartTime = DateTime.now();
+              // Start timer ONLY if both readable content is ready AND reader is foregrounded
+              if (_isForegrounded) {
+                _sessionStartTime = DateTime.now();
+              } else {
+                _sessionStartTime = null;
+              }
             });
 
             // Post-frame scroll position restoration if scroll offset exists

@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/novel_source.dart';
+import 'lua/shosetsu_lua_engine.dart';
 
 class ExtensionMeta {
   final String id;
@@ -91,12 +93,22 @@ class SourceRegistry {
     ),
   ];
 
+  final Map<String, String> _testScripts = {};
+
+  @visibleForTesting
+  void setSourceScriptForTesting(String sourceId, String script) {
+    _testScripts[sourceId] = script;
+  }
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList('hon_installed_extensions');
     if (saved != null) {
       _installedExtensionIds.clear();
       _installedExtensionIds.addAll(saved);
+    } else {
+      // Default to Project Gutenberg so the verified upstream extension is active
+      _installedExtensionIds.add('gutenberg');
     }
   }
 
@@ -129,6 +141,50 @@ class SourceRegistry {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('hon_installed_extensions', _installedExtensionIds.toList());
     _notify();
+  }
+
+  /// Loads the upstream Lua extension script from assets or test override
+  Future<String> getSourceScript(String sourceId) async {
+    if (_testScripts.containsKey(sourceId)) {
+      return _testScripts[sourceId]!;
+    }
+    if (sourceId == 'gutenberg') {
+      return await rootBundle.loadString('assets/sources/gutenberg.lua');
+    }
+    throw SourceParseException('Upstream extension script not found for "$sourceId"');
+  }
+
+  /// Executes upstream extension search (e.g. Project Gutenberg)
+  Future<List<SourceNovelSummary>> searchSource(
+    String sourceId,
+    String query, {
+    int page = 0,
+  }) async {
+    final script = await getSourceScript(sourceId);
+    return await ShosetsuLuaEngine.instance.search(script, query, page: page);
+  }
+
+  /// Parses novel details and real chapter list via the upstream extension
+  Future<NovelDetails> getNovelDetails(
+    String sourceId,
+    String novelUrl, {
+    bool loadChapters = true,
+  }) async {
+    final script = await getSourceScript(sourceId);
+    return await ShosetsuLuaEngine.instance.parseNovel(
+      script,
+      novelUrl,
+      loadChapters: loadChapters,
+    );
+  }
+
+  /// Retrieves readable chapter HTML via the upstream extension
+  Future<String> getChapterPassage(
+    String sourceId,
+    String chapterUrl,
+  ) async {
+    final script = await getSourceScript(sourceId);
+    return await ShosetsuLuaEngine.instance.getPassage(script, chapterUrl);
   }
 
   /// When true, mock preview catalogues are returned for offline layout prototyping.

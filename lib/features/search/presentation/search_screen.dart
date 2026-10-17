@@ -272,6 +272,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                                       MaterialPageRoute(
                                         builder: (_) => SourceNovelDetailsScreen(
                                           novel: novel,
+                                          sourceId: source.id,
                                           sourceName: source.name,
                                         ),
                                       ),

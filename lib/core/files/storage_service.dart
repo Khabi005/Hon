@@ -26,6 +26,8 @@ class StorageService {
   Directory get stagingDir => Directory(p.join(_baseDir!.path, 'staging'));
 
   /// Checks whether a given path resides within Hon's managed sandboxed storage.
+  /// Note: Uses path string normalization (via `path.canonicalize()`, resolving '.' and '..' segments)
+  /// and prefix containment check; it does NOT perform filesystem-level symlink resolution.
   /// Prevents accidental deletion of external files outside Hon's app directory.
   bool isPathInsideManagedStorage(String filePath) {
     if (_baseDir == null) return false;

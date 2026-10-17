@@ -62,13 +62,14 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         }
     }
 
-    fun reportReady(bookId: String, requestId: String) {
+    fun reportReady(bookId: String, requestId: String, isForegrounded: Boolean = true) {
         mainHandler.post {
             channel.invokeMethod(
                 "onReaderReady",
                 mapOf(
                     "bookId" to bookId,
-                    "requestId" to requestId
+                    "requestId" to requestId,
+                    "isForegrounded" to isForegrounded
                 )
             )
         }

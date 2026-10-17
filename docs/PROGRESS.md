@@ -14,44 +14,48 @@
 | **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
 | **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | 📋 | — | — | — | **Explicitly scheduled dedicated milestone**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic (clean bottom toolbar, classic typography sheets, subtle TOC / bookmark ribbon) combined with modern Apple Books paragraph formatting & themes (from user screenshots). Kept strictly separate from Flutter widgets. |
 | **Persistence / Bridge** | Multi-Book Bounded Write Queue | ✅ | ✅ | ✅ | ✅ (Device/Linux) | `_pendingByBook` isolation; `onPause()` dispatches `onReaderPaused` for immediate disk flush; `onReaderClosed` with null/empty locator preserves existing progress untouched (no 0% reset); persisted to SharedPreferences JSON collections (SQLite Drift is Phase 0D target). |
-| **Persistence / Bridge** | Reading Session Duration Tracking | ✅ | ✅ | ✅ | ✅ (Linux) | Foreground reader sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate active elapsed seconds and continuously update `DatabaseService.addReadingTime()`. |
-| **Library Screen** | Removal & Deletion Actions | ✅ | ✅ | ✅ | ✅ (Linux) | Dedicated options sheet on card long-press & overflow button with exact actions: "Remove from Library" (keeps downloaded files) and "Remove from Library and Delete" (destructive confirmation alert; removes entry, purges DB, and deletes local files from disk). |
+| **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
+| **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
 | **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
 | **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
 | **Settings Screen** | Data & Backup Labeling | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Honestly labeled JSON Metadata Archive export (library books & reading progress records) replacing inaccurate SQLite wording. |
-| **Desktop Preview (Dart)** | Chapter Swipe Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration. |
+| **Desktop Preview (Dart)** | Chapter Swipe & Web Novel Rendering | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration; renders both EPUB chapters and online web novel chapters with identical Apple Books typography. |
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Catalogue Integrity | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Mock catalogues disabled (`enableDemoCatalogues = false`); clean empty state until live Lua sources in Phase 0C. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Synthetic updates removed; Section 5 Add-to-Library prompt queues downloads durably before prompting. |
-| **Phase 0C Target** | Upstream Shosetsu Lua Engine | 📋 | — | — | — | **Bounded proof of functionality**: One real upstream extension → search → novel details → chapter list → readable chapter, followed by compatibility and sandboxing. |
+| **Browse (Sources)** | Upstream Shosetsu Lua Extension Engine (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Bounded upstream proof complete with real upstream extension (`assets/sources/gutenberg.lua`). Completes search → novel details → chapter list → readable chapter content. Real DOM parsing & pure Dart Lua 5.3 interpreter (`lua_dardo_plus`). Honest network error cards; zero synthetic or mock fallbacks. |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads save real passage content into managed storage (`StorageService.instance.chaptersDir`); Add-to-Library prompt queues downloads durably before prompting. |
 
 ---
 
 ## Detailed Evidence & Verification Log
 
-### 1. Device Smoke Test Milestone
-- **On-Device Baseline Verification:** Confirmed on physical Android hardware via user smoke test. Readium rendering operates natively without fallback; TOC populated and navigated; appearance dialog switches themes and font sizes; locator callbacks persist progression to SharedPreferences JSON storage (SQLite Drift target scheduled for Phase 0D).
-- **EPUB Paragraph Spacing Investigation:**
-  - Evaluated two EPUBs: *Lord of the Mysteries Vol 1* (`lotm.epub`) and *Pride and Prejudice* (`pride_and_prejudice.epub`).
-  - *LotM* CSS inspection: contains `margin: 0 0 30pt;` and `text-align: justify;` causing wide paragraph gaps and justified spacing.
-  - *Pride and Prejudice* CSS inspection: contains `margin-top: 0; margin-bottom: 0; padding: 1em; text-align: justify;`.
-  - Conclusion: Spacing variations stem directly from publisher-authored CSS. Readium respects publisher CSS by default. Publisher styles are preserved to respect headings, italics, and deliberate publisher formatting.
+### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Proof of Functionality
+- **Upstream Source Extension Used:** Project Gutenberg (`assets/sources/gutenberg.lua`, matching upstream Shosetsu repository specification).
+- **Architecture:** Pure Dart Lua 5.3 runtime (`lua_dardo_plus`) with Shosetsu Kotlin-lib environment bridge (`Document`, `Element`, `Elements`, CSS selectors, attribute extraction, `Novel`, `NovelInfo`, `NovelChapter`, `NovelStatus`, `Require("FilterOptions")`, `Require("url")`, `map`, `AsList`, `pageOfElem`).
+- **Complete Pipeline Verified End-to-End:**
+  1. **Search:** Executes live search query (e.g. `"pride"`) against source. Parses HTML search results into structured `SourceNovelSummary` items with title, link, and cover thumbnail.
+  2. **Novel Details:** Invokes `parseNovel("/ebooks/1342", true)` to extract publication metadata, author (*Jane Austen*), synopsis, genres, and the complete chapter list.
+  3. **Chapter List:** Accurately parses chapter title, release date, and online passage link (`/cache/epub/1342/pg1342-images.html`).
+  4. **Readable Chapter Passage:** Invokes `getPassage(url)` to retrieve the complete HTML text of the novel. Seamlessly renders in Hon's reader screen using Apple Books typography, theme settings, font sizing, and reading time accumulation.
+  5. **Honest Error Handling:** If connection drops or HTTP errors occur (e.g. SocketException, 404, 500), `SourceNetworkException` is thrown and displayed via an honest error banner with a "Retry" button. Zero synthetic or mock fallbacks.
+  6. **Automated Test Suite:** Verified via `test/unit/shosetsu_lua_engine_test.dart` (6 passed tests verifying live and fixture parsing, DOM extraction, chapter list integrity, and network error handling).
 
-### 2. Ergonomics & Contrast Fixes (Pending Device Retest)
-- **Layout Framing:** Replaced overlapping `FrameLayout` in `ReadiumReaderActivity` with vertical `LinearLayout`. The reading container has `weight = 1.0f`, framed cleanly between the top bar and bottom bar when controls are visible, and expanding to full screen when controls are dismissed (`View.GONE`).
-- **Device Retest Checkpoint:** Marked pending verification on next APK test to verify that toolbar toggling and container height changes do not unexpectedly shift reading positions in paged and continuous scroll modes.
-- **Window Insets:** Added `ViewCompat.setOnApplyWindowInsetsListener` to dynamically offset top bar by status bar cutout and bottom bar by navigation bar inset.
-- **Adaptive System Bar Contrast:** Added `updateSystemBars()` using `WindowInsetsControllerCompat.isAppearanceLightStatusBars`. Sets dark status-bar and navigation-bar icons for light and sepia modes, and light icons for dark mode. Marked pending verification on next APK test.
+### 2. Foreground Reading Session Tracking & Race Condition Guard
+- **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).
+- **Background Loading Race Fixed:** If a user backgrounds the app while an EPUB or PDF is still loading/parsing, the session timer does NOT start upon loading completion. The timer starts strictly when **both content readiness AND foreground state** are verified.
+- **Unit Test Verification:** Added unit test `Loading completion while backgrounded (isForegrounded: false) does NOT start session timer` in `test/unit/readium_reader_service_test.dart`, confirming timer remains `null` until resume.
 
-### 3. Library Actions & Foreground Reading Tracking
-- **Library Removal Actions:** Added options sheet on long-press and overflow icon button on every library card and list row:
-  - "Remove from Library": Removes library membership (`isInLibrary = false`), preserving local book entity, reading progress, and downloaded files on disk. Includes Undo snackbar.
-  - "Remove from Library and Delete": Destructive confirmation dialog permanently deletes the local EPUB/PDF file and local cover from disk, purges database entries, and cleans up associated download jobs.
-- **Reading Minutes Foreground Tracking:** Connected foreground reader session tracking in `ReadiumReaderService` (native Android EPUB), `PdfReaderScreen`, and `ReaderScreen` (Dart reader). Accumulates elapsed active seconds on pause/close/dispose and increments `DatabaseService.addReadingTime()`.
+### 3. Managed Storage Boundaries & File Deletion Integrity
+- **Path Containment Clarification:** Updated `isPathInsideManagedStorage(filePath)` documentation to clarify that it normalizes path strings via `path.canonicalize()` (resolving `.` and `..` segments) and tests prefix containment without filesystem-level symlink resolution.
+- **Complete File Deletion:** `DatabaseService.deleteBook()` aggregates publication file, cover image, and all downloaded chapter files (`ch.localFilePath`). External user files outside managed storage are protected and never deleted from disk. Failed file deletions preserve database records for retry.
 
-### 4. Host Verification & Build Quality
-- **Static Analysis:** `flutter analyze` — **0 issues found**.
-- **Automated Tests:** `flutter test` — **29 passed, 0 failed** (including unit tests for removal actions, file deletion, and reading time accumulation).
-- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**.
+### 4. Layout Framing & Adaptive Contrast (Pending Consolidated On-Device Test)
+- **Layout Framing:** Vertical `LinearLayout` framing (`weight = 1.0f`) places reading container strictly between top and bottom toolbars without overlap.
+- **Adaptive Contrast:** System bar icons dynamically toggle between dark (for light/sepia pages) and light (for dark pages) using `WindowInsetsControllerCompat`.
+- **Status:** Labeled `⏳ Pending Next APK Test` until consolidated physical on-device test is run.
+
+### 5. Quality & Verification Metrics
+- **Static Analysis:** `flutter analyze` — **0 issues found** (clean).
+- **Automated Tests:** `flutter test` — **39 passed, 0 failed** across all unit and widget tests.
+- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL in 17s** (`build/app/outputs/apk/debug/app-debug.apk` built).
