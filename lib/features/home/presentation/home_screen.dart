@@ -6,9 +6,10 @@ import '../../../app/theme/hon_colors.dart';
 import '../../../app/theme/hon_typography.dart';
 import '../../../core/database/database_service.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
-import '../../reader/presentation/reader_screen.dart';
+import '../../reader/presentation/reader_navigator.dart';
 import '../../settings/presentation/settings_screen.dart';
 import 'widgets/continue_reading_card.dart';
+import 'widgets/reading_goals_sheet.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -16,9 +17,14 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final continueBooks = ref.watch(continueReadingProvider);
-    final allBooks = ref.watch(libraryBooksProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
+    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
+
+    final finishedBooks = ref.watch(libraryBooksProvider).where((b) {
+      final prog = DatabaseService.instance.getProgress(b.id);
+      return prog != null && prog.completionPercentage >= 0.99;
+    }).toList();
 
     return Scaffold(
       backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
@@ -27,7 +33,7 @@ class HomeScreen extends ConsumerWidget {
         child: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
-            // Top App Bar with Serif Title and Settings Action
+            // Top App Bar with Serif Title and Reading Streak Action
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
@@ -41,31 +47,39 @@ class HomeScreen extends ConsumerWidget {
                     ),
                     Row(
                       children: [
-                        // Reading streak / progress ring badge (Apple Books 20/20 style)
-                        Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: HonColors.accentBlue,
-                              width: 2.2,
-                            ),
-                          ),
-                          child: const Center(
-                            child: Text(
-                              '20',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
+                        // Reading streak badge button -> opens Reading Goals modal
+                        GestureDetector(
+                          onTap: () {
+                            ReadingGoalsSheet.show(
+                              context,
+                              mostRecentBook: continueBooks.firstOrNull,
+                            );
+                          },
+                          child: Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
                                 color: HonColors.accentBlue,
+                                width: 2.2,
+                              ),
+                            ),
+                            child: const Center(
+                              child: Text(
+                                '20',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: HonColors.accentBlue,
+                                ),
                               ),
                             ),
                           ),
                         ),
                         const SizedBox(width: 12),
 
-                        // Settings action button (Toolbar button, no fake avatar!)
+                        // Settings action button
                         IconButton(
                           icon: Icon(
                             CupertinoIcons.gear_alt,
@@ -85,11 +99,11 @@ class HomeScreen extends ConsumerWidget {
               ),
             ),
 
-            // "Continue" Section
+            // "Continue" Section (Real reading progress only)
             if (continueBooks.isNotEmpty) ...[
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
                   child: Text(
                     'Continue',
                     style: HonTypography.sectionHeader(color: textPrimary),
@@ -115,79 +129,96 @@ class HomeScreen extends ConsumerWidget {
               ),
             ],
 
-            // "Top Picks" Hero Carousel (From Image 2 reference)
+            // Reading Goals Banner Card
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 28, 20, 12),
-                child: Text(
-                  'Top Picks',
-                  style: HonTypography.sectionHeader(color: textPrimary),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+                child: GestureDetector(
+                  onTap: () {
+                    ReadingGoalsSheet.show(
+                      context,
+                      mostRecentBook: continueBooks.firstOrNull,
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E1E20) : const Color(0xFFF2F2F7),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: HonColors.accentBlue.withOpacity(0.15),
+                          ),
+                          child: const Icon(
+                            CupertinoIcons.timer,
+                            size: 20,
+                            color: HonColors.accentBlue,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Reading Goals',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '0 of 5 mins today • Tap to view stats',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          CupertinoIcons.chevron_right,
+                          size: 16,
+                          color: textSecondary,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: 290,
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    // Orange Curated Card from Reference Image 2
-                    _buildCuratedCard(
-                      context,
-                      tag: 'Hon Reader',
-                      headline: 'STAFF PICKS\n2026 SO FAR',
-                      subtext: 'Check out our favorite classics and translated novels of the year.',
-                      gradient: const [Color(0xFFFF7E39), Color(0xFFFF5224)],
-                      onTap: () {
-                        // Open Pride and Prejudice
-                        final p = DatabaseService.instance.getBookById('book_pride_and_prejudice');
-                        if (p != null) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => ReaderScreen(book: p)),
-                          );
-                        }
-                      },
-                    ),
-                    const SizedBox(width: 14),
 
-                    // Crimson War and Peace Card from Reference Image 2
-                    _buildCuratedCard(
-                      context,
-                      tag: 'SUGGESTED CLASSIC',
-                      headline: 'War and Peace',
-                      subtext: 'Leo Tolstoy • Russian literature monumental epic',
-                      gradient: const [Color(0xFF8B0000), Color(0xFF5A0000)],
-                      onTap: () {
-                        final b = DatabaseService.instance.getBookById('book_war_and_peace');
-                        if (b != null) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => ReaderScreen(book: b)),
-                          );
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            // "Want to Read >" Section (From Image 2 reference)
+            // Books Read This Year Section
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 28, 20, 12),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Want to Read',
+                      'Books Read This Year',
                       style: HonTypography.sectionHeader(color: textPrimary),
                     ),
-                    const SizedBox(width: 6),
-                    Icon(
-                      CupertinoIcons.chevron_right,
-                      size: 16,
-                      color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+                    Text(
+                      '${finishedBooks.length} books',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: textSecondary,
+                      ),
                     ),
                   ],
                 ),
@@ -195,33 +226,48 @@ class HomeScreen extends ConsumerWidget {
             ),
             SliverToBoxAdapter(
               child: SizedBox(
-                height: 185,
+                height: 110,
                 child: ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
-                  itemCount: allBooks.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 16),
+                  itemCount: finishedBooks.isNotEmpty ? finishedBooks.length : 3,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
                   itemBuilder: (ctx, i) {
-                    final book = allBooks[i];
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => ReaderScreen(book: book)),
-                        );
-                      },
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          BookCoverWidget(
-                            title: book.title,
-                            author: book.author,
-                            coverPath: book.coverPath,
-                            width: 100,
-                            height: 150,
-                            borderRadius: 8,
-                          ),
-                        ],
+                    if (finishedBooks.isNotEmpty && i < finishedBooks.length) {
+                      final b = finishedBooks[i];
+                      return GestureDetector(
+                        onTap: () => ReaderNavigator.openBook(context, b),
+                        child: BookCoverWidget(
+                          title: b.title,
+                          author: b.author,
+                          coverPath: b.coverPath,
+                          width: 72,
+                          height: 108,
+                          borderRadius: 6,
+                        ),
+                      );
+                    }
+                    return Container(
+                      width: 72,
+                      height: 108,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1E1E20) : const Color(0xFFF2F2F7),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: isDark ? Colors.white10 : Colors.black12,
+                          width: 0.5,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${i + 1}',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontFamily: 'serif',
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white24 : Colors.black26,
+                        ),
                       ),
                     );
                   },
@@ -229,82 +275,45 @@ class HomeScreen extends ConsumerWidget {
               ),
             ),
 
-            const SliverToBoxAdapter(
-              child: SizedBox(height: 100), // Bottom padding for frosted nav bar
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCuratedCard(
-    BuildContext context, {
-    required String tag,
-    required String headline,
-    required String subtext,
-    required List<Color> gradient,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 250,
-        height: 290,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            colors: gradient,
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: gradient[0].withOpacity(0.35),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  tag.toUpperCase(),
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.85),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
+            // Empty state guidance if continue is empty
+            if (continueBooks.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(
+                          CupertinoIcons.book,
+                          size: 48,
+                          color: isDark ? Colors.white24 : Colors.black26,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No Active Reading',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Import EPUB or PDF books in Library, or discover novels in Browse to begin reading.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: textSecondary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  headline,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    height: 1.15,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-              ],
-            ),
-            Text(
-              subtext,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.9),
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                height: 1.3,
               ),
-            ),
+
+            const SliverToBoxAdapter(child: SizedBox(height: 90)),
           ],
         ),
       ),

@@ -11,6 +11,7 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -37,6 +38,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.6")
+    implementation("org.readium.kotlin-toolkit:readium-shared:3.1.1")
+    implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.1")
+    implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.1")
 }
 
 flutter {

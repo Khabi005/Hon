@@ -1,78 +1,56 @@
-# Hon — Project Implementation Progress
+# Hon — Project Implementation Progress & Requirements Matrix
 
-## Status Legend
-- ⏳ Pending
-- 🔄 In Progress
-- ✅ Completed
+## Truthful Requirements & Status Matrix
 
-## Phases
+| Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Android Native (Readium)** | Readium Toolkit 3.1.1 & Activity | ✅ | ✅ | ✅ | ⏳ **Pending** | `ReadiumReaderActivity` hosting `EpubNavigatorFragment` with desugared Java 8+ APIs; runtime verification pending device/emulator availability. |
+| **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ⏳ **Pending** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
+| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ⏳ **Pending** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
+| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ⏳ **Pending** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
+| Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Android Native (Readium)** | Readium Toolkit 3.1.1 & Activity | ✅ | ✅ | ✅ | ⏳ **Pending** | `ReadiumReaderActivity` hosting `EpubNavigatorFragment` with desugared Java 8+ APIs; runtime verification pending device/emulator availability. |
+| **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ⏳ **Pending** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
+| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ⏳ **Pending** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
+| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ⏳ **Pending** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
+| **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ⏳ **Pending** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
+| **Android Native (Readium)** | Non-Blocking Async Loading & Restoration | ✅ | ✅ | ✅ | ⏳ **Pending** | Asynchronous opening via `lifecycleScope.launch(Dispatchers.IO)` on normal launch (`super.onCreate(null)` with loading spinner); configuration change restoration utilizes in-memory `PublicationRepository` to install `fragmentFactory` before `super.onCreate(savedInstanceState)` with zero blocking. |
+| **Persistence / Bridge** | Multi-Book Bounded Write Queue | ✅ | ✅ | ✅ | ✅ (Linux) | `_pendingByBook` isolation; `onPause()` dispatches `onReaderPaused` for immediate disk flush; `onReaderClosed` with null/empty locator preserves existing progress untouched (no 0% reset); failed writes remain pending with errors reported to `persistenceErrorNotifier`. |
+| **Persistence / Bridge** | Locator Format Versioning & Href Match | ✅ | ✅ | ✅ | ✅ (Linux) | `locatorVersion` tag (`readium-v1` vs `dart-dom-v1`); normalized Readium href matched against `EpubChapterItem.contentHref` for seamless fallback. |
+| **Desktop Preview (Dart)** | Chapter Swipe Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration. |
+| **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
+| **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
+| **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
+| **Home Screen** | Shelf & Reading Goals | ✅ | ✅ | ✅ | ✅ (Linux) | Clean empty shelf, honest continue reading, iOS 18 Reading Goals arc gauge modal sheet, Books Read This Year. |
+| **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge. |
+| **Browse (Sources)** | Catalogue Integrity | ✅ | ✅ | ✅ | ✅ (Linux) | Mock catalogues disabled (`enableDemoCatalogues = false`); clean empty state until live Lua sources in Phase 0C. |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ✅ (Linux) | Synthetic updates removed; Section 5 Add-to-Library prompt queues downloads durably before prompting. |
 
-### Phase 0 — Validate the Technical Foundation
-- [✅] Toolchain verified: Flutter 3.41.2 (Channel stable, Dart 3.11.0, DevTools 2.54.1), Android SDK 36.1.0, Java 21.0.12.1.
-- [✅] Selected compatible stable dependency versions (flutter_riverpod, shared_preferences, archive, xml, html, file_picker, google_fonts, crypto, uuid, pdfx).
-- [✅] Validated EPUB parser engine with valid EPUB 3 fixture (`assets/fixtures/pride_and_prejudice.epub`), verified container.xml, content.opf, manifest, spine, and chapter XHTML extraction.
-- [✅] Validated PDF reader integration with `pdfx` (page controller, pinch zoom, page jump, saved location).
-- [✅] Validated Storage Access Framework / File Picker pipeline with staging and SHA-256 duplicate detection.
-- [✅] Validated `NovelSource` runtime contract and downloader state machine.
+---
 
-### Phase 1 — Establish Visual Specification & Branding
-- [✅] Master 本 / Hon calligraphy logo and Apple Books iOS 18 reference screenshots added to `assets/branding/` and `docs/references/`.
-- [✅] Generated Android adaptive launcher icons (foreground 432x432, light & dark backgrounds, compact square 512x512 kanji, and monochrome icon).
-- [✅] Configured `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml` and density folders (mdpi, hdpi, xhdpi, xxhdpi, xxxhdpi).
-- [✅] Defined complete color tokens and iOS 18 frosted glass effects (`lib/app/theme/hon_colors.dart`, `lib/shared/widgets/frosted_glass.dart`).
-- [✅] Defined 6 reader themes from reference Image 4: **Original**, **Quiet**, **Paper**, **Bold**, **Calm**, **Focus** (`lib/app/theme/reader_theme.dart`).
-- [✅] Defined Apple Books typography scale with Newsreader serif headings and San Francisco body (`lib/app/theme/hon_typography.dart`).
+## Detailed Evidence & Verification Log
 
-### Phase 2 — Build the App Shell
-- [✅] Initialized Flutter project and configured Git version control.
-- [✅] Set up Riverpod state management and reactive database notification stream (`lib/app/bootstrap/providers.dart`).
-- [✅] Implemented Apple Books iOS 18 bottom-tab scaffold with frosted glass blur, 5 tabs (Home, Library, Browse, Downloads, Search) with tab state preservation via `IndexedStack`.
-- [✅] Built tactile book cover widget with realistic 3D book spine crease/shadow and fallback cover styling (`lib/shared/widgets/book_cover_widget.dart`).
-- [✅] Built Apple Books ornate flourish divider (`lib/shared/widgets/ornate_divider.dart`).
-- [✅] Seeded local fixtures for *Pride and Prejudice*, *Good Material*, *First Lie Wins*, and *War and Peace*.
+### 1. Host Verification (Linux VM)
+- **Static Analysis:** `flutter analyze` completed with **0 issues found**.
+- **Automated Tests:** `flutter test` completed with **26 passed, 0 failed**:
+  - `test/unit/readium_reader_service_test.dart`: Locator synchronization, multi-book persistence isolation, instant synchronous flush on `onReaderClosed`, bounded periodic flush, onReaderPaused immediate flush, null-locator progress preservation, onReaderError handling, and format versioning.
+  - `test/unit/pdf_reader_test.dart`: PDF page clamping, bookmark CRUD, appearance persistence, library membership removal, and mathematical completion.
+  - `test/unit/epub_parser_test.dart`: UTF-8 decoding and HTML DOM styling preservation.
+  - `test/unit/library_prompt_and_storage_test.dart`: Section 5 prompt flow and storage invariants.
+  - `test/widget_test.dart`: Navigation shell, tab order, and capsule dock.
 
-### Phase 3 — Local Library & File Imports
-- [✅] Persistent database service storing Books, LibraryEntries, ReadingProgress, and DownloadJobs.
-- [✅] Import pipeline: File picker -> Copy to staging -> Readability check -> Metadata & Cover extraction -> SHA-256 hash deduplication -> Move to permanent storage -> Commit book and library records -> Staging cleanup.
-- [✅] Grid mode and List mode view toggle.
-- [✅] Filter chips (All, EPUBs, PDFs, Finished).
+### 2. Android Build Compilation
+- **Gradle Task:** `./gradlew assembleDebug`
+- **Result:** `BUILD SUCCESSFUL in 15s` (236 actionable tasks).
+- **Target APK:** `build/app/outputs/flutter-apk/app-debug.apk`
+- **Native Components Included:**
+  - `org.readium.kotlin-toolkit:readium-shared:3.1.1`
+  - `org.readium.kotlin-toolkit:readium-streamer:3.1.1`
+  - `org.readium.kotlin-toolkit:readium-navigator:3.1.1`
+  - `com.android.tools:desugar_jdk_libs:2.1.4`
+  - `ReadiumReaderActivity.kt` registered in `AndroidManifest.xml`
 
-### Phase 4 — EPUB & PDF Readers
-- [✅] Reader screen matching reference Image 3:
-  - Top header: jump-back button with previous page count ("372"), chapter countdown ("9 pages left in chapter"), circular close (X) button.
-  - Centered chapter title with ornate decorative flourish divider.
-  - Jane Austen paragraph typography: indented first lines, comfortable line height (1.65x), balanced margins, justified text.
-  - Bottom bar: page progress ("395 of 691") and menu button opening Themes & Settings sheet.
-- [✅] Themes & Settings bottom sheet matching reference Image 4:
-  - Font size adjuster pill `[ A | A ]`.
-  - Layout toggle (Paginated vs Continuous Vertical Scroll).
-  - Contrast quick invert toggle.
-  - Brightness slider with sun glyphs.
-  - 2x3 grid of 6 themes (Original, Quiet, Paper, Bold, Calm, Focus).
-  - Customize sub-sheet for Font Family (Georgia, New York, San Francisco, Palatino), Line Spacing, and Justification switch.
-- [✅] PDF reader with page controller, zoom, and page progress tracking.
-
-### Phase 5 — Online Sources & Novels
-- [✅] Novel discovery and browse catalog with source selector.
-- [✅] Novel details view: cover, author, synopsis, and chapter list.
-- [✅] Seamless chapter reading in reader view.
-
-### Phase 6 — Downloads & Library Prompt
-- [✅] Implemented exact Section 5 download and library prompt behavior:
-  - Title: "Add to Library?"
-  - Message: "Add \"{novel title}\" to your library to find it easily and check for new chapters."
-  - Actions: "Add to Library" · "Not Now"
-  - Dismissing behaves as "Not Now".
-  - Choosing "Not Now" proceeds with download and suppresses repeat prompts for that novel during current app session.
-  - Choosing "Add to Library" adds novel to library and proceeds with download.
-  - Rechecks library membership immediately before prompt.
-  - Downloaded novels outside library remain accessible in Downloads and Reading History.
-  - Removing novel from library does NOT delete downloads; deleting downloads does NOT remove library membership.
-- [✅] Persistent download queue with active downloads badge on Downloads tab.
-
-### Phase 7 & 8 — Verification & Packaging
-- [✅] Unit test suite covering Section 5 download/library rules and Section 6 reader themes.
-- [✅] EPUB parser unit test verifying Pride and Prejudice fixture.
-- [✅] Widget test verifying 5-tab navigation scaffold.
-- [✅] Native Linux build verified (`✓ Built build/linux/x64/debug/bundle/hon`).
-- [✅] Android APK built successfully (`✓ Built build/app/outputs/flutter-apk/app-debug.apk`, 152 MB).
+### 3. Device / Runtime Verification Status
+- **Desktop Linux:** Verified functional for Dart reader, UI navigation, and PDF fallback notice.
+- **Android Runtime:** **Pending**. No physical Android hardware or running Android emulator (`adb devices`) is connected in this container environment. Runtime validation of actual on-screen Readium rendering, touch gestures, and process recreation will be performed as soon as an Android device/emulator is attached.

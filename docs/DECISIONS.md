@@ -3,35 +3,43 @@
 ## ADR-001: UI Framework & Design Language
 - **Decision:** Flutter with custom Apple Books (iOS 18) design system components.
 - **Rationale:** 
-  - Standard Material 3 or Cupertino widgets diverge visibly from iOS 18 Apple Books (e.g. translucent frosted bottom tab bars, gradient hero "Continue" cards, sheet headers, theme picker cards).
-  - Custom Flutter components provide complete visual control, pixel precision, custom typography, and multi-theme adaptability without platform view layout compromises for the primary shell.
+  - Standard Material 3 or Cupertino widgets diverge visibly from iOS 18 Apple Books (e.g. floating translucent bottom capsule dock, Aa popup menu stack, TOC sheet with segmented tabs, gradient continue cards).
+  - Custom Flutter components provide complete visual control, pixel precision, Newsreader typography, and 6 reader themes (Original, Quiet, Paper, Bold, Calm, Focus).
 
-## ADR-002: State Management & Architecture
-- **Decision:** Riverpod (Flutter Riverpod with code generation / StateNotifier / AsyncNotifier).
-- **Rationale:** Compile-safe dependency injection, testable architecture, clean separation of presentation, business logic, and repositories. Prevents monolithic global controllers.
-
-## ADR-003: Local Persistence & Storage
-- **Decision:** Drift (SQLite) running on a background isolate + file-backed storage for publications & chapters.
+## ADR-002: Navigation and Tab Ordering
+- **Decision:** Tab order: `Home`, `Library`, `Browse`, `Search`, `Downloads`.
 - **Rationale:** 
-  - Drift provides robust relational querying, type-safe migrations, reactive query streams, and out-of-the-box isolate execution.
-  - Large publication files (EPUB, PDF, cached chapter HTML/images) reside in app-private storage, referenced by URI/path in the database.
-  - Schema versions are tracked with explicit migrations.
+  - Aligns with iOS 18 Apple Books and user specification.
+  - Floating frosted capsule dock with active pill indicator.
+
+## ADR-003: Local Persistence & Storage Architecture
+- **Current Baseline (Phase 0A):** SharedPreferences JSON collections + file-backed storage (`publications`, `covers`, `chapters`, `staging`).
+  - Chapter records, progress, download jobs, and library entries serialized.
+  - No synthetic demo books or fabricated progress automatically seeded.
+  - Genuinely empty when empty.
+- **Target Architecture (Phase 0D Gate):** Drift (SQLite) running on a background isolate with versioned migrations, atomic transactions, and recovery.
 
 ## ADR-004: Reader Engine Strategy
-- **Decision:** Dual-engine reader architecture:
-  - **EPUB & Web Novel Reader:** Native Flutter rendering pipeline with HTML DOM parsing / pagination / continuous scroll, font & theme controls, custom typography presets (Original, Quiet, Paper, Bold, Calm, Focus), chapter transitions, and anchor-based locators (CFI / chapter + offset).
-  - **PDF Reader:** PDF rendering integration using native canvas/pdfx with page caching, zoom/pan gestures, and page number restoration.
-- **Rationale:** Allows unified theming, responsive gesture overlays, instant Flutter UI controls over the reader, reliable cross-device typography styling matching the iOS 18 reference screenshots, and resilient progress tracking.
+- **Android Native Platform Boundary (Readium Toolkit 3.1.1):**
+  - Readium Kotlin dependencies integrated: `readium-shared`, `readium-streamer`, `readium-navigator` (3.1.1) with Java 8+ desugaring (`desugar_jdk_libs:2.1.4`).
+  - Native reader hosted in `ReadiumReaderActivity` wrapping `EpubNavigatorFragment`.
+  - Fragment factory installed strictly before `super.onCreate(savedInstanceState)` using declared resource ID `R.id.readium_fragment_container` to ensure crash-free Android process and configuration restoration.
+  - Appearance controls (`Aa` dialog: font size, theme, paged vs continuous scroll) persisted in `hon_reader_preferences` SharedPreferences.
+  - Nested TOC flattened with depth indentation (`flattenToc`) to expose sub-chapters and volumes.
+  - Multi-book persistence isolation: per-book pending progress map with 500ms debounce and 3s max periodic flush during continuous scroll; instant synchronous database flush on reader close / Back.
+  - Request/session tracking (`requestId`) connects `onReaderReady` and `onReaderError` with explicit UI error dialog and Dart fallback option.
+  - Note: Compiles cleanly into Android debug APK via Gradle; on-device/emulator rendering verification remains explicitly marked Pending until physical device/emulator is connected.
+- **Desktop Preview Reader (Dart):**
+  - HTML DOM parser with UTF-8 decoding (`utf8.decode`), italic/bold span preservation, Apple Books Aa floating menu, real TOC modal sheet (`Chapters`, `Bookmarks`, `Highlights`), chapter navigation, dual layout modes (vertical scroll and horizontal swipe), and durable reading location restoration via `ReaderNavigator`.
+  - Normalized Readium `href` matched against `EpubChapterItem.contentHref` for seamless fallback.
+- **PDF Reader:**
+  - Platform-capability checked. Explicit friendly notice on unsupported Linux desktop; single-instance `pdfx` integration on Android with page clamping, zoom, bookmarks, and appearance persistence.
 
 ## ADR-005: Source Runtime & Extensibility
-- **Decision:** Bounded `NovelSource` contract with native/Dart runtime adapters and Shosetsu repository compatibility exploration.
-- **Interface Contract:**
-  - `browse(BrowseRequest)`
-  - `search(SearchRequest)`
-  - `getNovel(String novelId)`
-  - `getChapters(String novelId)`
-  - `getChapter(String chapterId)`
-- **Rationale:** Decouples extension/scraping/fetching mechanics from UI and reader. Allows mock sources, HTTP/HTML scraping sources, and extension compatibility engines without altering database or reader logic.
+- **Current Baseline (Phase 0A Prototype):**
+  - `SourceRegistry` supporting `Sources` and `Extensions` UI shells (no Migrate).
+  - Note: Catalogue lists and extension "installs" are prototypes pending the Phase 0C upstream Lua engine. Fabricated updates in Downloads tab are disabled in standard operation.
+- **Target Architecture (Phase 0C Gate):** Upstream Shosetsu Lua runtime compatibility, repository index contract, and live extension sandboxing.
 
 ## ADR-006: Chapter Downloads & Library Independence
 - **Decision:** Explicit, decoupled state machines for Library Entry vs Download Jobs.
@@ -44,3 +52,11 @@
   - "Not Now" suppresses prompt for that novel for the session.
   - Downloads are viewable in Downloads tab and Reading History regardless of library presence.
   - Deleting from library does not delete downloaded files; deleting downloads does not remove library entry.
+  - Downloads screen includes `Downloads` and `Updates` mini-tabs.
+
+## ADR-007: Prototype vs Production Feature Boundaries
+- **Decision:** Do not present mock/prototype data as live, working services.
+- **Rules:**
+  - When background services (e.g., chapter update check, source scraping) do not exist yet, display honest empty states or explicit prototype banners.
+  - Do not synthesize mock updates ("Today", "Yesterday") to populate screens.
+  - Label platform stubs accurately as interfaces rather than claiming engine completion.

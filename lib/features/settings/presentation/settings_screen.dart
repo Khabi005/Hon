@@ -1,7 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import '../../../app/theme/hon_colors.dart';
 import '../../../app/theme/hon_typography.dart';
+import '../../../core/database/database_service.dart';
 import '../../../core/files/storage_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -179,10 +183,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('Export Metadata Backup'),
                   subtitle: const Text('Versioned SQLite & settings archive'),
                   trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Backup export created successfully.')),
-                    );
+                  onTap: () async {
+                    try {
+                      final db = DatabaseService.instance;
+                      final storage = StorageService.instance;
+                      final backupData = {
+                        'version': 1,
+                        'exportedAt': DateTime.now().toIso8601String(),
+                        'books': db.getAllBooks().map((b) => b.toMap()).toList(),
+                        'library': db.getLibraryBooks().map((b) => b.id).toList(),
+                      };
+                      final backupFile = File('${storage.baseDir.path}/hon_backup_${DateTime.now().millisecondsSinceEpoch}.json');
+                      await backupFile.writeAsString(jsonEncode(backupData));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Backup created: ${p.basename(backupFile.path)}')),
+                      );
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Backup failed: $e')),
+                      );
+                    }
                   },
                 ),
               ],

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/hon_app.dart';
 import 'core/database/database_service.dart';
 import 'core/files/storage_service.dart';
+import 'core/native/readium_reader_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,7 @@ void main() async {
   // Initialize core application services
   await StorageService.instance.init();
   await DatabaseService.instance.init();
+  ReadiumReaderService.initialize();
 
   runApp(
     const ProviderScope(

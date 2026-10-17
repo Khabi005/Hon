@@ -3,7 +3,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../app/bootstrap/providers.dart';
 import '../../../app/theme/hon_colors.dart';
 import '../../../app/theme/hon_typography.dart';
 import '../../../core/database/database_service.dart';
@@ -11,8 +10,7 @@ import '../../../core/files/storage_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/utils/epub_parser.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
-import '../../reader/presentation/reader_screen.dart';
-import '../../reader/presentation/pdf_reader_screen.dart';
+import '../../reader/presentation/reader_navigator.dart';
 
 enum LibraryFilter { all, epubs, pdfs, finished }
 
@@ -26,9 +24,11 @@ class LibraryScreen extends ConsumerStatefulWidget {
 class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   bool _isGridMode = true;
   LibraryFilter _filter = LibraryFilter.all;
+  LibrarySort _sort = LibrarySort.titleAz;
   bool _isImporting = false;
 
   Future<void> _handleImportBook() async {
+    File? stagedFile;
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -45,16 +45,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       final storage = StorageService.instance;
       final db = DatabaseService.instance;
 
-      // 1. Copy to staging
-      final stagedFile = await storage.copyToStaging(originalFile);
+      // 1. Copy to staging safely
+      stagedFile = await storage.copyToStaging(originalFile);
 
       // 2. Compute hash for duplicate check
       final hash = await storage.computeFileHash(stagedFile);
       final existingBook = db.findBookByContentHash(hash);
       if (existingBook != null) {
-        // Already imported! Add to library if not in library
         await db.setLibraryMembership(existingBook.id, true);
-        await storage.cleanStaging();
+        await storage.deleteStagingFile(stagedFile);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('"${existingBook.title}" is already in your library.')),
@@ -72,12 +71,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       String title = result.files.first.name.replaceAll('.$ext', '');
       String author = 'Unknown Author';
       String? coverPath;
+      int? totalChapters;
 
       if (isEpub) {
         try {
           final meta = await EpubParser.parse(stagedFile);
           title = meta.title;
           author = meta.author;
+          totalChapters = meta.chapters.length;
           if (meta.coverBytes != null) {
             coverPath = await storage.saveCoverImage(bookId, meta.coverBytes!);
           }
@@ -99,6 +100,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         filePath: finalFile.path,
         coverPath: coverPath,
         contentHash: hash,
+        totalChapters: totalChapters ?? 1,
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -118,21 +120,71 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         );
       }
     } finally {
-      await StorageService.instance.cleanStaging();
+      if (stagedFile != null) {
+        await StorageService.instance.deleteStagingFile(stagedFile);
+      }
       if (mounted) {
         setState(() => _isImporting = false);
       }
     }
   }
 
+  void _showSortSheet() {
+    showCupertinoModalPopup(
+      context: context,
+      builder: (ctx) => CupertinoActionSheet(
+        title: const Text('Sort Library'),
+        actions: [
+          CupertinoActionSheetAction(
+            isDefaultAction: _sort == LibrarySort.titleAz,
+            child: const Text('Title (A to Z)'),
+            onPressed: () {
+              setState(() => _sort = LibrarySort.titleAz);
+              Navigator.of(ctx).pop();
+            },
+          ),
+          CupertinoActionSheetAction(
+            isDefaultAction: _sort == LibrarySort.titleZa,
+            child: const Text('Title (Z to A)'),
+            onPressed: () {
+              setState(() => _sort = LibrarySort.titleZa);
+              Navigator.of(ctx).pop();
+            },
+          ),
+          CupertinoActionSheetAction(
+            isDefaultAction: _sort == LibrarySort.recent,
+            child: const Text('Recently Read'),
+            onPressed: () {
+              setState(() => _sort = LibrarySort.recent);
+              Navigator.of(ctx).pop();
+            },
+          ),
+          CupertinoActionSheetAction(
+            isDefaultAction: _sort == LibrarySort.progress,
+            child: const Text('Reading Progress'),
+            onPressed: () {
+              setState(() => _sort = LibrarySort.progress);
+              Navigator.of(ctx).pop();
+            },
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          child: const Text('Cancel'),
+          onPressed: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final libraryBooks = ref.watch(libraryBooksProvider);
+    // Read library books sorted per current selection
+    final allLibraryBooks = DatabaseService.instance.getLibraryBooks(sort: _sort);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
 
     // Filter books
-    final filteredBooks = libraryBooks.where((b) {
+    final filteredBooks = allLibraryBooks.where((b) {
       switch (_filter) {
         case LibraryFilter.all:
           return true;
@@ -142,7 +194,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           return b.format == BookFormat.pdf;
         case LibraryFilter.finished:
           final prog = DatabaseService.instance.getProgress(b.id);
-          return (prog?.completionPercentage ?? 0) >= 0.99;
+          return (prog != null && prog.completionPercentage >= 0.99);
       }
     }).toList();
 
@@ -153,7 +205,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         child: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
-            // Header Bar
+            // Top App Bar
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 16, 8),
@@ -166,23 +218,34 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     ),
                     Row(
                       children: [
-                        // View mode toggle (Grid / List)
+                        // Sort Button
                         IconButton(
                           icon: Icon(
-                            _isGridMode
-                                ? CupertinoIcons.list_bullet
-                                : CupertinoIcons.square_grid_2x2,
+                            CupertinoIcons.sort_down,
                             color: textPrimary,
-                            size: 22,
+                            size: 21,
                           ),
-                          onPressed: () {
-                            setState(() => _isGridMode = !_isGridMode);
-                          },
+                          onPressed: _showSortSheet,
                         ),
-                        // Import (+) button
+
+                        // Grid / List toggle
+                        IconButton(
+                          icon: Icon(
+                            _isGridMode ? CupertinoIcons.list_bullet : CupertinoIcons.square_grid_2x2,
+                            color: textPrimary,
+                            size: 21,
+                          ),
+                          onPressed: () => setState(() => _isGridMode = !_isGridMode),
+                        ),
+
+                        // Import EPUB/PDF button (+)
                         IconButton(
                           icon: _isImporting
-                              ? const CupertinoActivityIndicator()
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CupertinoActivityIndicator(),
+                                )
                               : Icon(
                                   CupertinoIcons.plus,
                                   color: textPrimary,
@@ -202,8 +265,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               child: SizedBox(
                 height: 44,
                 child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
                   physics: const BouncingScrollPhysics(),
                   children: [
                     _buildFilterChip('All', LibraryFilter.all),
@@ -215,36 +278,47 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               ),
             ),
 
-            // Books Content
+            // Library Books Grid/List or Empty State
             if (filteredBooks.isEmpty)
               SliverFillRemaining(
                 child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        CupertinoIcons.book,
-                        size: 56,
-                        color: isDark ? Colors.white24 : Colors.black26,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Your library is quiet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: textPrimary,
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          CupertinoIcons.book,
+                          size: 64,
+                          color: isDark ? Colors.white24 : Colors.black26,
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Tap + to import an EPUB or PDF book',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+                        const SizedBox(height: 16),
+                        Text(
+                          'Your Library is Empty',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: textPrimary,
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 8),
+                        Text(
+                          'Import your EPUB or PDF books using the + button to build your library.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        CupertinoButton.filled(
+                          onPressed: _handleImportBook,
+                          borderRadius: BorderRadius.circular(20),
+                          child: const Text('Import Book', style: TextStyle(fontSize: 14)),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               )
@@ -254,12 +328,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 sliver: SliverGrid(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
-                    childAspectRatio: 0.58,
                     crossAxisSpacing: 16,
-                    mainAxisSpacing: 20,
+                    mainAxisSpacing: 22,
+                    childAspectRatio: 0.52,
                   ),
                   delegate: SliverChildBuilderDelegate(
-                    (ctx, i) => _buildGridItem(filteredBooks[i]),
+                    (context, index) => _buildGridItem(filteredBooks[index]),
                     childCount: filteredBooks.length,
                   ),
                 ),
@@ -269,7 +343,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 100),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
-                    (ctx, i) => _buildListItem(filteredBooks[i]),
+                    (context, index) => _buildListItem(filteredBooks[index]),
                     childCount: filteredBooks.length,
                   ),
                 ),
@@ -285,23 +359,41 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: FilterChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (_) => setState(() => _filter = filter),
-        backgroundColor: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-        selectedColor: isDark ? Colors.white : Colors.black,
-        labelStyle: TextStyle(
-          fontSize: 13,
-          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-          color: isSelected
-              ? (isDark ? Colors.black : Colors.white)
-              : (isDark ? Colors.white70 : Colors.black87),
+      padding: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
+      child: GestureDetector(
+        onTap: () => setState(() => _filter = filter),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? (isDark ? Colors.white : Colors.black)
+                : (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isSelected) ...[
+                Icon(
+                  CupertinoIcons.checkmark,
+                  size: 13,
+                  color: isDark ? Colors.black : Colors.white,
+                ),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isSelected
+                      ? (isDark ? Colors.black : Colors.white)
+                      : (isDark ? Colors.white : Colors.black87),
+                ),
+              ),
+            ],
+          ),
         ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        side: BorderSide.none,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       ),
     );
   }
@@ -310,23 +402,50 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final prog = DatabaseService.instance.getProgress(book.id);
     final pct = prog != null ? (prog.completionPercentage * 100).toInt() : 0;
+    final totalChapters = book.totalChapters;
 
     return GestureDetector(
-      onTap: () => _openBook(book),
+      onTap: () => ReaderNavigator.openBook(context, book),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Tactile cover with chapter count badge on top right
           Expanded(
-            child: BookCoverWidget(
-              title: book.title,
-              author: book.author,
-              coverPath: book.coverPath,
-              width: double.infinity,
-              height: double.infinity,
-              borderRadius: 6,
+            child: Stack(
+              children: [
+                BookCoverWidget(
+                  title: book.title,
+                  author: book.author,
+                  coverPath: book.coverPath,
+                  borderRadius: 6,
+                ),
+                // Chapter Count Badge in top-right corner (matching reference screenshot)
+                if (totalChapters > 0)
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.72),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '$totalChapters',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(height: 8),
+
+          // Title
           Text(
             book.title,
             maxLines: 2,
@@ -338,15 +457,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
           ),
           const SizedBox(height: 2),
-          Text(
-            pct > 0 ? '$pct% read' : book.author,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 11,
-              color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+
+          // Reading progress
+          if (pct > 0)
+            Text(
+              '$pct% read',
+              style: TextStyle(
+                fontSize: 11,
+                color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+              ),
+            )
+          else
+            Text(
+              book.author,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -360,7 +490,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: InkWell(
-        onTap: () => _openBook(book),
+        onTap: () => ReaderNavigator.openBook(context, book),
         borderRadius: BorderRadius.circular(12),
         child: Row(
           children: [
@@ -418,17 +548,5 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ),
       ),
     );
-  }
-
-  void _openBook(Book book) {
-    if (book.format == BookFormat.pdf) {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => PdfReaderScreen(book: book)),
-      );
-    } else {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ReaderScreen(book: book)),
-      );
-    }
   }
 }

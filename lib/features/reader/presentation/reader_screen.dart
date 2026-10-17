@@ -1,8 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import '../../../app/bootstrap/providers.dart';
 import '../../../app/theme/hon_typography.dart';
@@ -12,14 +15,24 @@ import '../../../core/models/book.dart';
 import '../../../core/models/reading_progress.dart';
 import '../../../core/utils/epub_parser.dart';
 import '../../../shared/widgets/ornate_divider.dart';
+import '../sheets/reader_contents_sheet.dart';
+import '../sheets/reader_menu_popup.dart';
 import '../sheets/themes_settings_sheet.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
   final Book book;
+  final int initialChapterIndex;
+  final int initialPageIndex;
+  final double? initialScrollOffset;
+  final String? initialLocator;
 
   const ReaderScreen({
     super.key,
     required this.book,
+    this.initialChapterIndex = 0,
+    this.initialPageIndex = 0,
+    this.initialScrollOffset,
+    this.initialLocator,
   });
 
   @override
@@ -34,101 +47,141 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   List<EpubChapterItem> _chapters = [];
   int _currentChapterIndex = 0;
   int _currentPageIndex = 0;
-  int _totalPages = 691; // Default estimate or calculated
+  int _totalPages = 1;
+  bool _isBookmarked = false;
+  bool _isContinuousScroll = true;
 
   late PageController _pageController;
   late ScrollController _scrollController;
+  Timer? _saveDebounceTimer;
 
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
+    _currentChapterIndex = widget.initialChapterIndex;
+    _currentPageIndex = widget.initialPageIndex;
+    _pageController = PageController(initialPage: _currentChapterIndex);
     _scrollController = ScrollController();
+
+    _scrollController.addListener(_onScroll);
     _loadBookContent();
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
+    _saveDebounceTimer?.cancel();
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _pageController.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    _saveDebounceTimer?.cancel();
+    _saveDebounceTimer = Timer(const Duration(milliseconds: 600), () {
+      _saveProgress();
+    });
   }
 
   Future<void> _loadBookContent() async {
     try {
       final savedProgress = DatabaseService.instance.getProgress(widget.book.id);
       if (savedProgress != null) {
+        if (widget.initialChapterIndex == 0 && savedProgress.chapterIndex > 0) {
+          _currentChapterIndex = savedProgress.chapterIndex.toInt();
+        }
         _currentPageIndex = savedProgress.pageIndex;
-        _totalPages = savedProgress.totalPages > 0 ? savedProgress.totalPages : 691;
+        _totalPages = savedProgress.totalPages > 0 ? savedProgress.totalPages : 1;
       }
 
-      // Check if file is EPUB
-      if (widget.book.format == BookFormat.epub) {
-        File? file;
-        if (widget.book.filePath != null) {
-          if (widget.book.filePath!.startsWith('assets/')) {
-            // For fixture assets, write to temp staging to parse
-            final bytes = await rootBundle.load(widget.book.filePath!);
-            final tempFile = File('${Directory.systemTemp.path}/${widget.book.id}.epub');
-            await tempFile.writeAsBytes(bytes.buffer.asUint8List());
-            file = tempFile;
-          } else {
-            file = File(widget.book.filePath!);
-          }
+      File? file;
+      if (widget.book.filePath != null) {
+        if (widget.book.filePath!.startsWith('assets/')) {
+          // Bundled fixture asset
+          final bytes = await rootBundle.load(widget.book.filePath!);
+          final tempFile = File('${Directory.systemTemp.path}/${widget.book.id}.epub');
+          await tempFile.writeAsBytes(bytes.buffer.asUint8List());
+          file = tempFile;
+        } else {
+          file = File(widget.book.filePath!);
         }
+      }
 
-        if (file != null && file.existsSync()) {
-          final metadata = await EpubParser.parse(file);
+      if (file != null && file.existsSync()) {
+        final metadata = await EpubParser.parse(file);
+        if (metadata.chapters.isNotEmpty) {
+          int resolvedChapterIndex = _currentChapterIndex;
+          final rawLocator = widget.initialLocator ?? savedProgress?.locatorString;
+          if (rawLocator != null && rawLocator.trim().startsWith('{')) {
+            try {
+              final decoded = jsonDecode(rawLocator) as Map<String, dynamic>;
+              final href = decoded['href'] as String?;
+              if (href != null) {
+                String normalize(String s) =>
+                    s.replaceAll(RegExp(r'^[./]+'), '').toLowerCase();
+                final normHref = normalize(href);
+                final matchIdx = metadata.chapters.indexWhere((c) {
+                  final normContent = normalize(c.contentHref);
+                  return normContent == normHref ||
+                      normContent.endsWith(normHref) ||
+                      normHref.endsWith(normContent);
+                });
+                if (matchIdx >= 0) {
+                  resolvedChapterIndex = matchIdx;
+                }
+              }
+            } catch (_) {}
+          }
+
           if (mounted) {
             setState(() {
               _chapters = metadata.chapters;
+              _totalPages = metadata.chapters.length;
+              if (resolvedChapterIndex < _chapters.length) {
+                _currentChapterIndex = resolvedChapterIndex;
+              } else {
+                _currentChapterIndex = 0;
+              }
+              _isBookmarked = DatabaseService.instance
+                  .isBookmarked(widget.book.id, _currentChapterIndex);
               _isLoading = false;
             });
+
+            // Post-frame scroll position restoration if scroll offset exists
+            final targetOffset = widget.initialScrollOffset ??
+                savedProgress?.scrollOffset ??
+                0.0;
+            if (targetOffset > 0) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                Future.delayed(const Duration(milliseconds: 60), () {
+                  if (_scrollController.hasClients) {
+                    final maxExtent =
+                        _scrollController.position.maxScrollExtent;
+                    _scrollController
+                        .jumpTo(targetOffset.clamp(0.0, maxExtent));
+                  }
+                });
+              });
+            }
             return;
           }
         }
       }
 
-      // Fallback: seed chapters for Pride and Prejudice sample
-      _chapters = [
-        const EpubChapterItem(
-          id: 'ch33',
-          title: 'Chapter 33',
-          contentHref: 'ch33.xhtml',
-          htmlContent: '''
-<p>More than once did Elizabeth, in her ramble within the park, unexpectedly meet Mr. Darcy. She felt all the perverseness of the mischance that should bring him where no one else was brought, and, to prevent its ever happening again, took care to inform him at first that it was a favourite haunt of hers. How it could occur a second time, therefore, was very odd! Yet it did, and even a third, did it happen.</p>
-<p>It was on the third of these occasions that she was walking near the park palings, when the sound of horses drew her notice, and looking through the fence she saw him riding toward her. He immediately dismounted and leading his horse walked by her side along the path.</p>
-<p>Elizabeth was surprised, but answered his civil inquiries with calmness; and they walked on for some minutes in silence, each feeling the awkwardness of the encounter. At last Darcy broke it by asking if she had heard lately from Netherfield.</p>
-<p>"I have not heard from Jane for several days," she replied; "she was then quite well."</p>
-<p>"My cousin Colonel Fitzwilliam tells me that he had the pleasure of meeting you yesterday."</p>
-<p>"He did; we had a very pleasant walk together."</p>
-''',
-        ),
-        const EpubChapterItem(
-          id: 'ch40',
-          title: 'Chapter 40',
-          contentHref: 'ch40.xhtml',
-          htmlContent: '''
-<p>Elizabeth's impatience to acquaint Jane with what had happened could no longer be overcome; and at length, resolving to suppress every particular in which her sister was concerned, and preparing her to be surprised, she related to her the next morning the chief of the scene between Mr. Darcy and herself.</p>
-<p>Miss Bennet's astonishment was soon lessened by the strong sisterly partiality which made any admiration of Elizabeth appear perfectly natural; and all surprise was shortly lost in other feelings. She was sorry that Mr. Darcy should have delivered his sentiments in a manner so little suited to recommend them; but still more was she grieved for the unhappiness which her sister's refusal must have given him.</p>
-<p>"His being so sure of succeeding was wrong," said she, "and certainly ought not to have appeared; but consider how much it must have increased his disappointment!"</p>
-<p>"Indeed," replied Elizabeth, "I am heartily sorry for him; but he has other feelings which will probably soon drive away his regard for me. You do not blame me, however, for refusing him?"</p>
-<p>"Blame you! Oh, no!"</p>
-<p>"And you do consider me justified in doing it?"</p>
-<p>"Most definitely, upon such grounds."</p>
-''',
-        ),
-      ];
-
+      // If physical book file could not be opened, display honest error
       if (mounted) {
         setState(() {
+          _errorMessage = widget.book.filePath != null
+              ? 'Could not read EPUB publication file at:\n${widget.book.filePath}'
+              : 'No publication file path registered for this book.';
           _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = e.toString();
+          _errorMessage = 'EPUB parsing error: $e';
           _isLoading = false;
         });
       }
@@ -136,12 +189,42 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _saveProgress() {
+    if (!mounted || _chapters.isEmpty) return;
+    final total = _chapters.length;
+
+    double currentOffset = 0.0;
+    double chapterFraction = 0.0;
+    if (_scrollController.hasClients) {
+      currentOffset = _scrollController.offset;
+      if (_scrollController.position.maxScrollExtent > 0) {
+        chapterFraction = (_scrollController.offset /
+                _scrollController.position.maxScrollExtent)
+            .clamp(0.0, 1.0);
+      }
+    }
+
+    // Accurate progress calculation:
+    // Combine chapter index with within-chapter scroll depth.
+    // Entering the final chapter does NOT mark 100% completion unless the user
+    // actually scrolls near the end of the final chapter (>= 95%).
+    final overallFraction =
+        total > 0 ? (_currentChapterIndex + chapterFraction) / total : 0.0;
+    final pct = overallFraction.clamp(0.0, 1.0);
+
+    final currentChapterId = _chapters[_currentChapterIndex].id;
+    final locator =
+        '$currentChapterId#offset=${currentOffset.toStringAsFixed(1)}';
+
     final progress = ReadingProgress(
       bookId: widget.book.id,
+      lastChapterId: currentChapterId,
       chapterIndex: _currentChapterIndex.toDouble(),
       pageIndex: _currentPageIndex,
-      totalPages: _totalPages,
-      completionPercentage: _currentPageIndex / _totalPages,
+      totalPages: total,
+      scrollOffset: currentOffset,
+      locatorString: locator,
+      locatorVersion: 'dart-dom-v1',
+      completionPercentage: pct,
       lastReadAt: DateTime.now(),
     );
     DatabaseService.instance.saveProgress(progress);
@@ -153,17 +236,185 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }
 
-  List<String> _extractParagraphs(String html) {
+  void _jumpToChapter(int index) {
+    if (index >= 0 && index < _chapters.length) {
+      setState(() {
+        _currentChapterIndex = index;
+        _isBookmarked =
+            DatabaseService.instance.isBookmarked(widget.book.id, index);
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(0);
+        }
+      });
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(index);
+      }
+      _saveProgress();
+    }
+  }
+
+  // --- HTML DOM Parser for Publication Typography ---
+  List<Widget> _buildHtmlContent(
+    String html,
+    ReaderPreferencesState prefs,
+    ReaderThemeConfig themeConfig,
+  ) {
+    if (html.isEmpty) {
+      return [
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(40),
+            child: Text(
+              'No content in this chapter.',
+              style: TextStyle(color: themeConfig.secondaryTextColor),
+            ),
+          ),
+        ),
+      ];
+    }
+
     try {
       final doc = html_parser.parse(html);
-      final pElements = doc.querySelectorAll('p');
-      if (pElements.isNotEmpty) {
-        return pElements.map((e) => e.text.trim()).where((t) => t.isNotEmpty).toList();
+      final body = doc.body;
+      if (body == null) return [];
+
+      final widgets = <Widget>[];
+
+      // Parse body children into blocks
+      for (final node in body.children) {
+        final tag = node.localName?.toLowerCase() ?? '';
+
+        if (tag == 'h1' || tag == 'h2' || tag == 'h3') {
+          final text = node.text.trim();
+          if (text.isNotEmpty) {
+            widgets.add(
+              Padding(
+                padding: const EdgeInsets.only(top: 24, bottom: 14),
+                child: Text(
+                  text,
+                  textAlign: TextAlign.center,
+                  style: HonTypography.chapterTitle(color: themeConfig.textColor).copyWith(
+                    fontSize: tag == 'h1' ? 24 : (tag == 'h2' ? 20 : 18),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            );
+          }
+        } else if (tag == 'hr') {
+          widgets.add(
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 20),
+                child: OrnateDivider(
+                  color: themeConfig.ornamentColor,
+                  width: 120,
+                  height: 20,
+                ),
+              ),
+            ),
+          );
+        } else if (tag == 'p' || tag == 'div') {
+          // Check if paragraph contains text or styled spans
+          final spans = _parseInlineSpans(node, prefs, themeConfig);
+          if (spans.isNotEmpty) {
+            widgets.add(
+              Padding(
+                padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
+                child: RichText(
+                  textAlign: prefs.isJustified ? TextAlign.justify : TextAlign.left,
+                  text: TextSpan(
+                    children: spans,
+                    style: HonTypography.readerBody(
+                      color: themeConfig.textColor,
+                      fontSize: prefs.fontSize,
+                      lineHeight: prefs.lineHeight,
+                      fontFamily: prefs.fontFamily.displayName,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+        }
       }
-      return doc.body?.text.split('\n\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList() ?? [];
+
+      // If document was not structured with top-level tags, parse paragraphs
+      if (widgets.isEmpty) {
+        final textBlocks = body.text.split('\n\n');
+        for (final block in textBlocks) {
+          final trimmed = block.trim();
+          if (trimmed.isNotEmpty) {
+            widgets.add(
+              Padding(
+                padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
+                child: Text(
+                  trimmed,
+                  textAlign: prefs.isJustified ? TextAlign.justify : TextAlign.left,
+                  style: HonTypography.readerBody(
+                    color: themeConfig.textColor,
+                    fontSize: prefs.fontSize,
+                    lineHeight: prefs.lineHeight,
+                    fontFamily: prefs.fontFamily.displayName,
+                  ),
+                ),
+              ),
+            );
+          }
+        }
+      }
+
+      return widgets;
     } catch (_) {
-      return [html];
+      return [
+        Text(
+          html,
+          style: TextStyle(color: themeConfig.textColor),
+        ),
+      ];
     }
+  }
+
+  List<InlineSpan> _parseInlineSpans(
+    dom.Node node,
+    ReaderPreferencesState prefs,
+    ReaderThemeConfig themeConfig,
+  ) {
+    final spans = <InlineSpan>[];
+
+    for (final child in node.nodes) {
+      if (child.nodeType == dom.Node.TEXT_NODE) {
+        final text = child.text ?? '';
+        if (text.isNotEmpty) {
+          spans.add(TextSpan(text: text));
+        }
+      } else if (child is dom.Element) {
+        final tag = child.localName?.toLowerCase() ?? '';
+        final isItalic = tag == 'i' || tag == 'em';
+        final isBold = tag == 'b' || tag == 'strong';
+
+        final childSpans = _parseInlineSpans(child, prefs, themeConfig);
+
+        TextStyle inlineStyle = const TextStyle();
+        if (isItalic && isBold) {
+          inlineStyle = const TextStyle(
+            fontStyle: FontStyle.italic,
+            fontWeight: FontWeight.bold,
+          );
+        } else if (isItalic) {
+          inlineStyle = const TextStyle(fontStyle: FontStyle.italic);
+        } else if (isBold) {
+          inlineStyle = const TextStyle(fontWeight: FontWeight.bold);
+        }
+
+        spans.add(TextSpan(
+          children: childSpans.isNotEmpty ? childSpans : [TextSpan(text: child.text)],
+          style: inlineStyle,
+        ));
+      }
+    }
+
+    return spans;
   }
 
   @override
@@ -186,10 +437,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               GestureDetector(
                 onTap: _toggleControls,
                 behavior: HitTestBehavior.opaque,
-                child: _buildReaderBody(prefs, themeConfig),
+                child: _isContinuousScroll
+                    ? _buildScrollView(prefs, themeConfig)
+                    : _buildPagedView(prefs, themeConfig),
               ),
 
-              // Ambient Top Header Overlay (Fade in/out)
+              // Ambient Top Header Overlay
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 200),
                 top: _showControls ? 0 : -100,
@@ -198,7 +451,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 child: _buildTopHeader(themeConfig),
               ),
 
-              // Ambient Bottom Bar Overlay (Fade in/out)
+              // Ambient Bottom Bar Overlay
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 200),
                 bottom: _showControls ? 0 : -100,
@@ -213,7 +466,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  Widget _buildReaderBody(ReaderPreferencesState prefs, ReaderThemeConfig themeConfig) {
+  Widget _buildScrollView(ReaderPreferencesState prefs, ReaderThemeConfig themeConfig) {
     if (_isLoading) {
       return Center(
         child: CupertinoActivityIndicator(color: themeConfig.textColor),
@@ -224,9 +477,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text(
-            'Unable to load book: $_errorMessage',
-            style: TextStyle(color: themeConfig.textColor),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(CupertinoIcons.book, size: 48, color: themeConfig.secondaryTextColor),
+              const SizedBox(height: 16),
+              Text(
+                'Unable to open publication',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: themeConfig.textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: themeConfig.secondaryTextColor, height: 1.4),
+              ),
+            ],
           ),
         ),
       );
@@ -234,18 +504,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     final chapter = _chapters.isNotEmpty
         ? _chapters[_currentChapterIndex]
-        : const EpubChapterItem(
-            id: 'demo',
-            title: 'Chapter 40',
+        : EpubChapterItem(
+            id: 'ch',
+            title: widget.book.title,
             contentHref: '',
             htmlContent: '',
           );
 
-    final paragraphs = _extractParagraphs(chapter.htmlContent);
+    final topPadding = MediaQuery.of(context).padding.top + 52.0;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 52.0;
 
-    // Padding calculations matching Apple Books reference
-    final topPadding = MediaQuery.of(context).padding.top + 50.0;
-    final bottomPadding = MediaQuery.of(context).padding.bottom + 50.0;
+    final contentBlocks = _buildHtmlContent(chapter.htmlContent, prefs, themeConfig);
 
     return SingleChildScrollView(
       controller: _scrollController,
@@ -259,14 +528,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 12),
-          // Chapter Title Header
+          const SizedBox(height: 16),
+          // Clean Serif Chapter Title
           Text(
-            chapter.title,
+            chapter.title.toUpperCase(),
             textAlign: TextAlign.center,
-            style: HonTypography.chapterTitle(color: themeConfig.textColor),
+            style: HonTypography.chapterTitle(color: themeConfig.textColor).copyWith(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.2,
+            ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
 
           // Ornate Apple Books flourish divider
           OrnateDivider(
@@ -276,22 +549,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
           const SizedBox(height: 28),
 
-          // Paragraphs
-          ...paragraphs.map((pText) {
-            return Padding(
-              padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
-              child: Text(
-                pText,
-                textAlign: prefs.isJustified ? TextAlign.justify : TextAlign.left,
-                style: HonTypography.readerBody(
-                  color: themeConfig.textColor,
-                  fontSize: prefs.fontSize,
-                  lineHeight: prefs.lineHeight,
-                  fontFamily: prefs.fontFamily.displayName,
-                ),
-              ),
-            );
-          }),
+          // Render formatted publication blocks
+          ...contentBlocks,
+
           const SizedBox(height: 48),
 
           // Chapter Navigation Buttons
@@ -306,13 +566,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       'Previous Chapter',
                       style: TextStyle(color: themeConfig.textColor),
                     ),
-                    onPressed: () {
-                      setState(() {
-                        _currentChapterIndex--;
-                        _scrollController.jumpTo(0);
-                      });
-                      _saveProgress();
-                    },
+                    onPressed: () => _jumpToChapter(_currentChapterIndex - 1),
                   )
                 else
                   const SizedBox.shrink(),
@@ -323,13 +577,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       style: TextStyle(color: themeConfig.textColor),
                     ),
                     icon: Icon(CupertinoIcons.chevron_right, color: themeConfig.textColor),
-                    onPressed: () {
-                      setState(() {
-                        _currentChapterIndex++;
-                        _scrollController.jumpTo(0);
-                      });
-                      _saveProgress();
-                    },
+                    onPressed: () => _jumpToChapter(_currentChapterIndex + 1),
                   ),
               ],
             ),
@@ -338,19 +586,85 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
+  Widget _buildPagedView(ReaderPreferencesState prefs, ReaderThemeConfig themeConfig) {
+    if (_isLoading) {
+      return Center(
+        child: CupertinoActivityIndicator(color: themeConfig.textColor),
+      );
+    }
+
+    if (_errorMessage != null || _chapters.isEmpty) {
+      return _buildScrollView(prefs, themeConfig);
+    }
+
+    return PageView.builder(
+      controller: _pageController,
+      physics: const BouncingScrollPhysics(),
+      onPageChanged: (page) {
+        setState(() {
+          _currentChapterIndex = page;
+        });
+        _saveProgress();
+      },
+      itemCount: _chapters.length,
+      itemBuilder: (context, index) {
+        final chapter = _chapters[index];
+        final topPadding = MediaQuery.of(context).padding.top + 52.0;
+        final bottomPadding = MediaQuery.of(context).padding.bottom + 52.0;
+        final contentBlocks = _buildHtmlContent(chapter.htmlContent, prefs, themeConfig);
+
+        return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            prefs.horizontalMargin,
+            topPadding,
+            prefs.horizontalMargin,
+            bottomPadding,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 16),
+              Text(
+                chapter.title.toUpperCase(),
+                textAlign: TextAlign.center,
+                style: HonTypography.chapterTitle(color: themeConfig.textColor).copyWith(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              OrnateDivider(
+                color: themeConfig.ornamentColor,
+                width: 140,
+                height: 22,
+              ),
+              const SizedBox(height: 28),
+              ...contentBlocks,
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildTopHeader(ReaderThemeConfig themeConfig) {
     final topSafe = MediaQuery.of(context).padding.top;
+    final remainingChapters = _chapters.length - (_currentChapterIndex + 1);
 
     return Container(
       padding: EdgeInsets.fromLTRB(16, topSafe + 8, 16, 8),
-      color: themeConfig.backgroundColor.withOpacity(0.92),
+      color: themeConfig.backgroundColor.withOpacity(0.94),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: Location jump back (Reference Image 3: "372")
+          // Left: Location jump back indicator
           InkWell(
             onTap: () {
-              // Return to previous reading bookmark
+              if (_currentChapterIndex > 0) {
+                _jumpToChapter(_currentChapterIndex - 1);
+              }
             },
             borderRadius: BorderRadius.circular(16),
             child: Padding(
@@ -364,7 +678,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    '${_currentPageIndex > 0 ? _currentPageIndex : 372}',
+                    '${_currentChapterIndex + 1}',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
@@ -376,9 +690,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             ),
           ),
 
-          // Center: "9 pages left in chapter"
+          // Center: Remaining chapters status indicator
           Text(
-            '9 pages left in chapter',
+            remainingChapters > 0
+                ? '$remainingChapters ${remainingChapters == 1 ? "chapter" : "chapters"} left'
+                : 'Last chapter',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
@@ -412,18 +728,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   Widget _buildBottomBar(ReaderThemeConfig themeConfig) {
     final bottomSafe = MediaQuery.of(context).padding.bottom;
+    final total = _chapters.isNotEmpty ? _chapters.length : _totalPages;
 
     return Container(
       padding: EdgeInsets.fromLTRB(20, 8, 20, bottomSafe + 8),
-      color: themeConfig.backgroundColor.withOpacity(0.92),
+      color: themeConfig.backgroundColor.withOpacity(0.94),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const SizedBox(width: 40), // Balancer
+          const SizedBox(width: 48), // Balancer for center text
 
-          // Center: Page indicator (e.g. "395 of 691")
+          // Center: Chapter / progress indicator
           Text(
-            '${_currentPageIndex + 1} of $_totalPages',
+            'Chapter ${_currentChapterIndex + 1} of $total',
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w400,
@@ -431,13 +748,76 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             ),
           ),
 
-          // Right: Menu icon button to open Themes & Settings sheet
-          IconButton(
-            onPressed: () => ThemesSettingsSheet.show(context),
-            icon: Icon(
-              CupertinoIcons.textformat_size,
-              color: themeConfig.textColor,
-              size: 21,
+          // Right: Apple Books Aa button with enlarged comfortable touch target
+          GestureDetector(
+            onTap: () {
+              ReaderMenuPopup.show(
+                context,
+                onOpenContents: () {
+                  ReaderContentsSheet.show(
+                    context,
+                    bookId: widget.book.id,
+                    bookTitle: widget.book.title,
+                    currentChapterIndex: _currentChapterIndex,
+                    totalChapters: _chapters.length,
+                    chapters: _chapters,
+                    onSelectChapter: _jumpToChapter,
+                  );
+                },
+                onOpenSearch: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content:
+                            Text('In-book text search is indexing publication...')),
+                  );
+                },
+                onOpenThemes: () {
+                  ThemesSettingsSheet.show(context);
+                },
+                onToggleReadingMode: () {
+                  setState(() {
+                    _isContinuousScroll = !_isContinuousScroll;
+                  });
+                },
+                onToggleBookmark: () async {
+                  final added = await DatabaseService.instance.toggleBookmark(
+                    widget.book.id,
+                    _currentChapterIndex,
+                    label: _chapters.isNotEmpty
+                        ? _chapters[_currentChapterIndex].title
+                        : 'Chapter ${_currentChapterIndex + 1}',
+                  );
+                  setState(() {
+                    _isBookmarked = added;
+                  });
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          added
+                              ? 'Bookmark added for Chapter ${_currentChapterIndex + 1}'
+                              : 'Bookmark removed',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        duration: const Duration(seconds: 1),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                },
+                isBookmarked: _isBookmarked,
+                isContinuousScroll: _isContinuousScroll,
+              );
+            },
+            child: Container(
+              width: 48,
+              height: 44,
+              alignment: Alignment.center,
+              child: Icon(
+                CupertinoIcons.textformat_size,
+                color: themeConfig.textColor,
+                size: 23,
+              ),
             ),
           ),
         ],

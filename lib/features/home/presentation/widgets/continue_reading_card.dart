@@ -1,10 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import '../../../../core/database/database_service.dart';
 import '../../../../core/models/book.dart';
 import '../../../../core/models/reading_progress.dart';
 import '../../../../shared/widgets/book_cover_widget.dart';
-import '../../../reader/presentation/reader_screen.dart';
-import '../../../reader/presentation/pdf_reader_screen.dart';
+import '../../../reader/presentation/reader_navigator.dart';
 
 class ContinueReadingCard extends StatelessWidget {
   final Book book;
@@ -32,17 +32,7 @@ class ContinueReadingCard extends StatelessWidget {
     final gradient = gradients[hash % gradients.length];
 
     return GestureDetector(
-      onTap: () {
-        if (book.format == BookFormat.pdf) {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => PdfReaderScreen(book: book)),
-          );
-        } else {
-          Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => ReaderScreen(book: book)),
-          );
-        }
-      },
+      onTap: () => ReaderNavigator.openBook(context, book),
       child: Container(
         width: 290,
         height: 120,
@@ -146,12 +136,18 @@ class ContinueReadingCard extends StatelessWidget {
         message: Text(book.author),
         actions: [
           CupertinoActionSheetAction(
-            child: const Text('Book Details'),
-            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Read from Last Location'),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              ReaderNavigator.openBook(context, book);
+            },
           ),
           CupertinoActionSheetAction(
             child: const Text('Mark as Finished'),
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () {
+              DatabaseService.instance.markBookFinished(book.id, true);
+              Navigator.of(ctx).pop();
+            },
           ),
         ],
         cancelButton: CupertinoActionSheetAction(

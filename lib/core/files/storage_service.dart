@@ -53,6 +53,14 @@ class StorageService {
     return await stagedFile.rename(dest.path);
   }
 
+  Future<void> deleteStagingFile(File stagedFile) async {
+    try {
+      if (stagedFile.existsSync()) {
+        stagedFile.deleteSync();
+      }
+    } catch (_) {}
+  }
+
   Future<void> cleanStaging() async {
     try {
       if (stagingDir.existsSync()) {

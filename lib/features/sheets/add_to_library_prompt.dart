@@ -158,4 +158,31 @@ class AddToLibraryPrompt {
 
     return choice;
   }
+
+  static Future<AddToLibraryChoice> checkAndPrompt(
+    BuildContext context, {
+    required String novelId,
+    required String novelTitle,
+    Future<void> Function()? onAddToLibrary,
+  }) async {
+    final db = DatabaseService.instance;
+    if (db.isBookInLibrary(novelId)) return AddToLibraryChoice.addToLibrary;
+    if (db.isPromptSuppressedForSession(novelId)) return AddToLibraryChoice.notNow;
+
+    final book = db.getBookById(novelId) ??
+        Book(
+          id: novelId,
+          title: novelTitle,
+          author: 'Unknown Author',
+          format: BookFormat.webNovel,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+
+    final choice = await show(context, novel: book);
+    if (choice == AddToLibraryChoice.addToLibrary && onAddToLibrary != null) {
+      await onAddToLibrary();
+    }
+    return choice;
+  }
 }

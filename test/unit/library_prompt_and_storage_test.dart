@@ -68,12 +68,13 @@ void main() {
     });
 
     test('Removing novel from library does NOT automatically delete its downloads', () async {
-      const bookId = 'book_good_material';
+      const bookId = 'book_test_novel_1';
+      await db.setLibraryMembership(bookId, true);
       expect(db.isBookInLibrary(bookId), isTrue);
 
-      // Add a download for Good Material
+      // Add a download for this novel
       final job = DownloadJob(
-        id: 'job_gm_1',
+        id: 'job_test_1',
         bookId: bookId,
         chapterId: 'ch_1',
         chapterTitle: 'Chapter 1',
@@ -95,7 +96,8 @@ void main() {
     });
 
     test('Deleting downloads does NOT automatically remove library membership', () async {
-      const bookId = 'book_pride_and_prejudice';
+      const bookId = 'book_test_novel_2';
+      await db.setLibraryMembership(bookId, true);
       expect(db.isBookInLibrary(bookId), isTrue);
 
       // Add a download job
