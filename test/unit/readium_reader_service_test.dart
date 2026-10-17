@@ -240,5 +240,89 @@ void main() {
       );
       expect(res, isNull);
     });
+
+    test('Reading session lifecycle: start on ready -> stop on pause -> restart on resume -> clear on close (background time never counted)', () async {
+      final initialMinutes = db.getTodayReadingMinutes();
+
+      // 1. Reader becomes ready -> session timer starts
+      final readyMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderReady', {
+          'bookId': bookId,
+          'requestId': 'req_time_test',
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', readyMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNotNull);
+
+      // Simulate 60 seconds of active reading
+      ReadiumReaderService.activeSessionStartTime =
+          DateTime.now().subtract(const Duration(seconds: 60));
+
+      // 2. Reader pauses -> flushes 60s and STOPS timer (null)
+      final pausedMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderPaused', {
+          'bookId': bookId,
+          'locator': '{"href":"ch1.xhtml"}',
+          'totalProgression': 0.1,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', pausedMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNull);
+      expect(db.getTodayReadingMinutes(), equals(initialMinutes + 1));
+
+      // 3. Background time elapses (e.g. 2 hours in background)
+      // Since timer is null, no session runs while paused.
+
+      // 4. Reader resumed -> restarts timer from now
+      final resumedMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderResumed', {
+          'bookId': bookId,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', resumedMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNotNull);
+
+      // Simulate another 60 seconds of active reading
+      ReadiumReaderService.activeSessionStartTime =
+          DateTime.now().subtract(const Duration(seconds: 60));
+
+      // 5. Reader closes -> flushes 60s and CLEARS timer (null)
+      final closedMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderClosed', {
+          'bookId': bookId,
+          'locator': '{"href":"ch1.xhtml"}',
+          'totalProgression': 0.15,
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', closedMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNull);
+      // Total reading time MUST be 2 minutes, NOT 2 hours + 2 minutes!
+      expect(db.getTodayReadingMinutes(), equals(initialMinutes + 2));
+    });
+
+    test('onReaderError immediately cancels active session timer to avoid counting error screens', () async {
+      ReadiumReaderService.activeSessionStartTime = DateTime.now();
+
+      final errorMsg = const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('onReaderError', {
+          'bookId': bookId,
+          'requestId': 'req_err',
+          'code': 'CORRUPT_EPUB',
+          'message': 'Cannot parse container.xml',
+        }),
+      );
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage('com.hon.reader/readium_reader', errorMsg, (ByteData? reply) {});
+
+      expect(ReadiumReaderService.activeSessionStartTime, isNull);
+    });
   });
 }

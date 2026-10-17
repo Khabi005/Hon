@@ -60,7 +60,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _sessionStartTime = DateTime.now();
+    // Do NOT start timer during loading! Timer starts once content is parsed and readable.
+    _sessionStartTime = null;
     _currentChapterIndex = widget.initialChapterIndex;
     _currentPageIndex = widget.initialPageIndex;
     _pageController = PageController(initialPage: _currentChapterIndex);
@@ -73,18 +74,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      _flushReadingTime();
+      _pauseReadingSession();
     } else if (state == AppLifecycleState.resumed) {
-      _sessionStartTime = DateTime.now();
+      _resumeReadingSession();
     }
   }
 
-  void _flushReadingTime() {
+  void _pauseReadingSession() {
     if (_sessionStartTime != null) {
       final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
+      _sessionStartTime = null; // Crucial: STOP timer so background time is never counted!
+    }
+  }
+
+  void _resumeReadingSession() {
+    // Only restart timer if reader has valid, readable content in foreground
+    if (!_isLoading && _errorMessage == null) {
       _sessionStartTime = DateTime.now();
     }
   }
@@ -92,7 +100,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _flushReadingTime();
+    _pauseReadingSession();
+    _sessionStartTime = null;
     _saveDebounceTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -170,6 +179,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
               _isBookmarked = DatabaseService.instance
                   .isBookmarked(widget.book.id, _currentChapterIndex);
               _isLoading = false;
+              // Start timer only when content is loaded and readable
+              _sessionStartTime = DateTime.now();
             });
 
             // Post-frame scroll position restoration if scroll offset exists
@@ -200,6 +211,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
               ? 'Could not read EPUB publication file at:\n${widget.book.filePath}'
               : 'No publication file path registered for this book.';
           _isLoading = false;
+          _sessionStartTime = null;
         });
       }
     } catch (e) {
@@ -207,6 +219,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
         setState(() {
           _errorMessage = 'EPUB parsing error: $e';
           _isLoading = false;
+          _sessionStartTime = null;
         });
       }
     }

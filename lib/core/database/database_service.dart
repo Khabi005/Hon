@@ -8,12 +8,31 @@ import '../models/chapter.dart';
 import '../models/reading_progress.dart';
 import '../models/download_job.dart';
 import '../models/bookmark.dart';
+import '../files/storage_service.dart';
 
 enum LibrarySort {
   titleAz,
   titleZa,
   recent,
   progress,
+}
+
+class BookDeletionResult {
+  final bool success;
+  final bool recordsPurged;
+  final List<String> deletedFiles;
+  final List<String> failedFiles;
+  final List<String> skippedExternalFiles;
+  final String? errorMessage;
+
+  const BookDeletionResult({
+    required this.success,
+    required this.recordsPurged,
+    this.deletedFiles = const [],
+    this.failedFiles = const [],
+    this.skippedExternalFiles = const [],
+    this.errorMessage,
+  });
 }
 
 class DatabaseService {
@@ -237,26 +256,71 @@ class DatabaseService {
     await setLibraryMembership(bookId, false);
   }
 
-  Future<void> deleteBook(String bookId) async {
+  Future<BookDeletionResult> deleteBook(String bookId) async {
     final book = _books[bookId];
-    if (book != null && book.filePath != null) {
-      try {
-        final f = File(book.filePath!);
-        if (f.existsSync()) {
-          f.deleteSync();
-        }
-      } catch (_) {}
-      if (book.coverPath != null &&
-          !book.coverPath!.startsWith('http') &&
-          !book.coverPath!.startsWith('assets/')) {
-        try {
-          final c = File(book.coverPath!);
-          if (c.existsSync()) {
-            c.deleteSync();
-          }
-        } catch (_) {}
+    if (book == null) {
+      return const BookDeletionResult(
+        success: true,
+        recordsPurged: true,
+      );
+    }
+
+    final storage = StorageService.instance;
+    final List<String> candidatePaths = [];
+
+    if (book.filePath != null && !book.filePath!.startsWith('assets/')) {
+      candidatePaths.add(book.filePath!);
+    }
+    if (book.coverPath != null &&
+        !book.coverPath!.startsWith('http') &&
+        !book.coverPath!.startsWith('assets/')) {
+      candidatePaths.add(book.coverPath!);
+    }
+
+    // Include all downloaded chapter files
+    final chapters = _chapters[bookId] ?? [];
+    for (final ch in chapters) {
+      if (ch.localFilePath != null && !ch.localFilePath!.startsWith('assets/')) {
+        candidatePaths.add(ch.localFilePath!);
       }
     }
+
+    final List<String> deletedFiles = [];
+    final List<String> failedFiles = [];
+    final List<String> skippedExternalFiles = [];
+
+    for (final rawPath in candidatePaths.toSet()) {
+      // Security & Data Safety: Reject and skip paths outside Hon's managed storage!
+      if (!storage.isPathInsideManagedStorage(rawPath)) {
+        skippedExternalFiles.add(rawPath);
+        continue;
+      }
+
+      try {
+        final f = File(rawPath);
+        if (f.existsSync()) {
+          f.deleteSync();
+          deletedFiles.add(rawPath);
+        }
+      } catch (e) {
+        failedFiles.add(rawPath);
+      }
+    }
+
+    // If any file in managed storage failed to delete, do NOT purge the record!
+    // Report the failure honestly and preserve retry information.
+    if (failedFiles.isNotEmpty) {
+      return BookDeletionResult(
+        success: false,
+        recordsPurged: false,
+        deletedFiles: deletedFiles,
+        failedFiles: failedFiles,
+        skippedExternalFiles: skippedExternalFiles,
+        errorMessage: 'Failed to delete ${failedFiles.length} file(s) from storage.',
+      );
+    }
+
+    // Purge database records only when physical file deletion succeeded
     _books.remove(bookId);
     _libraryEntries.remove(bookId);
     _readingProgress.remove(bookId);
@@ -265,6 +329,14 @@ class DatabaseService {
     _downloadJobs.removeWhere((k, v) => v.bookId == bookId);
     await _saveToDisk();
     _notify();
+
+    return BookDeletionResult(
+      success: true,
+      recordsPurged: true,
+      deletedFiles: deletedFiles,
+      failedFiles: failedFiles,
+      skippedExternalFiles: skippedExternalFiles,
+    );
   }
 
   Future<void> setLibraryMembership(String bookId, bool isInLibrary) async {

@@ -25,6 +25,23 @@ class StorageService {
   Directory get chaptersDir => Directory(p.join(_baseDir!.path, 'chapters'));
   Directory get stagingDir => Directory(p.join(_baseDir!.path, 'staging'));
 
+  /// Checks whether a given path resides within Hon's managed sandboxed storage.
+  /// Prevents accidental deletion of external files outside Hon's app directory.
+  bool isPathInsideManagedStorage(String filePath) {
+    if (_baseDir == null) return false;
+    try {
+      final canonicalBase = p.canonicalize(_baseDir!.path);
+      final canonicalTarget = p.canonicalize(filePath);
+      return p.isWithin(canonicalBase, canonicalTarget) || canonicalBase == canonicalTarget;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void setBaseDirForTesting(Directory dir) {
+    _baseDir = dir;
+  }
+
   Future<String> computeFileHash(File file) async {
     final bytes = await file.readAsBytes();
     return sha256.convert(bytes).toString();

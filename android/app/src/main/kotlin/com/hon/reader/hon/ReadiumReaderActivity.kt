@@ -756,6 +756,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
         super.onResume()
         activeInstance = this
         updateSystemBars()
+        if (publication != null && currentLocator != null) {
+            HonReaderBridge.instance?.reportResumed(bookId)
+        }
     }
 
     override fun onPause() {

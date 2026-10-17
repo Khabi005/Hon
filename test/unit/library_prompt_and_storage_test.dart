@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/database/database_service.dart';
 import 'package:hon/core/models/book.dart';
+import 'package:hon/core/models/chapter.dart';
 import 'package:hon/core/models/download_job.dart';
+import 'package:hon/core/files/storage_service.dart';
 import 'package:hon/app/theme/reader_theme.dart';
 
 void main() {
@@ -189,17 +191,82 @@ void main() {
       expect(db.getBookById(bookId), isNotNull);
     });
 
-    test('deleteBook permanently removes book record, library membership, and local file', () async {
-      const bookId = 'book_delete_test';
-      final tempFile = File('/tmp/delete_book_test_${DateTime.now().millisecondsSinceEpoch}.epub');
-      await tempFile.writeAsString('mock content');
-      expect(tempFile.existsSync(), isTrue);
+    test('deleteBook permanently deletes all Hon-managed publication, cover, and chapter files', () async {
+      final managedDir = Directory('/tmp/hon_test_storage_${DateTime.now().millisecondsSinceEpoch}');
+      await managedDir.create(recursive: true);
+      StorageService.instance.setBaseDirForTesting(managedDir);
+
+      const bookId = 'book_managed_delete_test';
+      final pubFile = File('${managedDir.path}/publications/test.epub');
+      await pubFile.parent.create(recursive: true);
+      await pubFile.writeAsString('managed pub content');
+
+      final coverFile = File('${managedDir.path}/covers/test.png');
+      await coverFile.parent.create(recursive: true);
+      await coverFile.writeAsString('managed cover bytes');
+
+      final chapterFile = File('${managedDir.path}/chapters/test_ch1.html');
+      await chapterFile.parent.create(recursive: true);
+      await chapterFile.writeAsString('managed chapter content');
 
       final book = Book(
         id: bookId,
-        title: 'Delete Test Book',
+        title: 'Managed Delete Test Book',
         author: 'Author',
-        filePath: tempFile.path,
+        filePath: pubFile.path,
+        coverPath: coverFile.path,
+        format: BookFormat.epub,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await db.saveBook(book);
+      await db.setLibraryMembership(bookId, true);
+      await db.setChaptersForBook(bookId, [
+        Chapter(
+          id: 'ch_1',
+          bookId: bookId,
+          sourceChapterId: 'src_1',
+          title: 'Chapter 1',
+          chapterIndex: 1.0,
+          localFilePath: chapterFile.path,
+          updatedAt: DateTime.now(),
+        ),
+      ]);
+
+      expect(pubFile.existsSync(), isTrue);
+      expect(coverFile.existsSync(), isTrue);
+      expect(chapterFile.existsSync(), isTrue);
+
+      final result = await db.deleteBook(bookId);
+
+      expect(result.success, isTrue);
+      expect(result.recordsPurged, isTrue);
+      expect(result.deletedFiles.length, equals(3));
+      expect(pubFile.existsSync(), isFalse);
+      expect(coverFile.existsSync(), isFalse);
+      expect(chapterFile.existsSync(), isFalse);
+      expect(db.getBookById(bookId), isNull);
+      expect(db.isBookInLibrary(bookId), isFalse);
+
+      await managedDir.delete(recursive: true);
+    });
+
+    test('deleteBook rejects paths outside Hon managed storage and preserves user files', () async {
+      final managedDir = Directory('/tmp/hon_test_storage_${DateTime.now().millisecondsSinceEpoch}');
+      await managedDir.create(recursive: true);
+      StorageService.instance.setBaseDirForTesting(managedDir);
+
+      // External user file (e.g. user Downloads folder)
+      final externalFile = File('/tmp/user_external_downloads_${DateTime.now().millisecondsSinceEpoch}.epub');
+      await externalFile.writeAsString('external user book that Hon must never delete');
+      expect(externalFile.existsSync(), isTrue);
+
+      const bookId = 'book_external_ref_test';
+      final book = Book(
+        id: bookId,
+        title: 'External Book',
+        author: 'Author',
+        filePath: externalFile.path,
         format: BookFormat.epub,
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
@@ -207,11 +274,17 @@ void main() {
       await db.saveBook(book);
       await db.setLibraryMembership(bookId, true);
 
-      await db.deleteBook(bookId);
+      final result = await db.deleteBook(bookId);
 
+      expect(result.success, isTrue);
+      expect(result.recordsPurged, isTrue);
+      expect(result.skippedExternalFiles.contains(externalFile.path), isTrue);
+      // User's external file MUST remain on disk!
+      expect(externalFile.existsSync(), isTrue);
       expect(db.getBookById(bookId), isNull);
-      expect(db.isBookInLibrary(bookId), isFalse);
-      expect(tempFile.existsSync(), isFalse);
+
+      await externalFile.delete();
+      await managedDir.delete(recursive: true);
     });
 
     test('addReadingTime accumulates seconds and increments getTodayReadingMinutes', () async {

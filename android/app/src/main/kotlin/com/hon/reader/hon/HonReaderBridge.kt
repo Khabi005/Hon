@@ -100,6 +100,15 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         }
     }
 
+    fun reportResumed(bookId: String) {
+        mainHandler.post {
+            channel.invokeMethod(
+                "onReaderResumed",
+                mapOf("bookId" to bookId)
+            )
+        }
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "isPlatformSupported" -> {

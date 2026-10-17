@@ -469,7 +469,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         content: Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Text(
-            'This will remove "${book.title}" from your library and permanently delete all downloaded files from your device. This action cannot be undone.',
+            'This will remove "${book.title}" from your library, delete all downloaded publication and chapter files from Hon\'s storage, and erase your reading progress, bookmarks, and history for this novel. This action cannot be undone.',
           ),
         ),
         actions: [
@@ -482,12 +482,29 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             child: const Text('Delete'),
             onPressed: () async {
               Navigator.of(ctx).pop();
-              await DatabaseService.instance.deleteBook(book.id);
-              messenger.showSnackBar(
-                SnackBar(
-                  content: Text('Removed and deleted "${book.title}".'),
-                ),
-              );
+              final result = await DatabaseService.instance.deleteBook(book.id);
+              if (result.success) {
+                if (result.skippedExternalFiles.isNotEmpty) {
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text('Removed "${book.title}". External files left untouched.'),
+                    ),
+                  );
+                } else {
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text('Removed and deleted "${book.title}".'),
+                    ),
+                  );
+                }
+              } else {
+                messenger.showSnackBar(
+                  SnackBar(
+                    backgroundColor: CupertinoColors.destructiveRed,
+                    content: Text('Failed to delete files: ${result.errorMessage}'),
+                  ),
+                );
+              }
             },
           ),
         ],

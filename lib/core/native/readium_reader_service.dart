@@ -47,6 +47,12 @@ class ReadiumReaderService {
   // Active foreground session time tracking
   static DateTime? _activeSessionStartTime;
 
+  @visibleForTesting
+  static DateTime? get activeSessionStartTime => _activeSessionStartTime;
+
+  @visibleForTesting
+  static set activeSessionStartTime(DateTime? val) => _activeSessionStartTime = val;
+
   static bool get isAndroidNativeSupported => Platform.isAndroid;
 
   /// Ensures native-to-Dart locator updates are handled and persisted with bounded debounced disk I/O
@@ -112,6 +118,8 @@ class ReadiumReaderService {
             final reqId = args['requestId'] as String? ?? '';
             final code = args['code'] as String? ?? 'UNKNOWN_ERROR';
             final message = args['message'] as String? ?? 'An error occurred in Readium';
+            // Clear timer on error: error screen must not accumulate reading time!
+            _activeSessionStartTime = null;
             lastErrorNotifier.value = '$code: $message';
             onErrorCallback?.call(bookId, code, message);
 
@@ -138,13 +146,14 @@ class ReadiumReaderService {
             final progression = (args['totalProgression'] as num?)?.toDouble() ??
                 (args['progression'] as num?)?.toDouble();
 
-            // Accumulate active foreground reading time
+            // Save elapsed foreground reading time and STOP timer!
+            // Crucial: do NOT leave timer running in the background!
             if (_activeSessionStartTime != null) {
               final elapsed = DateTime.now().difference(_activeSessionStartTime!).inSeconds;
               if (elapsed > 0) {
                 DatabaseService.instance.addReadingTime(elapsed);
               }
-              _activeSessionStartTime = DateTime.now();
+              _activeSessionStartTime = null;
             }
 
             if (bookId.isNotEmpty && locatorJson != null && locatorJson.trim().isNotEmpty) {
@@ -163,6 +172,14 @@ class ReadiumReaderService {
               _pendingByBook[bookId] = updated;
               await _flushBook(bookId);
             }
+          }
+          break;
+
+        case 'onReaderResumed':
+          final args = call.arguments as Map<dynamic, dynamic>?;
+          if (args != null) {
+            // Restart timer only when reader returns to the foreground with readable content
+            _activeSessionStartTime = DateTime.now();
           }
           break;
 

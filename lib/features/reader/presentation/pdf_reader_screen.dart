@@ -46,25 +46,33 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _sessionStartTime = DateTime.now();
+    // Do NOT start timer during loading/validation! Timer starts once PDF document is open and readable.
+    _sessionStartTime = null;
     _initPdf();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      _flushReadingTime();
+      _pauseReadingSession();
     } else if (state == AppLifecycleState.resumed) {
-      _sessionStartTime = DateTime.now();
+      _resumeReadingSession();
     }
   }
 
-  void _flushReadingTime() {
+  void _pauseReadingSession() {
     if (_sessionStartTime != null) {
       final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
+      _sessionStartTime = null; // Crucial: STOP timer so background time is never counted!
+    }
+  }
+
+  void _resumeReadingSession() {
+    // Only restart timer if PDF has valid, readable document in foreground
+    if (!_isLoading && _errorMessage == null && !_isUnsupportedPlatform) {
       _sessionStartTime = DateTime.now();
     }
   }
@@ -166,6 +174,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
+            _sessionStartTime = DateTime.now();
           });
         }
       } else {
@@ -180,6 +189,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
+            _sessionStartTime = DateTime.now();
           });
         }
       }
@@ -187,6 +197,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _sessionStartTime = null;
           _errorMessage =
               'Unable to parse PDF document. The file may be corrupt or encrypted.\n$e';
         });
@@ -354,7 +365,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _flushReadingTime();
+    _pauseReadingSession();
     _pinchController?.dispose();
     _flipController?.dispose();
     super.dispose();
