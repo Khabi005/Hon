@@ -65,10 +65,10 @@ class HomeScreen extends ConsumerWidget {
                                 width: 2.2,
                               ),
                             ),
-                            child: const Center(
+                            child: Center(
                               child: Text(
-                                '20',
-                                style: TextStyle(
+                                '${DatabaseService.instance.getTodayReadingMinutes()}',
+                                style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
                                   color: HonColors.accentBlue,
@@ -180,7 +180,7 @@ class HomeScreen extends ConsumerWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '0 of 5 mins today • Tap to view stats',
+                                '${DatabaseService.instance.getTodayReadingMinutes()} of ${DatabaseService.instance.getDailyGoalMinutes()} mins today • Tap to view stats',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: textSecondary,

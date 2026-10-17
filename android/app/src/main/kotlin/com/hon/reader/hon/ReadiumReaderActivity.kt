@@ -14,6 +14,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -68,12 +71,39 @@ class ReadiumReaderActivity : AppCompatActivity() {
     private var currentTheme: Theme = Theme.DARK
     private var isScrollMode: Boolean = false
 
+    private lateinit var rootLayout: LinearLayout
     private lateinit var topBar: LinearLayout
     private lateinit var bottomBar: LinearLayout
     private lateinit var progressText: TextView
     private var areControlsVisible: Boolean = true
     private var isClosedReported: Boolean = false
     private var loadingIndicator: ProgressBar? = null
+
+    private fun getThemeBackgroundColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.WHITE
+            Theme.SEPIA -> Color.parseColor("#F4ECD8")
+            Theme.DARK -> Color.parseColor("#1C1C1E")
+        }
+    }
+
+    private fun updateSystemBars() {
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        val isLightPage = (currentTheme == Theme.LIGHT || currentTheme == Theme.SEPIA)
+
+        if (areControlsVisible) {
+            window.statusBarColor = Color.parseColor("#EE1C1C1E")
+            window.navigationBarColor = Color.parseColor("#EE1C1C1E")
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
+        } else {
+            val pageBgColor = getThemeBackgroundColor()
+            window.statusBarColor = pageBgColor
+            window.navigationBarColor = pageBgColor
+            insetsController.isAppearanceLightStatusBars = isLightPage
+            insetsController.isAppearanceLightNavigationBars = isLightPage
+        }
+    }
 
     private fun resolveInitialLocator(
         pub: Publication,
@@ -234,40 +264,18 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun buildReaderLayout(showLoading: Boolean = false) {
-        val root = FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#1C1C1E"))
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(getThemeBackgroundColor())
         }
+        rootLayout = root
 
-        val fragmentContainer = FrameLayout(this).apply {
-            id = R.id.readium_fragment_container
-        }
-        root.addView(
-            fragmentContainer,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        if (showLoading) {
-            val spinner = ProgressBar(this).apply {
-                isIndeterminate = true
-            }
-            loadingIndicator = spinner
-            val spinnerParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER
-            )
-            fragmentContainer.addView(spinner, spinnerParams)
-        }
-
-        // Top Bar
+        // 1. Top Bar
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#EE1C1C1E"))
-            setPadding(24, 48, 24, 24)
+            setPadding(24, 48, 24, 20)
 
             val backBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "✕"
@@ -313,21 +321,53 @@ class ReadiumReaderActivity : AppCompatActivity() {
             addView(aaBtn)
         }
 
+        ViewCompat.setOnApplyWindowInsetsListener(topBar) { v, insets ->
+            val statusBarTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            v.setPadding(24, statusBarTop + 16, 24, 16)
+            insets
+        }
+
         root.addView(
             topBar,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
 
-        // Bottom Bar
+        // 2. Reading Fragment Container (takes all middle space, never obscured by bars!)
+        val container = FrameLayout(this).apply {
+            id = R.id.readium_fragment_container
+        }
+
+        if (showLoading) {
+            val spinner = ProgressBar(this).apply {
+                isIndeterminate = true
+            }
+            loadingIndicator = spinner
+            val spinnerParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+            container.addView(spinner, spinnerParams)
+        }
+
+        root.addView(
+            container,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1.0f
+            )
+        )
+
+        // 3. Bottom Bar
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#EE1C1C1E"))
-            setPadding(24, 24, 24, 48)
+            setPadding(24, 20, 24, 48)
 
             val prevBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "❮ Prev"
@@ -359,16 +399,22 @@ class ReadiumReaderActivity : AppCompatActivity() {
             addView(nextBtn)
         }
 
+        ViewCompat.setOnApplyWindowInsetsListener(bottomBar) { v, insets ->
+            val navBarBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            v.setPadding(24, 16, 24, navBarBottom + 16)
+            insets
+        }
+
         root.addView(
             bottomBar,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
 
         setContentView(root)
+        updateSystemBars()
     }
 
     private fun observeLocator(fragment: EpubNavigatorFragment, pub: Publication) {
@@ -416,6 +462,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val visibility = if (areControlsVisible) View.VISIBLE else View.GONE
         topBar.visibility = visibility
         bottomBar.visibility = visibility
+        updateSystemBars()
     }
 
     private fun saveDurablePreferences() {
@@ -445,6 +492,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun applyPreferences() {
+        rootLayout.setBackgroundColor(getThemeBackgroundColor())
+        updateSystemBars()
         navigator?.submitPreferences(
             EpubPreferences(
                 fontSize = currentFontSize,
@@ -706,6 +755,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         activeInstance = this
+        updateSystemBars()
     }
 
     override fun onPause() {

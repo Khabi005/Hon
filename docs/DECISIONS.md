@@ -60,3 +60,14 @@
   - When background services (e.g., chapter update check, source scraping) do not exist yet, display honest empty states or explicit prototype banners.
   - Do not synthesize mock updates ("Today", "Yesterday") to populate screens.
   - Label platform stubs accurately as interfaces rather than claiming engine completion.
+
+## ADR-008: Native Android Reader UI Strategy
+- **Decision:** Separate functional reader ergonomics from the cosmetic Apple Books visual redesign pass, and explicitly track native Android Kotlin reader controls separately from Flutter reader widgets.
+- **Rationale & Rules:**
+  - The Android EPUB reader is rendered natively via Readium (`ReadiumReaderActivity` hosting `EpubNavigatorFragment`). Polishing Flutter's reader widgets (`reader_controls.dart`, `reader_settings_sheet.dart`) does not affect the native Android EPUB reading screen.
+  - Reading ergonomics fixes are applied immediately to native Kotlin:
+    1. Framing: Top and bottom toolbars are placed in a non-overlapping vertical `LinearLayout` with the fragment container given `weight = 1.0f` and `WindowInsetsCompat` padding. When controls are visible, chapter titles and bottom text are never obscured.
+    2. System Bar Contrast: In light and sepia reading modes, `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically sets dark status-bar icons so indicators remain legible against light page backgrounds.
+    3. Typography & Spacing: Publisher CSS margins and text alignment (e.g., `margin: 0 0 30pt;`) are preserved by default rather than globally stripped, respecting intentional publisher formatting.
+  - The visual redesign of native Kotlin reader controls (translucent floating frosted bars, Apple Books iOS 18 typography sheets, smooth spring animations) is tracked as a dedicated milestone: **Phase 0B: Native Android Reader Apple Books UI Redesign**.
+

@@ -407,4 +407,29 @@ class DatabaseService {
   Future<void> setPdfPageViewMode(String modeName) async {
     await _prefs?.setString('hon_pdf_view_mode', modeName);
   }
+
+  // --- Reading Goals & Time ---
+  int getDailyGoalMinutes() {
+    return _prefs?.getInt('hon_daily_goal_minutes') ?? 5;
+  }
+
+  Future<void> setDailyGoalMinutes(int minutes) async {
+    await _prefs?.setInt('hon_daily_goal_minutes', minutes);
+    _notify();
+  }
+
+  int getTodayReadingMinutes() {
+    final now = DateTime.now();
+    final dateKey = 'hon_reading_secs_${now.year}_${now.month}_${now.day}';
+    final secs = _prefs?.getInt(dateKey) ?? 0;
+    return (secs / 60).floor();
+  }
+
+  Future<void> addReadingTime(int seconds) async {
+    final now = DateTime.now();
+    final dateKey = 'hon_reading_secs_${now.year}_${now.month}_${now.day}';
+    final current = _prefs?.getInt(dateKey) ?? 0;
+    await _prefs?.setInt(dateKey, current + seconds);
+    _notify();
+  }
 }

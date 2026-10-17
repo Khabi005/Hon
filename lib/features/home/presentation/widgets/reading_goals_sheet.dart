@@ -86,47 +86,55 @@ class ReadingGoalsSheet extends StatelessWidget {
                   const SizedBox(height: 32),
 
                   // Half-circle arc gauge matching Apple Books screenshot
-                  SizedBox(
-                    width: 240,
-                    height: 125,
-                    child: CustomPaint(
-                      painter: _ArcGaugePainter(
-                        progress: 0.15,
-                        color: HonColors.accentBlue,
-                        trackColor: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Text(
-                            'Today\'s Reading',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: textColor,
-                            ),
+                  Builder(
+                    builder: (context) {
+                      final todayMins = DatabaseService.instance.getTodayReadingMinutes();
+                      final goalMins = DatabaseService.instance.getDailyGoalMinutes();
+                      final fraction = goalMins > 0 ? (todayMins / goalMins).clamp(0.0, 1.0) : 0.0;
+
+                      return SizedBox(
+                        width: 240,
+                        height: 125,
+                        child: CustomPaint(
+                          painter: _ArcGaugePainter(
+                            progress: fraction > 0 ? fraction : 0.02,
+                            color: fraction >= 1.0 ? HonColors.accentGreen : HonColors.accentBlue,
+                            trackColor: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '0:00',
-                            style: TextStyle(
-                              fontSize: 38,
-                              fontWeight: FontWeight.w800,
-                              fontFamily: 'serif',
-                              color: textColor,
-                              letterSpacing: -1,
-                            ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Text(
+                                'Today\'s Reading',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: textColor,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$todayMins:00',
+                                style: TextStyle(
+                                  fontSize: 38,
+                                  fontWeight: FontWeight.w800,
+                                  fontFamily: 'serif',
+                                  color: textColor,
+                                  letterSpacing: -1,
+                                ),
+                              ),
+                              Text(
+                                'of your $goalMins-minute goal >',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: subtextColor,
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(
-                            'of your 5-minute goal >',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: subtextColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   ),
 
                   const SizedBox(height: 36),

@@ -180,29 +180,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(CupertinoIcons.arrow_down_doc, color: HonColors.accentIndigo),
-                  title: const Text('Export Metadata Backup'),
-                  subtitle: const Text('Versioned SQLite & settings archive'),
+                  title: const Text('Export JSON Metadata Archive'),
+                  subtitle: const Text('JSON metadata, library books & reading progress'),
                   trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
                   onTap: () async {
                     try {
                       final db = DatabaseService.instance;
                       final storage = StorageService.instance;
+                      final allBooks = db.getAllBooks();
                       final backupData = {
+                        'format': 'hon-json-backup',
                         'version': 1,
                         'exportedAt': DateTime.now().toIso8601String(),
-                        'books': db.getAllBooks().map((b) => b.toMap()).toList(),
+                        'books': allBooks.map((b) => b.toMap()).toList(),
                         'library': db.getLibraryBooks().map((b) => b.id).toList(),
+                        'progress': allBooks
+                            .map((b) => db.getProgress(b.id)?.toMap())
+                            .whereType<Map<String, dynamic>>()
+                            .toList(),
                       };
                       final backupFile = File('${storage.baseDir.path}/hon_backup_${DateTime.now().millisecondsSinceEpoch}.json');
                       await backupFile.writeAsString(jsonEncode(backupData));
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Backup created: ${p.basename(backupFile.path)}')),
+                        SnackBar(content: Text('JSON archive saved: ${p.basename(backupFile.path)}')),
                       );
                     } catch (e) {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Backup failed: $e')),
+                        SnackBar(content: Text('Export failed: $e')),
                       );
                     }
                   },
