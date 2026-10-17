@@ -3,6 +3,7 @@ package com.hon.reader.hon
 import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -74,11 +75,19 @@ class ReadiumReaderActivity : AppCompatActivity() {
     private lateinit var rootLayout: LinearLayout
     private lateinit var topBar: LinearLayout
     private lateinit var bottomBar: LinearLayout
+    private lateinit var titleView: TextView
+    private lateinit var backBtn: TextView
+    private lateinit var tocBtn: TextView
+    private lateinit var aaBtn: TextView
+    private lateinit var prevBtn: TextView
+    private lateinit var nextBtn: TextView
+    private lateinit var progressPill: LinearLayout
     private lateinit var progressText: TextView
     private var areControlsVisible: Boolean = true
     private var isClosedReported: Boolean = false
     private var loadingIndicator: ProgressBar? = null
 
+    // Apple Books Color Palette
     private fun getThemeBackgroundColor(): Int {
         return when (currentTheme) {
             Theme.LIGHT -> Color.WHITE
@@ -87,15 +96,81 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun getBarBackgroundColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#F8F8F9")
+            Theme.SEPIA -> Color.parseColor("#EFE6D0")
+            Theme.DARK -> Color.parseColor("#1C1C1E")
+        }
+    }
+
+    private fun getPrimaryTextColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#1C1C1E")
+            Theme.SEPIA -> Color.parseColor("#5F4B32")
+            Theme.DARK -> Color.WHITE
+        }
+    }
+
+    private fun getSecondaryTextColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#8E8E93")
+            Theme.SEPIA -> Color.parseColor("#8C775D")
+            Theme.DARK -> Color.parseColor("#A0A0A5")
+        }
+    }
+
+    private fun getPillBackgroundColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#EBEBEF")
+            Theme.SEPIA -> Color.parseColor("#E4DAC2")
+            Theme.DARK -> Color.parseColor("#2C2C2E")
+        }
+    }
+
+    private fun getAccentColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#007AFF")
+            Theme.SEPIA -> Color.parseColor("#B25E00")
+            Theme.DARK -> Color.parseColor("#0A84FF")
+        }
+    }
+
+    private fun getDividerColor(): Int {
+        return when (currentTheme) {
+            Theme.LIGHT -> Color.parseColor("#E5E5EA")
+            Theme.SEPIA -> Color.parseColor("#DED5BF")
+            Theme.DARK -> Color.parseColor("#2C2C2E")
+        }
+    }
+
+    private fun makeCardDrawable(
+        bgColor: Int,
+        cornerRadiusDp: Float,
+        strokeColor: Int? = null,
+        strokeWidthDp: Int = 0
+    ): GradientDrawable {
+        val density = resources.displayMetrics.density
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerRadiusDp * density
+            setColor(bgColor)
+            if (strokeColor != null && strokeWidthDp > 0) {
+                setStroke((strokeWidthDp * density).toInt(), strokeColor)
+            }
+        }
+    }
+
     private fun updateSystemBars() {
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         val isLightPage = (currentTheme == Theme.LIGHT || currentTheme == Theme.SEPIA)
 
         if (areControlsVisible) {
-            window.statusBarColor = Color.parseColor("#EE1C1C1E")
-            window.navigationBarColor = Color.parseColor("#EE1C1C1E")
-            insetsController.isAppearanceLightStatusBars = false
-            insetsController.isAppearanceLightNavigationBars = false
+            val barBgColor = getBarBackgroundColor()
+            window.statusBarColor = barBgColor
+            window.navigationBarColor = barBgColor
+            insetsController.isAppearanceLightStatusBars = isLightPage
+            insetsController.isAppearanceLightNavigationBars = isLightPage
         } else {
             val pageBgColor = getThemeBackgroundColor()
             window.statusBarColor = pageBgColor
@@ -103,6 +178,37 @@ class ReadiumReaderActivity : AppCompatActivity() {
             insetsController.isAppearanceLightStatusBars = isLightPage
             insetsController.isAppearanceLightNavigationBars = isLightPage
         }
+    }
+
+    private fun updateThemeStyling() {
+        val pageBg = getThemeBackgroundColor()
+        val barBg = getBarBackgroundColor()
+        val primaryText = getPrimaryTextColor()
+        val secondaryText = getSecondaryTextColor()
+        val pillBg = getPillBackgroundColor()
+        val accent = getAccentColor()
+
+        rootLayout.setBackgroundColor(pageBg)
+        topBar.setBackgroundColor(barBg)
+        bottomBar.setBackgroundColor(barBg)
+
+        titleView.setTextColor(primaryText)
+        backBtn.setTextColor(primaryText)
+        backBtn.background = makeCardDrawable(pillBg, 18f)
+
+        tocBtn.setTextColor(primaryText)
+        tocBtn.background = makeCardDrawable(pillBg, 18f)
+
+        aaBtn.setTextColor(primaryText)
+        aaBtn.background = makeCardDrawable(pillBg, 18f)
+
+        prevBtn.setTextColor(accent)
+        nextBtn.setTextColor(accent)
+
+        progressPill.background = makeCardDrawable(pillBg, 16f)
+        progressText.setTextColor(secondaryText)
+
+        updateSystemBars()
     }
 
     private fun resolveInitialLocator(
@@ -272,26 +378,33 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
         rootLayout = root
 
-        // 1. Top Bar
+        val density = resources.displayMetrics.density
+
+        // 1. Top Bar (Classic Apple Books Header)
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#EE1C1C1E"))
-            setPadding(24, 48, 24, 20)
+            setBackgroundColor(getBarBackgroundColor())
+            setPadding((16 * density).toInt(), (36 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
 
-            val backBtn = TextView(this@ReadiumReaderActivity).apply {
+            backBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "✕"
-                textSize = 20f
-                setTextColor(Color.WHITE)
-                setPadding(16, 16, 24, 16)
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setTextColor(getPrimaryTextColor())
+                background = makeCardDrawable(getPillBackgroundColor(), 18f)
+                val size = (36 * density).toInt()
+                layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                    setMargins(0, 0, (12 * density).toInt(), 0)
+                }
                 setOnClickListener { finish() }
             }
             addView(backBtn)
 
-            val titleView = TextView(this@ReadiumReaderActivity).apply {
+            titleView = TextView(this@ReadiumReaderActivity).apply {
                 text = bookTitle
-                textSize = 16f
-                setTextColor(Color.WHITE)
+                textSize = 15f
+                setTextColor(getPrimaryTextColor())
                 paint.isFakeBoldText = true
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
@@ -301,23 +414,33 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             )
 
-            // Table of Contents button
-            val tocBtn = TextView(this@ReadiumReaderActivity).apply {
+            // Table of Contents button (Apple Books pill)
+            tocBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "≡"
-                textSize = 24f
-                setTextColor(Color.WHITE)
-                setPadding(20, 16, 20, 16)
+                textSize = 18f
+                gravity = Gravity.CENTER
+                setTextColor(getPrimaryTextColor())
+                background = makeCardDrawable(getPillBackgroundColor(), 18f)
+                val size = (36 * density).toInt()
+                layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                    setMargins((8 * density).toInt(), 0, (6 * density).toInt(), 0)
+                }
                 setOnClickListener { showTocDialog() }
             }
             addView(tocBtn)
 
-            // Appearance settings button
-            val aaBtn = TextView(this@ReadiumReaderActivity).apply {
+            // Appearance settings button (Apple Books Aa pill)
+            aaBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "Aa"
-                textSize = 17f
-                setTextColor(Color.WHITE)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setTextColor(getPrimaryTextColor())
                 paint.isFakeBoldText = true
-                setPadding(20, 16, 16, 16)
+                background = makeCardDrawable(getPillBackgroundColor(), 18f)
+                val size = (36 * density).toInt()
+                layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                    setMargins((6 * density).toInt(), 0, 0, 0)
+                }
                 setOnClickListener { showAppearanceDialog() }
             }
             addView(aaBtn)
@@ -325,7 +448,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(topBar) { v, insets ->
             val statusBarTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
-            v.setPadding(24, statusBarTop + 16, 24, 16)
+            v.setPadding((16 * density).toInt(), statusBarTop + (8 * density).toInt(), (16 * density).toInt(), (12 * density).toInt())
             insets
         }
 
@@ -364,38 +487,52 @@ class ReadiumReaderActivity : AppCompatActivity() {
             )
         )
 
-        // 3. Bottom Bar
+        // 3. Bottom Bar (Classic Apple Books Capsule Scrubber)
         bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#EE1C1C1E"))
-            setPadding(24, 20, 24, 48)
+            setBackgroundColor(getBarBackgroundColor())
+            setPadding((16 * density).toInt(), (12 * density).toInt(), (16 * density).toInt(), (24 * density).toInt())
 
-            val prevBtn = TextView(this@ReadiumReaderActivity).apply {
+            prevBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "❮ Prev"
                 textSize = 13f
-                setTextColor(Color.parseColor("#0A84FF"))
-                setPadding(16, 12, 24, 12)
+                setTextColor(getAccentColor())
+                paint.isFakeBoldText = true
+                setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
                 setOnClickListener { navigator?.goBackward(animated = true) }
             }
             addView(prevBtn)
 
-            progressText = TextView(this@ReadiumReaderActivity).apply {
-                text = "Reading"
-                textSize = 13f
+            progressPill = LinearLayout(this@ReadiumReaderActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setTextColor(Color.parseColor("#A0A0A5"))
+                background = makeCardDrawable(getPillBackgroundColor(), 16f)
+                setPadding((14 * density).toInt(), (8 * density).toInt(), (14 * density).toInt(), (8 * density).toInt())
+
+                progressText = TextView(this@ReadiumReaderActivity).apply {
+                    text = "Reading"
+                    textSize = 12f
+                    gravity = Gravity.CENTER
+                    setTextColor(getSecondaryTextColor())
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                addView(progressText)
             }
             addView(
-                progressText,
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                progressPill,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins((8 * density).toInt(), 0, (8 * density).toInt(), 0)
+                }
             )
 
-            val nextBtn = TextView(this@ReadiumReaderActivity).apply {
+            nextBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "Next ❯"
                 textSize = 13f
-                setTextColor(Color.parseColor("#0A84FF"))
-                setPadding(24, 12, 16, 12)
+                setTextColor(getAccentColor())
+                paint.isFakeBoldText = true
+                setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
                 setOnClickListener { navigator?.goForward(animated = true) }
             }
             addView(nextBtn)
@@ -403,7 +540,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         ViewCompat.setOnApplyWindowInsetsListener(bottomBar) { v, insets ->
             val navBarBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
-            v.setPadding(24, 16, 24, navBarBottom + 16)
+            v.setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), navBarBottom + (10 * density).toInt())
             insets
         }
 
@@ -416,7 +553,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         )
 
         setContentView(root)
-        updateSystemBars()
+        updateThemeStyling()
     }
 
     private fun observeLocator(fragment: EpubNavigatorFragment, pub: Publication) {
@@ -494,8 +631,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun applyPreferences() {
-        rootLayout.setBackgroundColor(getThemeBackgroundColor())
-        updateSystemBars()
+        updateThemeStyling()
         navigator?.submitPreferences(
             EpubPreferences(
                 fontSize = currentFontSize,
@@ -532,33 +668,64 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
 
+        val density = resources.displayMetrics.density
+        val cardBg = getBarBackgroundColor()
+        val primaryText = getPrimaryTextColor()
+        val secondaryText = getSecondaryTextColor()
+        val dividerColor = getDividerColor()
+        val accent = getAccentColor()
+
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#1C1C1E"))
-            setPadding(32, 32, 32, 32)
+            background = makeCardDrawable(cardBg, 16f, dividerColor, 1)
+            setPadding((20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt(), (20 * density).toInt())
+        }
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((4 * density).toInt(), 0, (4 * density).toInt(), (16 * density).toInt())
         }
 
         val title = TextView(this).apply {
             text = "Table of Contents"
-            textSize = 18f
-            setTextColor(Color.WHITE)
+            textSize = 17f
+            setTextColor(primaryText)
             paint.isFakeBoldText = true
-            setPadding(16, 16, 16, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        layout.addView(title)
+        headerRow.addView(title)
+
+        val closeBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(secondaryText)
+            background = makeCardDrawable(getPillBackgroundColor(), 14f)
+            val size = (28 * density).toInt()
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            setOnClickListener { dialog.dismiss() }
+        }
+        headerRow.addView(closeBtn)
+        layout.addView(headerRow)
 
         val scrollView = ScrollView(this)
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
 
+        val currentHref = currentLocator?.href?.toString()
+
         for (item in allItems) {
-            val indent = "    ".repeat(item.depth)
+            val isCurrent = currentHref != null && item.link.url().toString().contains(currentHref)
+            val indent = (item.depth * 18 * density).toInt()
+
             val chapterItem = TextView(this).apply {
-                text = "$indent${item.title}"
-                textSize = if (item.depth == 0) 15f else 14f
-                setTextColor(if (item.depth == 0) Color.parseColor("#E5E5EA") else Color.parseColor("#A0A0A5"))
-                setPadding(16 + (item.depth * 24), 20, 16, 20)
+                text = item.title
+                textSize = if (item.depth == 0) 14f else 13.5f
+                setTextColor(if (isCurrent) accent else (if (item.depth == 0) primaryText else secondaryText))
+                if (isCurrent) paint.isFakeBoldText = true
+                setPadding((12 * density).toInt() + indent, (14 * density).toInt(), (12 * density).toInt(), (14 * density).toInt())
                 setOnClickListener {
                     lifecycleScope.launch {
                         navigator?.go(item.link, animated = true)
@@ -566,8 +733,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     dialog.dismiss()
                 }
             }
+
             val divider = View(this).apply {
-                setBackgroundColor(Color.parseColor("#2C2C2E"))
+                setBackgroundColor(dividerColor)
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
             }
             listContainer.addView(chapterItem)
@@ -575,11 +743,12 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
 
         scrollView.addView(listContainer)
-        layout.addView(scrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800))
+        layout.addView(scrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (420 * density).toInt()))
 
         dialog.setContentView(layout)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.9).toInt(),
+            (resources.displayMetrics.widthPixels * 0.92).toInt(),
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
         dialog.show()
@@ -589,96 +758,144 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
 
+        val density = resources.displayMetrics.density
+        val cardBg = getBarBackgroundColor()
+        val primaryText = getPrimaryTextColor()
+        val secondaryText = getSecondaryTextColor()
+        val pillBg = getPillBackgroundColor()
+        val dividerColor = getDividerColor()
+        val accent = getAccentColor()
+
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#1C1C1E"))
-            setPadding(32, 32, 32, 32)
+            background = makeCardDrawable(cardBg, 18f, dividerColor, 1)
+            setPadding((22 * density).toInt(), (20 * density).toInt(), (22 * density).toInt(), (22 * density).toInt())
+        }
+
+        // Header
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((4 * density).toInt(), 0, (4 * density).toInt(), (18 * density).toInt())
         }
 
         val sheetTitle = TextView(this).apply {
-            text = "Appearance & Text"
-            textSize = 18f
-            setTextColor(Color.WHITE)
+            text = "Themes & Settings"
+            textSize = 17f
+            setTextColor(primaryText)
             paint.isFakeBoldText = true
-            setPadding(16, 16, 16, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        layout.addView(sheetTitle)
+        headerRow.addView(sheetTitle)
 
-        // Font Size Row
-        val sizeRow = LinearLayout(this).apply {
+        val closeBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(secondaryText)
+            background = makeCardDrawable(pillBg, 14f)
+            val size = (28 * density).toInt()
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            setOnClickListener { dialog.dismiss() }
+        }
+        headerRow.addView(closeBtn)
+        layout.addView(headerRow)
+
+        // Font Size Stepper Card (Apple Books Stepper)
+        val sizeCard = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(16, 16, 16, 16)
-            setBackgroundColor(Color.parseColor("#2C2C2E"))
-        }
-
-        val sizeLabel = TextView(this).apply {
-            text = "Font Size: ${(currentFontSize * 100).toInt()}%"
-            textSize = 15f
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            background = makeCardDrawable(pillBg, 12f)
+            setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
         }
 
         val minusBtn = TextView(this).apply {
-            text = "  A-  "
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setPadding(16, 16, 16, 16)
-            setOnClickListener {
-                if (currentFontSize > 0.6) {
-                    currentFontSize -= 0.1
-                    sizeLabel.text = "Font Size: ${(currentFontSize * 100).toInt()}%"
-                    saveDurablePreferences()
-                    applyPreferences()
-                }
-            }
+            text = "A"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(primaryText)
+            setPadding((12 * density).toInt(), (8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
+        }
+
+        val sizeLabel = TextView(this).apply {
+            text = "${(currentFontSize * 100).toInt()}%"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(primaryText)
+            paint.isFakeBoldText = true
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         val plusBtn = TextView(this).apply {
-            text = "  A+  "
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            setPadding(16, 16, 16, 16)
-            setOnClickListener {
-                if (currentFontSize < 2.5) {
-                    currentFontSize += 0.1
-                    sizeLabel.text = "Font Size: ${(currentFontSize * 100).toInt()}%"
-                    saveDurablePreferences()
-                    applyPreferences()
-                }
+            text = "A"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setTextColor(primaryText)
+            paint.isFakeBoldText = true
+            setPadding((16 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
+        }
+
+        minusBtn.setOnClickListener {
+            if (currentFontSize > 0.6) {
+                currentFontSize = (currentFontSize - 0.1).coerceAtLeast(0.5)
+                sizeLabel.text = "${(currentFontSize * 100).toInt()}%"
+                saveDurablePreferences()
+                applyPreferences()
             }
         }
 
-        sizeRow.addView(sizeLabel)
-        sizeRow.addView(minusBtn)
-        sizeRow.addView(plusBtn)
-        layout.addView(sizeRow)
+        plusBtn.setOnClickListener {
+            if (currentFontSize < 2.5) {
+                currentFontSize = (currentFontSize + 0.1).coerceAtMost(2.5)
+                sizeLabel.text = "${(currentFontSize * 100).toInt()}%"
+                saveDurablePreferences()
+                applyPreferences()
+            }
+        }
 
-        // Theme Selection
+        sizeCard.addView(minusBtn)
+        sizeCard.addView(sizeLabel)
+        sizeCard.addView(plusBtn)
+        layout.addView(sizeCard)
+
+        // Theme Selection Label
         val themeLabel = TextView(this).apply {
-            text = "Theme"
-            textSize = 14f
-            setTextColor(Color.parseColor("#A0A0A5"))
-            setPadding(16, 24, 16, 12)
+            text = "THEME"
+            textSize = 11.5f
+            setTextColor(secondaryText)
+            paint.isFakeBoldText = true
+            setPadding((4 * density).toInt(), (20 * density).toInt(), (4 * density).toInt(), (10 * density).toInt())
         }
         layout.addView(themeLabel)
 
+        // Theme Selection Cards (Light, Sepia, Dark)
         val themeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
 
-        fun makeThemeChip(name: String, theme: Theme, bg: Int, textCol: Int): TextView {
-            return TextView(this).apply {
-                text = name
-                textSize = 14f
+        fun makeThemeCard(name: String, theme: Theme, bg: Int, textCol: Int, isBorder: Boolean): LinearLayout {
+            val isSelected = (currentTheme == theme)
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setTextColor(textCol)
-                setBackgroundColor(bg)
-                setPadding(32, 24, 32, 24)
+                val strokeCol = if (isSelected) accent else (if (isBorder) Color.parseColor("#D0D0D5") else null)
+                val strokeWidth = if (isSelected) 2 else (if (isBorder) 1 else 0)
+                background = makeCardDrawable(bg, 10f, strokeCol, strokeWidth)
+                setPadding((8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt(), (16 * density).toInt())
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    setMargins(8, 0, 8, 0)
+                    setMargins((4 * density).toInt(), 0, (4 * density).toInt(), 0)
                 }
+
+                val titleTv = TextView(this@ReadiumReaderActivity).apply {
+                    text = if (isSelected) "✓ $name" else name
+                    textSize = 13f
+                    gravity = Gravity.CENTER
+                    setTextColor(textCol)
+                    if (isSelected) paint.isFakeBoldText = true
+                }
+                addView(titleTv)
+
                 setOnClickListener {
                     currentTheme = theme
                     saveDurablePreferences()
@@ -688,34 +905,36 @@ class ReadiumReaderActivity : AppCompatActivity() {
             }
         }
 
-        themeRow.addView(makeThemeChip("Dark", Theme.DARK, Color.parseColor("#2C2C2E"), Color.WHITE))
-        themeRow.addView(makeThemeChip("Sepia", Theme.SEPIA, Color.parseColor("#F4ECD8"), Color.parseColor("#5F4B32")))
-        themeRow.addView(makeThemeChip("Light", Theme.LIGHT, Color.WHITE, Color.BLACK))
+        themeRow.addView(makeThemeCard("Light", Theme.LIGHT, Color.WHITE, Color.BLACK, true))
+        themeRow.addView(makeThemeCard("Sepia", Theme.SEPIA, Color.parseColor("#F4ECD8"), Color.parseColor("#5F4B32"), false))
+        themeRow.addView(makeThemeCard("Dark", Theme.DARK, Color.parseColor("#1C1C1E"), Color.WHITE, false))
         layout.addView(themeRow)
 
-        // Reading Navigation Mode (Paged vs Scroll)
+        // Reading Navigation Mode Label
         val layoutLabel = TextView(this).apply {
-            text = "Navigation Mode"
-            textSize = 14f
-            setTextColor(Color.parseColor("#A0A0A5"))
-            setPadding(16, 24, 16, 12)
+            text = "READING MODE"
+            textSize = 11.5f
+            setTextColor(secondaryText)
+            paint.isFakeBoldText = true
+            setPadding((4 * density).toInt(), (20 * density).toInt(), (4 * density).toInt(), (10 * density).toInt())
         }
         layout.addView(layoutLabel)
 
+        // Navigation Mode Capsule Switcher
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            background = makeCardDrawable(pillBg, 12f)
+            setPadding((4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt(), (4 * density).toInt())
         }
 
         val pagedBtn = TextView(this).apply {
-            text = "Paged (Reflow)"
-            textSize = 14f
+            text = "Paged"
+            textSize = 13f
             gravity = Gravity.CENTER
-            setTextColor(if (!isScrollMode) Color.WHITE else Color.parseColor("#A0A0A5"))
-            setBackgroundColor(if (!isScrollMode) Color.parseColor("#0A84FF") else Color.parseColor("#2C2C2E"))
-            setPadding(24, 20, 24, 20)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(8, 0, 8, 0)
-            }
+            setTextColor(if (!isScrollMode) Color.WHITE else secondaryText)
+            background = if (!isScrollMode) makeCardDrawable(accent, 8f) else null
+            setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 isScrollMode = false
                 saveDurablePreferences()
@@ -725,15 +944,13 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
 
         val scrollBtn = TextView(this).apply {
-            text = "Continuous Scroll"
-            textSize = 14f
+            text = "Scroll"
+            textSize = 13f
             gravity = Gravity.CENTER
-            setTextColor(if (isScrollMode) Color.WHITE else Color.parseColor("#A0A0A5"))
-            setBackgroundColor(if (isScrollMode) Color.parseColor("#0A84FF") else Color.parseColor("#2C2C2E"))
-            setPadding(24, 20, 24, 20)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(8, 0, 8, 0)
-            }
+            setTextColor(if (isScrollMode) Color.WHITE else secondaryText)
+            background = if (isScrollMode) makeCardDrawable(accent, 8f) else null
+            setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 isScrollMode = true
                 saveDurablePreferences()
@@ -747,8 +964,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
         layout.addView(modeRow)
 
         dialog.setContentView(layout)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.9).toInt(),
+            (resources.displayMetrics.widthPixels * 0.92).toInt(),
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
         dialog.show()
