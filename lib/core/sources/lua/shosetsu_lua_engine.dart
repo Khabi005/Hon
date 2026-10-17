@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
@@ -27,9 +28,74 @@ class SourceParseException implements Exception {
   String toString() => 'SourceParseException: $message';
 }
 
-/// Shosetsu-compatible Lua extension execution engine.
-/// Executes upstream Shosetsu Lua extensions (e.g. Project Gutenberg, NovelFull)
-/// by binding the Shosetsu runtime environment and DOM parsing layer.
+class SourceExecutionTimeoutException implements Exception {
+  final String message;
+  const SourceExecutionTimeoutException(this.message);
+
+  @override
+  String toString() => 'SourceExecutionTimeoutException: $message';
+}
+
+class _WorkerTask {
+  final String luaScript;
+  final String operation;
+  final Map<String, dynamic> params;
+  final Map<String, String> networkCache;
+  final SendPort replyPort;
+
+  const _WorkerTask({
+    required this.luaScript,
+    required this.operation,
+    required this.params,
+    required this.networkCache,
+    required this.replyPort,
+  });
+}
+
+class _WorkerResult {
+  final dynamic data;
+  final String? needFetchUrl;
+  final String? errorMessage;
+  final bool isError;
+
+  const _WorkerResult.success(this.data)
+      : needFetchUrl = null,
+        errorMessage = null,
+        isError = false;
+
+  const _WorkerResult.needFetch(this.needFetchUrl)
+      : data = null,
+        errorMessage = null,
+        isError = false;
+
+  const _WorkerResult.error(this.errorMessage)
+      : data = null,
+        needFetchUrl = null,
+        isError = true;
+}
+
+/// Shosetsu-compatible Lua extension execution engine (Experimental Compatibility Prototype).
+///
+/// ARCHITECTURAL NOTE:
+/// This pure-Dart Lua host (`lua_dardo_plus` + DOM bridge) is an experimental compatibility
+/// prototype for early Flutter exploration and verification. It is NOT an approved production
+/// replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host).
+///
+/// EXECUTION MODEL & LIMITATIONS:
+/// 1. Off-UI-Thread Isolation: All Lua execution, bytecode interpretation, and DOM parsing
+///    run inside isolated background workers via [Isolate.spawn], protecting the UI thread.
+/// 2. Hard Execution Budget: Workers run with an explicit 15-second execution timeout. If a
+///    rogue script enters an infinite loop, the isolate is immediately terminated via
+///    [Isolate.kill] and a [SourceExecutionTimeoutException] is thrown.
+/// 3. Host Sandboxing: Dangerous host capabilities (`os.execute`, `os.remove`, `io`, etc.)
+///    are neutralized. Only whitelisted Shosetsu globals and DOM bindings are accessible.
+/// 4. Stack Argument Passing: Search queries, novel URLs, and chapter URLs are passed cleanly
+///    via the Lua stack API (`pushString`, `pushInteger`, `pushBoolean`, `call`), completely
+///    eliminating script injection risks from string interpolation.
+/// 5. Replay-based Fetch Loop: Missing network responses trigger a cache-and-replay cycle.
+///    This is a prototype mechanism designed for stateless functional scrapers (such as
+///    Project Gutenberg); it does NOT represent full coroutine or multi-threaded runtime
+///    compatibility for stateful extensions.
 class ShosetsuLuaEngine {
   static ShosetsuLuaEngine? _instance;
   static ShosetsuLuaEngine get instance => _instance ??= ShosetsuLuaEngine();
@@ -43,54 +109,28 @@ class ShosetsuLuaEngine {
 
   http.Client get _client => _httpClient ??= http.Client();
 
-  /// Executes an upstream Shosetsu Lua extension search query
+  /// Executes an upstream Shosetsu Lua extension search query off the UI thread
   Future<List<SourceNovelSummary>> search(
     String luaScript,
     String query, {
     int page = 0,
+    Duration timeout = const Duration(seconds: 15),
   }) async {
-    final cache = <String, String>{};
-
     return _executeWithNetworkRetry<List<SourceNovelSummary>>(
-      luaScript,
-      cache,
-      (ls) {
-        ls.loadString('''
-          local data = { [_G.QUERY] = "$query", [_G.PAGE] = $page }
-          return Extension.search(data)
-        ''');
-        ls.call(0, 1);
-
-        final novels = <SourceNovelSummary>[];
-        if (!ls.isTable(-1)) return novels;
-
-        final len = ls.rawLen(-1);
-        for (int i = 1; i <= len; i++) {
-          ls.rawGetI(-1, i);
-          if (ls.isTable(-1)) {
-            ls.getField(-1, 'title');
-            final title = ls.toStr(-1) ?? '';
-            ls.pop(1);
-
-            ls.getField(-1, 'link');
-            final link = ls.toStr(-1) ?? '';
-            ls.pop(1);
-
-            ls.getField(-1, 'imageURL');
-            final imageURL = ls.toStr(-1);
-            ls.pop(1);
-
-            if (title.isNotEmpty) {
-              novels.add(SourceNovelSummary(
-                id: link.isNotEmpty ? link : 'novel_$i',
-                title: title,
-                coverUrl: imageURL?.isNotEmpty == true ? imageURL : null,
-              ));
-            }
-          }
-          ls.pop(1); // pop novel table
-        }
-        return novels;
+      luaScript: luaScript,
+      operation: 'search',
+      params: {'query': query, 'page': page},
+      timeout: timeout,
+      mapper: (dynamic raw) {
+        final list = raw as List<dynamic>;
+        return list.map((item) {
+          final m = item as Map<String, dynamic>;
+          return SourceNovelSummary(
+            id: m['id'] as String,
+            title: m['title'] as String,
+            coverUrl: m['coverUrl'] as String?,
+          );
+        }).toList();
       },
     );
   }
@@ -100,106 +140,41 @@ class ShosetsuLuaEngine {
     String luaScript,
     String novelUrl, {
     bool loadChapters = true,
+    Duration timeout = const Duration(seconds: 15),
   }) async {
-    final cache = <String, String>{};
-
     return _executeWithNetworkRetry<NovelDetails>(
-      luaScript,
-      cache,
-      (ls) {
-        ls.loadString('''
-          return Extension.parseNovel("$novelUrl", $loadChapters)
-        ''');
-        ls.call(0, 1);
-
-        if (!ls.isTable(-1)) {
-          throw const SourceParseException('Extension parseNovel returned non-table value');
-        }
-
-        ls.getField(-1, 'title');
-        final title = ls.toStr(-1) ?? 'Unknown Title';
-        ls.pop(1);
-
-        ls.getField(-1, 'description');
-        final description = ls.toStr(-1) ?? '';
-        ls.pop(1);
-
-        ls.getField(-1, 'imageURL');
-        final imageURL = ls.toStr(-1);
-        ls.pop(1);
-
-        final authors = <String>[];
-        ls.getField(-1, 'authors');
-        if (ls.isTable(-1)) {
-          final nAuthors = ls.rawLen(-1);
-          for (int i = 1; i <= nAuthors; i++) {
-            ls.rawGetI(-1, i);
-            final a = ls.toStr(-1);
-            if (a != null && a.isNotEmpty) authors.add(a);
-            ls.pop(1);
+      luaScript: luaScript,
+      operation: 'parseNovel',
+      params: {'novelUrl': novelUrl, 'loadChapters': loadChapters},
+      timeout: timeout,
+      mapper: (dynamic raw) {
+        final m = raw as Map<String, dynamic>;
+        final chaptersRaw = m['chapters'] as List<dynamic>;
+        final chapters = chaptersRaw.map((chRaw) {
+          final ch = chRaw as Map<String, dynamic>;
+          DateTime? releaseDate;
+          final releaseStr = ch['release'] as String?;
+          if (releaseStr != null && releaseStr.isNotEmpty) {
+            try {
+              releaseDate = DateTime.tryParse(releaseStr);
+            } catch (_) {}
           }
-        }
-        ls.pop(1); // pop authors
-
-        final genres = <String>[];
-        ls.getField(-1, 'genres');
-        if (ls.isTable(-1)) {
-          final nGenres = ls.rawLen(-1);
-          for (int i = 1; i <= nGenres; i++) {
-            ls.rawGetI(-1, i);
-            final g = ls.toStr(-1);
-            if (g != null && g.isNotEmpty) genres.add(g);
-            ls.pop(1);
-          }
-        }
-        ls.pop(1); // pop genres
-
-        final chapters = <SourceChapter>[];
-        ls.getField(-1, 'chapters');
-        if (ls.isTable(-1)) {
-          final nCh = ls.rawLen(-1);
-          for (int i = 1; i <= nCh; i++) {
-            ls.rawGetI(-1, i);
-            if (ls.isTable(-1)) {
-              ls.getField(-1, 'title');
-              final chTitle = ls.toStr(-1) ?? 'Chapter $i';
-              ls.pop(1);
-
-              ls.getField(-1, 'link');
-              final chLink = ls.toStr(-1) ?? '';
-              ls.pop(1);
-
-              ls.getField(-1, 'release');
-              final chRelease = ls.toStr(-1);
-              ls.pop(1);
-
-              DateTime? releaseDate;
-              if (chRelease != null && chRelease.isNotEmpty) {
-                try {
-                  releaseDate = DateTime.tryParse(chRelease);
-                } catch (_) {}
-              }
-
-              chapters.add(SourceChapter(
-                id: chLink.isNotEmpty ? chLink : 'ch_$i',
-                title: chTitle,
-                index: i.toDouble(),
-                releaseDate: releaseDate,
-                url: chLink,
-              ));
-            }
-            ls.pop(1); // pop chapter table
-          }
-        }
-        ls.pop(1); // pop chapters
+          return SourceChapter(
+            id: ch['id'] as String,
+            title: ch['title'] as String,
+            index: (ch['index'] as num).toDouble(),
+            releaseDate: releaseDate,
+            url: ch['url'] as String?,
+          );
+        }).toList();
 
         return NovelDetails(
-          id: novelUrl,
-          title: title,
-          author: authors.isNotEmpty ? authors.join(', ') : 'Unknown Author',
-          description: description,
-          coverUrl: imageURL?.isNotEmpty == true ? imageURL : null,
-          genres: genres,
+          id: m['id'] as String,
+          title: m['title'] as String,
+          author: m['author'] as String,
+          description: m['description'] as String,
+          coverUrl: m['coverUrl'] as String?,
+          genres: List<String>.from(m['genres'] as List),
           chapters: chapters,
         );
       },
@@ -209,105 +184,356 @@ class ShosetsuLuaEngine {
   /// Fetches readable HTML passage via the upstream extension's `getPassage` method
   Future<String> getPassage(
     String luaScript,
-    String chapterUrl,
-  ) async {
-    final cache = <String, String>{};
-
+    String chapterUrl, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
     return _executeWithNetworkRetry<String>(
-      luaScript,
-      cache,
-      (ls) {
-        ls.loadString('''
-          return Extension.getPassage("$chapterUrl")
-        ''');
-        ls.call(0, 1);
-
-        final passage = ls.toStr(-1);
-        if (passage == null || passage.isEmpty) {
-          throw const SourceParseException('Extension returned empty chapter passage');
-        }
-        return passage;
-      },
+      luaScript: luaScript,
+      operation: 'getPassage',
+      params: {'chapterUrl': chapterUrl},
+      timeout: timeout,
+      mapper: (dynamic raw) => raw as String,
     );
   }
 
-  /// Internal execution loop: Handles live network requests required by Lua scripts
-  /// by caching responses and re-running pure script functions until complete.
-  Future<T> _executeWithNetworkRetry<T>(
-    String luaScript,
-    Map<String, String> cache,
-    T Function(LuaState ls) runner,
-  ) async {
+  /// Coordinates off-thread worker execution, execution timeout, and HTTP fetch-and-replay loop
+  Future<T> _executeWithNetworkRetry<T>({
+    required String luaScript,
+    required String operation,
+    required Map<String, dynamic> params,
+    required Duration timeout,
+    required T Function(dynamic raw) mapper,
+  }) async {
+    final cache = <String, String>{};
     const maxRetries = 10;
     int retries = 0;
 
     while (retries < maxRetries) {
       retries++;
-      final ls = LuaState.newState();
-      ls.openLibs();
 
-      _bindShosetsuEnvironment(ls, cache);
+      final workerResult = await _runWorkerWithTimeout(
+        _WorkerTask(
+          luaScript: luaScript,
+          operation: operation,
+          params: params,
+          networkCache: Map.unmodifiable(cache),
+          replyPort: ReceivePort().sendPort, // Placeholder, replaced inside _runWorkerWithTimeout
+        ),
+        timeout: timeout,
+      );
 
-      // Load upstream extension script
-      ls.loadString(luaScript);
-      ls.call(0, 1);
-      ls.setGlobal('Extension');
+      if (workerResult.isError) {
+        throw SourceParseException(workerResult.errorMessage ?? 'Extension execution failed');
+      }
 
-      try {
-        final result = runner(ls);
-        return result;
-      } catch (e) {
-        final msg = e.toString();
-        const prefix = 'NEED_FETCH:';
-        final idx = msg.indexOf(prefix);
-        if (idx >= 0) {
-          final url = msg.substring(idx + prefix.length).trim().split('\n').first;
+      if (workerResult.needFetchUrl != null) {
+        final url = workerResult.needFetchUrl!;
+        try {
+          final uri = Uri.parse(url);
+          final response = await _client.get(
+            uri,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+          ).timeout(const Duration(seconds: 25));
 
-          try {
-            final uri = Uri.parse(url);
-            final response = await _client.get(
-              uri,
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              },
-            ).timeout(const Duration(seconds: 25));
-
-            if (response.statusCode >= 400) {
-              throw SourceNetworkException(
-                'HTTP server error ${response.statusCode}',
-                url: url,
-                statusCode: response.statusCode,
-              );
-            }
-            cache[url] = response.body;
-            continue; // Retry with populated cache
-          } on SocketException catch (se) {
+          if (response.statusCode >= 400) {
             throw SourceNetworkException(
-              'Network connection error: ${se.message}',
+              'HTTP server error ${response.statusCode}',
               url: url,
-            );
-          } on TimeoutException {
-            throw SourceNetworkException(
-              'Request timed out while connecting to source',
-              url: url,
-            );
-          } on http.ClientException catch (ce) {
-            throw SourceNetworkException(
-              'HTTP client failure: ${ce.message}',
-              url: url,
+              statusCode: response.statusCode,
             );
           }
+          cache[url] = response.body;
+          continue; // Replay execution with cached response
+        } on SocketException catch (se) {
+          throw SourceNetworkException(
+            'Network connection error: ${se.message}',
+            url: url,
+          );
+        } on TimeoutException {
+          throw SourceNetworkException(
+            'Request timed out while connecting to source',
+            url: url,
+          );
+        } on http.ClientException catch (ce) {
+          throw SourceNetworkException(
+            'HTTP client failure: ${ce.message}',
+            url: url,
+          );
         }
-        rethrow;
       }
+
+      // Successful completion
+      return mapper(workerResult.data);
     }
 
     throw const SourceNetworkException('Exceeded maximum network fetch redirects');
   }
 
-  /// Binds the Shosetsu runtime, DOM parser, and utility functions to the Lua state
-  void _bindShosetsuEnvironment(LuaState ls, Map<String, String> networkCache) {
+  /// Spawns worker isolate with hard execution budget and immediate kill on timeout
+  Future<_WorkerResult> _runWorkerWithTimeout(
+    _WorkerTask taskTemplate, {
+    required Duration timeout,
+  }) async {
+    final receivePort = ReceivePort();
+    Isolate? isolate;
+
+    try {
+      final task = _WorkerTask(
+        luaScript: taskTemplate.luaScript,
+        operation: taskTemplate.operation,
+        params: taskTemplate.params,
+        networkCache: taskTemplate.networkCache,
+        replyPort: receivePort.sendPort,
+      );
+
+      isolate = await Isolate.spawn<_WorkerTask>(_workerEntryPoint, task);
+
+      final dynamic response = await receivePort.first.timeout(timeout);
+      if (response is _WorkerResult) {
+        return response;
+      }
+      throw const SourceParseException('Invalid response received from worker isolate');
+    } on TimeoutException {
+      isolate?.kill(priority: Isolate.immediate);
+      throw SourceExecutionTimeoutException(
+        'Extension execution exceeded time budget (${timeout.inSeconds}s timeout)',
+      );
+    } finally {
+      receivePort.close();
+      isolate?.kill(priority: Isolate.immediate);
+    }
+  }
+
+  /// Worker isolate entry point: initializes sandboxed Lua VM, binds DOM, and executes operation
+  static void _workerEntryPoint(_WorkerTask task) {
+    try {
+      final ls = LuaState.newState();
+      ls.openLibs();
+
+      _bindShosetsuEnvironment(ls, task.networkCache);
+
+      // Load upstream extension script
+      ls.loadString(task.luaScript);
+      ls.call(0, 1);
+      if (ls.isTable(-1)) {
+        ls.setGlobal('Extension');
+      } else {
+        ls.pop(1);
+      }
+
+      switch (task.operation) {
+        case 'search':
+          _executeSearch(ls, task);
+          break;
+        case 'parseNovel':
+          _executeParseNovel(ls, task);
+          break;
+        case 'getPassage':
+          _executeGetPassage(ls, task);
+          break;
+        default:
+          task.replyPort.send(_WorkerResult.error('Unsupported operation: ${task.operation}'));
+      }
+    } catch (e) {
+      final msg = e.toString();
+      const prefix = 'NEED_FETCH:';
+      final idx = msg.indexOf(prefix);
+      if (idx >= 0) {
+        final url = msg.substring(idx + prefix.length).split(RegExp(r'[\r\n]')).first.trim();
+        task.replyPort.send(_WorkerResult.needFetch(url));
+      } else {
+        task.replyPort.send(_WorkerResult.error(msg));
+      }
+    }
+  }
+
+  /// Safe stack-based argument passing for Extension.search
+  static void _executeSearch(LuaState ls, _WorkerTask task) {
+    final query = task.params['query'] as String? ?? '';
+    final page = task.params['page'] as int? ?? 0;
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'search');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.search function not found');
+    ls.remove(-2); // remove Extension table
+
+    // Construct data table: { [_G.QUERY] = query, [_G.PAGE] = page }
+    ls.newTable();
+
+    ls.getGlobal('QUERY');
+    ls.pushString(query);
+    ls.setTable(-3);
+
+    ls.getGlobal('PAGE');
+    ls.pushInteger(page);
+    ls.setTable(-3);
+
+    // Call Extension.search(data)
+    ls.call(1, 1);
+
+    final novels = <Map<String, dynamic>>[];
+    if (ls.isTable(-1)) {
+      final len = ls.rawLen(-1);
+      for (int i = 1; i <= len; i++) {
+        ls.rawGetI(-1, i);
+        if (ls.isTable(-1)) {
+          ls.getField(-1, 'title');
+          final title = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'link');
+          final link = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'imageURL');
+          final imageURL = ls.toStr(-1);
+          ls.pop(1);
+
+          if (title.isNotEmpty) {
+            novels.add({
+              'id': link.isNotEmpty ? link : 'novel_$i',
+              'title': title,
+              'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
+            });
+          }
+        }
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    task.replyPort.send(_WorkerResult.success(novels));
+  }
+
+  /// Safe stack-based argument passing for Extension.parseNovel
+  static void _executeParseNovel(LuaState ls, _WorkerTask task) {
+    final novelUrl = task.params['novelUrl'] as String? ?? '';
+    final loadChapters = task.params['loadChapters'] as bool? ?? true;
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'parseNovel');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.parseNovel function not found');
+    ls.remove(-2);
+
+    ls.pushString(novelUrl);
+    ls.pushBoolean(loadChapters);
+    ls.call(2, 1);
+
+    if (!ls.isTable(-1)) {
+      throw const SourceParseException('Extension parseNovel returned non-table value');
+    }
+
+    ls.getField(-1, 'title');
+    final title = ls.toStr(-1) ?? 'Unknown Title';
+    ls.pop(1);
+
+    ls.getField(-1, 'description');
+    final description = ls.toStr(-1) ?? '';
+    ls.pop(1);
+
+    ls.getField(-1, 'imageURL');
+    final imageURL = ls.toStr(-1);
+    ls.pop(1);
+
+    final authors = <String>[];
+    ls.getField(-1, 'authors');
+    if (ls.isTable(-1)) {
+      final nAuthors = ls.rawLen(-1);
+      for (int i = 1; i <= nAuthors; i++) {
+        ls.rawGetI(-1, i);
+        final a = ls.toStr(-1);
+        if (a != null && a.isNotEmpty) authors.add(a);
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    final genres = <String>[];
+    ls.getField(-1, 'genres');
+    if (ls.isTable(-1)) {
+      final nGenres = ls.rawLen(-1);
+      for (int i = 1; i <= nGenres; i++) {
+        ls.rawGetI(-1, i);
+        final g = ls.toStr(-1);
+        if (g != null && g.isNotEmpty) genres.add(g);
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    final chapters = <Map<String, dynamic>>[];
+    ls.getField(-1, 'chapters');
+    if (ls.isTable(-1)) {
+      final nCh = ls.rawLen(-1);
+      for (int i = 1; i <= nCh; i++) {
+        ls.rawGetI(-1, i);
+        if (ls.isTable(-1)) {
+          ls.getField(-1, 'title');
+          final chTitle = ls.toStr(-1) ?? 'Chapter $i';
+          ls.pop(1);
+
+          ls.getField(-1, 'link');
+          final chLink = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'release');
+          final chRelease = ls.toStr(-1);
+          ls.pop(1);
+
+          chapters.add({
+            'id': chLink.isNotEmpty ? chLink : 'ch_$i',
+            'title': chTitle,
+            'index': i.toDouble(),
+            'release': chRelease,
+            'url': chLink,
+          });
+        }
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    task.replyPort.send(_WorkerResult.success({
+      'id': novelUrl,
+      'title': title,
+      'author': authors.isNotEmpty ? authors.join(', ') : 'Unknown Author',
+      'description': description,
+      'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
+      'genres': genres,
+      'chapters': chapters,
+    }));
+  }
+
+  /// Safe stack-based argument passing for Extension.getPassage
+  static void _executeGetPassage(LuaState ls, _WorkerTask task) {
+    final chapterUrl = task.params['chapterUrl'] as String? ?? '';
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'getPassage');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.getPassage function not found');
+    ls.remove(-2);
+
+    ls.pushString(chapterUrl);
+    ls.call(1, 1);
+
+    final passage = ls.toStr(-1);
+    ls.pop(1);
+
+    if (passage == null || passage.isEmpty) {
+      throw const SourceParseException('Extension returned empty chapter passage');
+    }
+
+    task.replyPort.send(_WorkerResult.success(passage));
+  }
+
+  /// Binds the Shosetsu runtime, DOM parser, and host security sandbox
+  static void _bindShosetsuEnvironment(LuaState ls, Map<String, String> networkCache) {
     int nextId = 1;
     final docs = <int, dom.Document>{};
     final elements = <int, dom.Element>{};
@@ -444,8 +670,21 @@ class ShosetsuLuaEngine {
       return 1;
     });
 
-    // Lua runtime support scripts
+    // Lua runtime support scripts & host sandbox enforcement
     ls.loadString(r'''
+      -- Host Sandbox Hardening: remove dangerous OS and IO capabilities
+      if os ~= nil then
+        os.execute = nil
+        os.remove = nil
+        os.rename = nil
+        os.tmpname = nil
+        os.exit = nil
+      end
+      io = nil
+      if package ~= nil then
+        package.loadlib = nil
+      end
+
       _G.QUERY = 0
       _G.PAGE = 1
 

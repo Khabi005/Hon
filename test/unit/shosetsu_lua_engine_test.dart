@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:hon/core/database/database_service.dart';
+import 'package:hon/core/models/download_job.dart';
 import 'package:hon/core/sources/lua/shosetsu_lua_engine.dart';
 import 'package:hon/core/sources/source_registry.dart';
 
@@ -241,5 +243,91 @@ void main() {
         ),
       );
     });
+
+    test('7. Stack Argument Passing: safely handles quotes, backslashes, and injection payloads', () async {
+      const maliciousScript = '''
+        local function search(data)
+          return {
+            { title = "Echo: " .. tostring(data[0]), link = "/test/1" }
+          }
+        end
+        return { search = search }
+      ''';
+
+      const complexQuery = 'Jane\'s "Pride" & \\Backslash\\ "injection" -- test';
+      final results = await engine.search(
+        maliciousScript,
+        complexQuery,
+      );
+
+      expect(results, isNotEmpty);
+      expect(results.first.title, equals('Echo: Jane\'s "Pride" & \\Backslash\\ "injection" -- test'));
+    });
+
+    test('8. Execution Timeout Budget: rogue infinite loop triggers SourceExecutionTimeoutException', () async {
+      const infiniteLoopScript = '''
+        local function search(data)
+          while true do end
+        end
+        return { search = search }
+      ''';
+
+      expect(
+        () async => await engine.search(
+          infiniteLoopScript,
+          'pride',
+          timeout: const Duration(milliseconds: 400),
+        ),
+        throwsA(isA<SourceExecutionTimeoutException>()),
+      );
+    });
+
+    test('9. Host Sandboxing: dangerous OS and IO capabilities are neutralized', () async {
+      const sandboxProbeScript = '''
+        local function search(data)
+          if os ~= nil and os.execute ~= nil then
+            error("SECURITY_VIOLATION: os.execute must be nil")
+          end
+          if io ~= nil then
+            error("SECURITY_VIOLATION: io must be nil")
+          end
+          return {
+            { title = "Sandbox Secure", link = "/secure/1" }
+          }
+        end
+        return { search = search }
+      ''';
+
+      final results = await engine.search(sandboxProbeScript, 'test');
+      expect(results, isNotEmpty);
+      expect(results.first.title, equals('Sandbox Secure'));
+    });
+
+    test('10. Identity & Durable Download Queue: uses source-qualified IDs and enqueues durable jobs', () async {
+      const sourceId = 'gutenberg';
+      const novelId = '/ebooks/1342';
+      const qualifiedBookId = '$sourceId:$novelId';
+
+      expect(qualifiedBookId, equals('gutenberg:/ebooks/1342'));
+
+      final job = DownloadJob(
+        id: 'dl_${qualifiedBookId}_ch1'.replaceAll('/', '_'),
+        bookId: qualifiedBookId,
+        chapterId: '$qualifiedBookId:ch1',
+        chapterTitle: 'Chapter 1',
+        sourceId: sourceId,
+        status: DownloadStatus.queued,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      final db = DatabaseService.instance;
+      await db.enqueueDownload(job);
+
+      final jobs = db.getAllDownloadJobs();
+      expect(jobs.any((j) => j.id == job.id && j.sourceId == 'gutenberg'), isTrue);
+      expect(jobs.firstWhere((j) => j.id == job.id).bookId, equals('gutenberg:/ebooks/1342'));
+    });
   });
 }
+

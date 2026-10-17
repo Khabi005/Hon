@@ -23,28 +23,42 @@
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Upstream Shosetsu Lua Extension Engine (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Bounded upstream proof complete with real upstream extension (`assets/sources/gutenberg.lua`). Completes search → novel details → chapter list → readable chapter content. Real DOM parsing & pure Dart Lua 5.3 interpreter (`lua_dardo_plus`). Honest network error cards; zero synthetic or mock fallbacks. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads save real passage content into managed storage (`StorageService.instance.chaptersDir`); Add-to-Library prompt queues downloads durably before prompting. |
+| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s budget. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads routed via durable queue (`DownloadJob`). Kotlin-side Shosetsu runtime remains production target. |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads routed through durable queue (`DatabaseService.enqueueDownload`), checked against Add-to-Library rules before execution, saved to managed storage (`StorageService.instance.chaptersDir`). |
 
 ---
 
 ## Detailed Evidence & Verification Log
 
-### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Proof of Functionality
-- **Upstream Source Extension Used:** Project Gutenberg (`assets/sources/gutenberg.lua`, matching upstream Shosetsu repository specification).
-- **Architecture:** Pure Dart Lua 5.3 runtime (`lua_dardo_plus`) with Shosetsu Kotlin-lib environment bridge (`Document`, `Element`, `Elements`, CSS selectors, attribute extraction, `Novel`, `NovelInfo`, `NovelChapter`, `NovelStatus`, `Require("FilterOptions")`, `Require("url")`, `map`, `AsList`, `pageOfElem`).
-- **Complete Pipeline Verified End-to-End:**
-  1. **Search:** Executes live search query (e.g. `"pride"`) against source. Parses HTML search results into structured `SourceNovelSummary` items with title, link, and cover thumbnail.
-  2. **Novel Details:** Invokes `parseNovel("/ebooks/1342", true)` to extract publication metadata, author (*Jane Austen*), synopsis, genres, and the complete chapter list.
-  3. **Chapter List:** Accurately parses chapter title, release date, and online passage link (`/cache/epub/1342/pg1342-images.html`).
-  4. **Readable Chapter Passage:** Invokes `getPassage(url)` to retrieve the complete HTML text of the novel. Seamlessly renders in Hon's reader screen using Apple Books typography, theme settings, font sizing, and reading time accumulation.
-  5. **Honest Error Handling:** If connection drops or HTTP errors occur (e.g. SocketException, 404, 500), `SourceNetworkException` is thrown and displayed via an honest error banner with a "Retry" button. Zero synthetic or mock fallbacks.
-  6. **Automated Test Suite:** Verified via `test/unit/shosetsu_lua_engine_test.dart` (6 passed tests verifying live and fixture parsing, DOM extraction, chapter list integrity, and network error handling).
+### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Compatibility Prototype
+- **Architectural Positioning:**
+  - This pure-Dart Lua execution layer (`lua_dardo_plus` + DOM bridge) is an **experimental compatibility prototype** developed to validate the Flutter browse/reader pipeline.
+  - It is **NOT** an approved production replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host). Production architecture continues to target the Android Kotlin runtime.
+  - The fetch-and-replay loop is an asynchronous cache-and-replay mechanism designed for stateless functional scrapers (such as Project Gutenberg); it does not provide general coroutine or multi-threaded runtime compatibility for arbitrary stateful extensions.
+- **Upstream Source Extension Used:**
+  - Project Gutenberg extension (`assets/sources/gutenberg.lua`).
+  - Upstream Repository: `https://github.com/wasu-code/novel-extensions` (`src/en/gutenberg.lua`).
+  - Pinned Branch/Commit: `dev` (`e1dc0ee`).
+  - Modifications: None (executed verbatim by the runtime compatibility bridge).
+- **Execution Off UI Thread & Execution Budget:**
+  - All Lua parsing, bytecode execution, and DOM manipulation run off the UI thread inside dedicated worker isolates via `Isolate.spawn`.
+  - Hard execution budget enforced with a 15-second timeout. If a script enters an infinite loop, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
+- **Stack Argument Passing & Host Sandboxing:**
+  - Replaced all string interpolation in `loadString()` with native Lua C-API stack operations (`ls.pushString()`, `ls.pushInteger()`, `ls.pushBoolean()`, `ls.setTable()`, `ls.call()`), preventing script injection or quote-escaping failures.
+  - Dangerous host OS and IO libraries (`os.execute`, `os.remove`, `os.rename`, `io`, etc.) are stripped and set to `nil`. Only whitelisted DOM and Shosetsu globals are accessible.
+- **Novel/Chapter Identity & Durable Queue Routing:**
+  - Stable source-qualified identities: novel ID is `"$sourceId:${novel.id}"` (e.g. `'gutenberg:/ebooks/1342'`); chapter ID is `"$bookId:${chapter.id}"`.
+  - Real machine source ID (`widget.sourceId`, e.g. `'gutenberg'`) is stored in `Book.sourceId` (never display name).
+  - Chapter downloads check Add-to-Library rules via `AddToLibraryPrompt.checkAndPrompt`, create a durable `DownloadJob` with status `DownloadStatus.queued`, and route through `DatabaseService.instance.enqueueDownload()`.
+- **Separated Test Suites:**
+  - **Unit Tests (`test/unit/shosetsu_lua_engine_test.dart`):** 10 fixture/mock-based unit tests verifying search, novel details, chapter parsing, E2E pipeline, socket failure, HTTP 500 error, stack argument passing with injection payloads, infinite loop timeout enforcement, host sandboxing neutralization, and source-qualified ID + durable download queue.
+  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Live integration test querying `www.gutenberg.org` (verified 25 novels returned, parsed Pride and Prejudice, retrieved 820,924 character live HTML passage).
+  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test`.
 
 ### 2. Foreground Reading Session Tracking & Race Condition Guard
 - **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).
 - **Background Loading Race Fixed:** If a user backgrounds the app while an EPUB or PDF is still loading/parsing, the session timer does NOT start upon loading completion. The timer starts strictly when **both content readiness AND foreground state** are verified.
-- **Unit Test Verification:** Added unit test `Loading completion while backgrounded (isForegrounded: false) does NOT start session timer` in `test/unit/readium_reader_service_test.dart`, confirming timer remains `null` until resume.
+- **Unit Test Verification:** Verified via `test/unit/readium_reader_service_test.dart`.
 
 ### 3. Managed Storage Boundaries & File Deletion Integrity
 - **Path Containment Clarification:** Updated `isPathInsideManagedStorage(filePath)` documentation to clarify that it normalizes path strings via `path.canonicalize()` (resolving `.` and `..` segments) and tests prefix containment without filesystem-level symlink resolution.
@@ -57,5 +71,5 @@
 
 ### 5. Quality & Verification Metrics
 - **Static Analysis:** `flutter analyze` — **0 issues found** (clean).
-- **Automated Tests:** `flutter test` — **39 passed, 0 failed** across all unit and widget tests.
-- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL in 17s** (`build/app/outputs/apk/debug/app-debug.apk` built).
+- **Automated Tests:** `flutter test` — **46 passed, 0 failed** across all unit and integration test suites.
+- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**.

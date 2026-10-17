@@ -1,3 +1,11 @@
+-- ============================================================================
+-- Upstream Shosetsu Extension: Project Gutenberg
+-- Upstream Repository: https://github.com/wasu-code/novel-extensions
+-- Source File: src/en/gutenberg.lua
+-- Pinned Branch/Commit: dev (commit e1dc0ee)
+-- License: GPL-3.0-or-later (matching upstream wasu-code/novel-extensions)
+-- Modifications for Hon: None (executed verbatim by Hon's runtime compatibility layer)
+-- ============================================================================
 -- {"id":231192101,"ver":"1.0.1","libVer":"1.0.0","author":"wasu-code","repo":"","dep":["FilterOptions>=0.0.2", "url"]}
 
 local FilterOptions = Require("FilterOptions")

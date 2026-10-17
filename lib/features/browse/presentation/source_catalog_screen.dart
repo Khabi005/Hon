@@ -6,6 +6,7 @@ import '../../../core/database/database_service.dart';
 import '../../../core/files/storage_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/models/chapter.dart';
+import '../../../core/models/download_job.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/source_registry.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
@@ -377,15 +378,16 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
         chapterUrl,
       );
 
-      final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+      final bookId = '${widget.sourceId}:${widget.novel.id}';
       final book = Book(
         id: bookId,
         title: _novelDetails?.title ?? widget.novel.title,
         author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
         description: _novelDetails?.description ?? widget.novel.description ?? '',
         format: BookFormat.webNovel,
-        sourceId: widget.sourceName,
+        sourceId: widget.sourceId, // Real machine source ID
         totalChapters: _novelDetails?.chapters.length ?? 1,
+        coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -427,8 +429,69 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     if (chapters.isEmpty) return;
     final ch = chapters.first;
 
+    final bookId = '${widget.sourceId}:${widget.novel.id}';
+    final book = Book(
+      id: bookId,
+      title: _novelDetails?.title ?? widget.novel.title,
+      author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
+      description: _novelDetails?.description ?? widget.novel.description ?? '',
+      format: BookFormat.webNovel,
+      sourceId: widget.sourceId, // Real machine source ID
+      totalChapters: chapters.length,
+      coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    // Save book record
+    await DatabaseService.instance.saveBook(book);
+
+    // Adhere strictly to Add-to-Library prompt rules BEFORE executing download
+    if (mounted) {
+      await AddToLibraryPrompt.checkAndPrompt(
+        context,
+        novelId: bookId,
+        novelTitle: widget.novel.title,
+        onAddToLibrary: () async {
+          await DatabaseService.instance.setLibraryMembership(bookId, true);
+        },
+      );
+    }
+
+    // Route download through the durable DownloadJob queue
+    final chapterId = '$bookId:${ch.id}';
+    final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final job = DownloadJob(
+      id: jobId,
+      bookId: bookId,
+      chapterId: chapterId,
+      chapterTitle: ch.title,
+      sourceId: widget.sourceId,
+      status: DownloadStatus.queued,
+      progress: 0.0,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.enqueueDownload(job);
+
+    // Initial Chapter record with queued state
+    final dbChapter = Chapter(
+      id: chapterId,
+      bookId: bookId,
+      sourceChapterId: ch.id,
+      title: ch.title,
+      chapterIndex: 0,
+      url: ch.url,
+      downloadState: ChapterDownloadState.queued,
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
     try {
-      final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(status: DownloadStatus.running, updatedAt: DateTime.now()),
+      );
+
       final passageHtml = await SourceRegistry.instance.getChapterPassage(
         widget.sourceId,
         ch.url ?? ch.id,
@@ -436,52 +499,50 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
 
       // Save to managed chapters directory
       final storage = StorageService.instance;
-      final chFile = File('${storage.chaptersDir.path}/${bookId}_ch1.html');
+      final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+      final chFile = File('${storage.chaptersDir.path}/${filePrefix}_ch1.html');
       await chFile.writeAsString(passageHtml);
 
-      // Save book and chapter records
-      final book = Book(
-        id: bookId,
-        title: _novelDetails?.title ?? widget.novel.title,
-        author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
-        description: _novelDetails?.description ?? widget.novel.description ?? '',
-        format: BookFormat.webNovel,
-        sourceId: widget.sourceName,
-        totalChapters: chapters.length,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveBook(book);
-
-      final dbChapter = Chapter(
-        id: '${bookId}_ch1',
-        bookId: bookId,
-        sourceChapterId: ch.id,
-        title: ch.title,
-        chapterIndex: 0,
-        url: ch.url,
+      // Update chapter record to downloaded
+      final completedChapter = dbChapter.copyWith(
         localFilePath: chFile.path,
         downloadState: ChapterDownloadState.downloaded,
         updatedAt: DateTime.now(),
       );
-      await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+      await DatabaseService.instance.saveChapters(bookId, [completedChapter]);
+
+      // Update download job to completed
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(
+          status: DownloadStatus.completed,
+          progress: 1.0,
+          updatedAt: DateTime.now(),
+        ),
+      );
 
       if (mounted) {
-        await AddToLibraryPrompt.checkAndPrompt(
-          context,
-          novelId: bookId,
-          novelTitle: widget.novel.title,
-          onAddToLibrary: () async {
-            await DatabaseService.instance.setLibraryMembership(bookId, true);
-          },
-        );
-        if (!mounted) return;
+        setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
         );
       }
     } catch (e) {
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(
+          status: DownloadStatus.failed,
+          errorMessage: e.toString(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final failedChapter = dbChapter.copyWith(
+        downloadState: ChapterDownloadState.failed,
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseService.instance.saveChapters(bookId, [failedChapter]);
+
       if (mounted) {
+        setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to download chapter: $e')),
         );
@@ -495,7 +556,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
     final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
 
-    final bookId = 'novel_${widget.novel.id.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+    final bookId = '${widget.sourceId}:${widget.novel.id}';
     final inLibrary = DatabaseService.instance.isBookInLibrary(bookId);
 
     final title = _novelDetails?.title ?? widget.novel.title;
