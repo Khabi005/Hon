@@ -47,6 +47,10 @@ dependencies {
     implementation("org.readium.kotlin-toolkit:readium-shared:3.1.1")
     implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.1")
     implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("org.luaj:luaj-jse:3.0.1")
+    implementation("org.jsoup:jsoup:1.18.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 
 flutter {

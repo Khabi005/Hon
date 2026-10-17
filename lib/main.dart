@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/hon_app.dart';
 import 'core/database/database_service.dart';
+import 'core/downloads/hon_download_manager.dart';
 import 'core/files/storage_service.dart';
 import 'core/native/readium_reader_service.dart';
 
@@ -22,6 +23,9 @@ void main() async {
   await StorageService.instance.init();
   await DatabaseService.instance.init();
   ReadiumReaderService.initialize();
+
+  // Recover interrupted downloads from previous sessions via WorkManager
+  await HonDownloadManager.instance.recoverInterruptedDownloads();
 
   runApp(
     const ProviderScope(

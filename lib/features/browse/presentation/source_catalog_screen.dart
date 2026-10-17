@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../../../app/theme/hon_colors.dart';
 import '../../../core/database/database_service.dart';
+import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/files/storage_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/models/chapter.dart';
@@ -462,6 +463,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       updatedAt: DateTime.now(),
     );
     await DatabaseService.instance.enqueueDownload(job);
+    await HonDownloadManager.instance.enqueueDownload(job);
 
     // Initial Chapter record with queued state
     final dbChapter = Chapter(
