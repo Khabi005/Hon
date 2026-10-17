@@ -114,13 +114,15 @@ class ShosetsuLuaEngine {
     String luaScript,
     String query, {
     int page = 0,
-    Duration timeout = const Duration(seconds: 15),
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
   }) async {
     return _executeWithNetworkRetry<List<SourceNovelSummary>>(
       luaScript: luaScript,
       operation: 'search',
       params: {'query': query, 'page': page},
-      timeout: timeout,
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
       mapper: (dynamic raw) {
         final list = raw as List<dynamic>;
         return list.map((item) {
@@ -140,13 +142,15 @@ class ShosetsuLuaEngine {
     String luaScript,
     String novelUrl, {
     bool loadChapters = true,
-    Duration timeout = const Duration(seconds: 15),
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
   }) async {
     return _executeWithNetworkRetry<NovelDetails>(
       luaScript: luaScript,
       operation: 'parseNovel',
       params: {'novelUrl': novelUrl, 'loadChapters': loadChapters},
-      timeout: timeout,
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
       mapper: (dynamic raw) {
         final m = raw as Map<String, dynamic>;
         final chaptersRaw = m['chapters'] as List<dynamic>;
@@ -185,41 +189,52 @@ class ShosetsuLuaEngine {
   Future<String> getPassage(
     String luaScript,
     String chapterUrl, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
   }) async {
     return _executeWithNetworkRetry<String>(
       luaScript: luaScript,
       operation: 'getPassage',
       params: {'chapterUrl': chapterUrl},
-      timeout: timeout,
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
       mapper: (dynamic raw) => raw as String,
     );
   }
 
-  /// Coordinates off-thread worker execution, execution timeout, and HTTP fetch-and-replay loop
+  /// Coordinates off-thread worker execution, total operation deadline, and HTTP fetch-and-replay loop
   Future<T> _executeWithNetworkRetry<T>({
     required String luaScript,
     required String operation,
     required Map<String, dynamic> params,
-    required Duration timeout,
+    required Duration totalTimeout,
+    required Duration perAttemptTimeout,
     required T Function(dynamic raw) mapper,
   }) async {
     final cache = <String, String>{};
     const maxRetries = 10;
     int retries = 0;
+    final stopwatch = Stopwatch()..start();
 
     while (retries < maxRetries) {
       retries++;
 
+      final elapsed = stopwatch.elapsed;
+      if (elapsed >= totalTimeout) {
+        throw SourceExecutionTimeoutException(
+          'Total operation execution deadline exceeded (${totalTimeout.inSeconds}s budget)',
+        );
+      }
+
+      final remainingTotal = totalTimeout - elapsed;
+      final attemptTimeout = remainingTotal < perAttemptTimeout ? remainingTotal : perAttemptTimeout;
+
       final workerResult = await _runWorkerWithTimeout(
-        _WorkerTask(
-          luaScript: luaScript,
-          operation: operation,
-          params: params,
-          networkCache: Map.unmodifiable(cache),
-          replyPort: ReceivePort().sendPort, // Placeholder, replaced inside _runWorkerWithTimeout
-        ),
-        timeout: timeout,
+        luaScript: luaScript,
+        operation: operation,
+        params: params,
+        networkCache: Map.unmodifiable(cache),
+        timeout: attemptTimeout,
       );
 
       if (workerResult.isError) {
@@ -228,6 +243,15 @@ class ShosetsuLuaEngine {
 
       if (workerResult.needFetchUrl != null) {
         final url = workerResult.needFetchUrl!;
+        final httpRemaining = totalTimeout - stopwatch.elapsed;
+        if (httpRemaining <= Duration.zero) {
+          throw SourceExecutionTimeoutException(
+            'Total operation execution deadline exceeded before network fetch (${totalTimeout.inSeconds}s budget)',
+          );
+        }
+        const defaultHttpTimeout = Duration(seconds: 20);
+        final httpTimeout = httpRemaining < defaultHttpTimeout ? httpRemaining : defaultHttpTimeout;
+
         try {
           final uri = Uri.parse(url);
           final response = await _client.get(
@@ -236,7 +260,7 @@ class ShosetsuLuaEngine {
               'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)',
               'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             },
-          ).timeout(const Duration(seconds: 25));
+          ).timeout(httpTimeout);
 
           if (response.statusCode >= 400) {
             throw SourceNetworkException(
@@ -273,8 +297,11 @@ class ShosetsuLuaEngine {
   }
 
   /// Spawns worker isolate with hard execution budget and immediate kill on timeout
-  Future<_WorkerResult> _runWorkerWithTimeout(
-    _WorkerTask taskTemplate, {
+  Future<_WorkerResult> _runWorkerWithTimeout({
+    required String luaScript,
+    required String operation,
+    required Map<String, dynamic> params,
+    required Map<String, String> networkCache,
     required Duration timeout,
   }) async {
     final receivePort = ReceivePort();
@@ -282,10 +309,10 @@ class ShosetsuLuaEngine {
 
     try {
       final task = _WorkerTask(
-        luaScript: taskTemplate.luaScript,
-        operation: taskTemplate.operation,
-        params: taskTemplate.params,
-        networkCache: taskTemplate.networkCache,
+        luaScript: luaScript,
+        operation: operation,
+        params: params,
+        networkCache: networkCache,
         replyPort: receivePort.sendPort,
       );
 
@@ -299,7 +326,7 @@ class ShosetsuLuaEngine {
     } on TimeoutException {
       isolate?.kill(priority: Isolate.immediate);
       throw SourceExecutionTimeoutException(
-        'Extension execution exceeded time budget (${timeout.inSeconds}s timeout)',
+        'Worker isolate attempt exceeded time budget (${timeout.inSeconds}s timeout)',
       );
     } finally {
       receivePort.close();

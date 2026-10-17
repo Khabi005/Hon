@@ -23,8 +23,8 @@
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s budget. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads routed via durable queue (`DownloadJob`). Kotlin-side Shosetsu runtime remains production target. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads routed through durable queue (`DatabaseService.enqueueDownload`), checked against Add-to-Library rules before execution, saved to managed storage (`StorageService.instance.chaptersDir`). |
+| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s per-attempt budget and 45s total operation deadline. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads durably enqueued BEFORE library prompt. External extensions gated until Kotlin runtime. Kotlin-side Shosetsu runtime remains production target. |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads durably enqueued first (`DatabaseService.enqueueDownload`), independent of non-blocking Add-to-Library prompt response; saved to managed storage (`StorageService.instance.chaptersDir`). Durable background worker execution tracked under planned WorkManager phase. |
 
 ---
 
@@ -35,25 +35,33 @@
   - This pure-Dart Lua execution layer (`lua_dardo_plus` + DOM bridge) is an **experimental compatibility prototype** developed to validate the Flutter browse/reader pipeline.
   - It is **NOT** an approved production replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host). Production architecture continues to target the Android Kotlin runtime.
   - The fetch-and-replay loop is an asynchronous cache-and-replay mechanism designed for stateless functional scrapers (such as Project Gutenberg); it does not provide general coroutine or multi-threaded runtime compatibility for arbitrary stateful extensions.
-- **Upstream Source Extension Used:**
+- **Upstream Source Extension Used & Provenance:**
   - Project Gutenberg extension (`assets/sources/gutenberg.lua`).
   - Upstream Repository: `https://github.com/wasu-code/novel-extensions` (`src/en/gutenberg.lua`).
   - Pinned Branch/Commit: `dev` (`e1dc0ee`).
   - Modifications: None (executed verbatim by the runtime compatibility bridge).
-- **Execution Off UI Thread & Execution Budget:**
+  - Repomix packaging: Embedded in `hon_review.xml` under `<file path="assets/sources/gutenberg.lua">` with complete upstream provenance header.
+- **Execution Off UI Thread, Resource Cleanup & Two-Tier Deadline Budget:**
   - All Lua parsing, bytecode execution, and DOM manipulation run off the UI thread inside dedicated worker isolates via `Isolate.spawn`.
-  - Hard execution budget enforced with a 15-second timeout. If a script enters an infinite loop, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
+  - Placeholder `ReceivePort().sendPort` removed to prevent unclosed port resource leaks; `receivePort` is dynamically created per worker invocation and strictly closed inside `finally`.
+  - Two-tier timeout architecture:
+    - **Total Operation Deadline:** 45 seconds total across the entire replay cycle (tracked via `Stopwatch`).
+    - **Per-Attempt Worker Budget:** 15 seconds per isolate execution. Outgoing HTTP timeouts dynamically bound to the remaining total budget.
+    - If a worker exceeds its per-attempt budget, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
 - **Stack Argument Passing & Host Sandboxing:**
   - Replaced all string interpolation in `loadString()` with native Lua C-API stack operations (`ls.pushString()`, `ls.pushInteger()`, `ls.pushBoolean()`, `ls.setTable()`, `ls.call()`), preventing script injection or quote-escaping failures.
   - Dangerous host OS and IO libraries (`os.execute`, `os.remove`, `os.rename`, `io`, etc.) are stripped and set to `nil`. Only whitelisted DOM and Shosetsu globals are accessible.
-- **Novel/Chapter Identity & Durable Queue Routing:**
+- **Novel/Chapter Identity & Enqueue-Before-Prompt Sequence:**
   - Stable source-qualified identities: novel ID is `"$sourceId:${novel.id}"` (e.g. `'gutenberg:/ebooks/1342'`); chapter ID is `"$bookId:${chapter.id}"`.
   - Real machine source ID (`widget.sourceId`, e.g. `'gutenberg'`) is stored in `Book.sourceId` (never display name).
-  - Chapter downloads check Add-to-Library rules via `AddToLibraryPrompt.checkAndPrompt`, create a durable `DownloadJob` with status `DownloadStatus.queued`, and route through `DatabaseService.instance.enqueueDownload()`.
-- **Separated Test Suites:**
+  - **Enqueue-Before-Prompt Sequence:** In `SourceCatalogScreen._handleDownloadChapters()`, `DatabaseService.instance.enqueueDownload(job)` (`status: DownloadStatus.queued`) and chapter record saving occur *first*. `AddToLibraryPrompt.checkAndPrompt()` is dispatched asynchronously without blocking the download pipeline, guaranteeing downloads proceed independently of whether the user accepts, declines, or dismisses the prompt.
+  - Full background execution is tracked under the planned WorkManager worker phase.
+- **Gated External Extension Installation:**
+  - In `SourceRegistry.installExtension()`, extension installation is restricted to verified bundled sources (`'gutenberg'`). Third-party external installations are gated with a typed `SourceParseException` until the production Kotlin-side host runtime is verified.
+- **Separated Test Suites & Live Test Semantics:**
   - **Unit Tests (`test/unit/shosetsu_lua_engine_test.dart`):** 10 fixture/mock-based unit tests verifying search, novel details, chapter parsing, E2E pipeline, socket failure, HTTP 500 error, stack argument passing with injection payloads, infinite loop timeout enforcement, host sandboxing neutralization, and source-qualified ID + durable download queue.
-  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Live integration test querying `www.gutenberg.org` (verified 25 novels returned, parsed Pride and Prejudice, retrieved 820,924 character live HTML passage).
-  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test`.
+  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Honest live test assertions against `www.gutenberg.org`. Offline runs use `markTestSkipped()` (no clean-return or silent passes); online runs strictly assert without catching/swallowing `SourceNetworkException`. Tests verify live catalog search for "pride", novel details for `/ebooks/1342`, and passage retrieval for Chapter 1.
+  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test` (consolidated at end of Phase 0).
 
 ### 2. Foreground Reading Session Tracking & Race Condition Guard
 - **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).

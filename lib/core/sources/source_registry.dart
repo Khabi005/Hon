@@ -129,7 +129,17 @@ class SourceRegistry {
 
   bool isInstalled(String extensionId) => _installedExtensionIds.contains(extensionId);
 
+  /// Verified bundled sources supported by Hon's assets
+  static const Set<String> _verifiedBundledSources = {'gutenberg'};
+
+  /// External extension installation is strictly gated until the production
+  /// Kotlin-side Shosetsu host runtime with full security restrictions is verified.
   Future<void> installExtension(String extensionId) async {
+    if (!_verifiedBundledSources.contains(extensionId)) {
+      throw const SourceParseException(
+        'External extension installation is gated until production Kotlin-side host restrictions are implemented.',
+      );
+    }
     _installedExtensionIds.add(extensionId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('hon_installed_extensions', _installedExtensionIds.toList());

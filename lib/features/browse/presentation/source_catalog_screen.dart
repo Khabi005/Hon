@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -446,19 +447,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     // Save book record
     await DatabaseService.instance.saveBook(book);
 
-    // Adhere strictly to Add-to-Library prompt rules BEFORE executing download
-    if (mounted) {
-      await AddToLibraryPrompt.checkAndPrompt(
-        context,
-        novelId: bookId,
-        novelTitle: widget.novel.title,
-        onAddToLibrary: () async {
-          await DatabaseService.instance.setLibraryMembership(bookId, true);
-        },
-      );
-    }
-
-    // Route download through the durable DownloadJob queue
+    // 1. Durably enqueue download job FIRST before any prompt interaction
     final chapterId = '$bookId:${ch.id}';
     final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
     final job = DownloadJob(
@@ -486,6 +475,20 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       updatedAt: DateTime.now(),
     );
     await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
+    // 2. Trigger Add-to-Library prompt without blocking or conditioning download creation
+    // Downloading proceeds independently regardless of prompt answer or dismissal
+    if (mounted) {
+      unawaited(AddToLibraryPrompt.checkAndPrompt(
+        context,
+        novelId: bookId,
+        novelTitle: widget.novel.title,
+        onAddToLibrary: () async {
+          await DatabaseService.instance.setLibraryMembership(bookId, true);
+          if (mounted) setState(() {});
+        },
+      ));
+    }
 
     try {
       await DatabaseService.instance.updateDownloadJob(

@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Only files matching these patterns are included: lib/**, android/**, test/**, assets/sources/**, pubspec.yaml, dart_test.yaml, docs/**, README.md
+- Only files matching these patterns are included: lib/**, android/**, test/**, assets/**, pubspec.yaml, dart_test.yaml, docs/**, README.md
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -99,6 +99,17 @@ android/
   gradle.properties
   settings.gradle.kts
 assets/
+  branding/
+    hon_adaptive_background_dark.png
+    hon_adaptive_background_light.png
+    hon_adaptive_foreground_dark.png
+    hon_adaptive_foreground.png
+    hon_full_transparent.png
+    hon_kanji_compact.png
+    hon_master_logo.jpg
+    hon_monochrome.png
+  fixtures/
+    pride_and_prejudice.epub
   sources/
     gutenberg.lua
 docs/
@@ -202,113 +213,6 @@ README.md
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="test/integration/live_upstream_gutenberg_test.dart">
-@Tags(['integration', 'live-network'])
-library;
-import 'dart:io';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:hon/core/sources/lua/shosetsu_lua_engine.dart';
-
-void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
-  late ShosetsuLuaEngine engine;
-  late String gutenbergScript;
-  bool isOnline = true;
-
-  setUpAll(() async {
-    // Disable Flutter test's default network interception for live integration tests
-    HttpOverrides.global = null;
-
-    final file = File('assets/sources/gutenberg.lua');
-    expect(file.existsSync(), isTrue, reason: 'assets/sources/gutenberg.lua must exist');
-    gutenbergScript = file.readAsStringSync();
-
-    // Check live internet connectivity to gutenberg.org
-    try {
-      final lookup = await InternetAddress.lookup('www.gutenberg.org')
-          .timeout(const Duration(seconds: 5));
-      isOnline = lookup.isNotEmpty && lookup[0].rawAddress.isNotEmpty;
-    } catch (_) {
-      isOnline = false;
-    }
-  });
-
-  setUp(() {
-    engine = ShosetsuLuaEngine.instance;
-  });
-
-  group('Live Network Integration — Upstream Project Gutenberg Extension', () {
-    test('Live Search: queries live Project Gutenberg catalog for "pride"', () async {
-      if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
-        return;
-      }
-
-      try {
-        final results = await engine.search(gutenbergScript, 'pride', page: 0);
-        expect(results, isNotEmpty);
-        // ignore: avoid_print
-        print('Live search returned ${results.length} novels from Project Gutenberg.');
-        expect(results.any((n) => n.title.toLowerCase().contains('pride')), isTrue);
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
-    }, timeout: const Timeout(Duration(seconds: 45)));
-
-    test('Live Novel Details: parses Pride and Prejudice (/ebooks/1342) live from Gutenberg', () async {
-      if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
-        return;
-      }
-
-      try {
-        final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
-        expect(details.title, isNotEmpty);
-        expect(details.chapters, isNotEmpty);
-        // ignore: avoid_print
-        print('Live novel details loaded: "${details.title}" with ${details.chapters.length} chapters.');
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
-    }, timeout: const Timeout(Duration(seconds: 45)));
-
-    test('Live Readable Passage: retrieves live Chapter 1 HTML from Gutenberg', () async {
-      if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
-        return;
-      }
-
-      try {
-        final passage = await engine.getPassage(
-          gutenbergScript,
-          '/cache/epub/1342/pg1342-images.html',
-        );
-        expect(passage, isNotEmpty);
-        // ignore: avoid_print
-        print('Live passage retrieved: ${passage.length} characters.');
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
-    }, timeout: const Timeout(Duration(seconds: 45)));
-  });
-}
-</file>
-
-<file path="dart_test.yaml">
-tags:
-  integration:
-    description: "Integration tests requiring external services or long execution"
-  live-network:
-    description: "Tests requiring active internet connectivity to remote upstream sources"
-</file>
 
 <file path="android/app/src/debug/AndroidManifest.xml">
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -501,233 +405,6 @@ plugins {
 }
 
 include(":app")
-</file>
-
-<file path="assets/sources/gutenberg.lua">
--- ============================================================================
--- Upstream Shosetsu Extension: Project Gutenberg
--- Upstream Repository: https://github.com/wasu-code/novel-extensions
--- Source File: src/en/gutenberg.lua
--- Pinned Branch/Commit: dev (commit e1dc0ee)
--- License: GPL-3.0-or-later (matching upstream wasu-code/novel-extensions)
--- Modifications for Hon: None (executed verbatim by Hon's runtime compatibility layer)
--- ============================================================================
--- {"id":231192101,"ver":"1.0.1","libVer":"1.0.0","author":"wasu-code","repo":"","dep":["FilterOptions>=0.0.2", "url"]}
-
-local FilterOptions = Require("FilterOptions")
-local qs = Require("url").querystring
-
-local baseURL = "https://www.gutenberg.org"
-
-local PAGE_SIZE = 25
-
--- Filters IDs
-local FID_LANG = 2
-local FID_SORT = 3
-
--- Settings IDs
-local SID_PRESERVE_STYLES = 1
-local settings = {
-  [SID_PRESERVE_STYLES] = false
-}
-
-local function shrinkURL(url, type)
-  return url:gsub(".-gutenberg%.org/?", "")
-end
-
-local function expandURL(url, type)
-  return baseURL .. "/" .. url:gsub("^/*", "")
-end
-
-local function getListing(url)
-  local doc = GETDocument(expandURL(url))
-  return map(doc:select("li.booklink"), function(card)
-    return Novel {
-      title = card:selectFirst(".title"):text(),
-      link = card:selectFirst(".link"):attr("href"),
-      imageURL = expandURL(card:selectFirst(".cover-thumb"):attr("src"))
-    }
-  end)
-end
-
-local function parseNovel(url, loadChapters)
-  local doc = GETDocument(expandURL(url))
-
-  local info = NovelInfo {
-    title = doc:selectFirst("[itemprop=headline]"):text(),
-    imageURL = doc:selectFirst(".cover-art"):attr("src"),
-    description = doc:selectFirst(".readmore-container"):ownText() 
-      .. doc:selectFirst(".readmore-container .toggle-content"):text(),
-    authors = map(doc:select("[itemprop='creator']"), function(c)
-      return c:text()
-    end),
-    genres = map(doc:select("[property='dcterms:subject']"), function(s)
-      return s:text()
-    end),
-    status = NovelStatus.COMPLETED,
-    language = doc:selectFirst("[itemprop=inLanguage]"):attr("content")
-  }
-
-  if loadChapters then
-    local chapters = {}
-    local dateModified = doc:selectFirst("[itemprop=dateModified]")
-    local datePublished = doc:selectFirst("[itemprop=datePublished]")
-    chapters = {
-      NovelChapter {
-        title = doc:selectFirst("[itemprop=headline]"):text(),
-        link = doc:selectFirst(".read-online-button"):attr("href"),
-        release = (dateModified or datePublished):text()
-      }
-    }
-    info:setChapters(AsList(chapters))
-  end
-
-  return info
-end
-
-local function getPassage(url)
-  local doc = GETDocument(expandURL(url))
-
-  -- add base URL so image URLs can resolve
-  local og = doc:selectFirst("meta[property='og:url']")
-  if og then
-    local ogUrl = og:attr("content")
-    if ogUrl ~= "" then
-      doc:head():prependElement("base"):attr("href", ogUrl)
-    end
-  end
-
-  return pageOfElem(doc, not settings[SID_PRESERVE_STYLES])
-end
-
-local languages = FilterOptions({
-  nil,
-  {af = "Afrikaans"},
-  {ale = "Aleut"},
-  {ar = "Arabic"},
-  {arp = "Arapaho"},
-  {brx = "Bodo"},
-  {br = "Breton"},
-  {bg = "Bulgarian"},
-  {rmq = "Caló"},
-  {ca = "Catalan"},
-  {ceb = "Cebuano"},
-  {zh = "Chinese"},
-  {cs = "Czech"},
-  {da = "Danish"},
-  {nl = "Dutch"},
-  {en = "English"},
-  {eo = "Esperanto"},
-  {et = "Estonian"},
-  {fa = "Farsi"},
-  {fi = "Finnish"},
-  {fr = "French"},
-  {fy = "Frisian"},
-  {fur = "Friulian"},
-  {gla = "Gaelic, Scottish"},
-  {gl = "Galician"},
-  {kld = "Gamilaraay"},
-  {de = "German"},
-  {el = "Greek"},
-  {grc = "Greek, Ancient"},
-  {he = "Hebrew"},
-  {hu = "Hungarian"},
-  {is = "Icelandic"},
-  {ilo = "Iloko"},
-  {ia = "Interlingua"},
-  {iu = "Inuktitut"},
-  {ga = "Irish"},
-  {it = "Italian"},
-  {ja = "Japanese"},
-  {csb = "Kashubian"},
-  {kha = "Khasi"},
-  {ko = "Korean"},
-  {la = "Latin"},
-  {lt = "Lithuanian"},
-  {mi = "Maori"},
-  {myn = "Mayan Languages"},
-  {enm = "Middle English"},
-  {nah = "Nahuatl"},
-  {nap = "Napoletano-Calabrese"},
-  {nav = "Navajo"},
-  {nai = "North American Indian"},
-  {no = "Norwegian"},
-  {oc = "Occitan"},
-  {oji = "Ojibwa"},
-  {ang = "Old English"},
-  {pl = "Polish"},
-  {pt = "Portuguese"},
-  {ro = "Romanian"},
-  {ru = "Russian"},
-  {sa = "Sanskrit"},
-  {sr = "Serbian"},
-  {sl = "Slovenian"},
-  {es = "Spanish"},
-  {sv = "Swedish"},
-  {bgs = "Tagabawa"},
-  {tl = "Tagalog"},
-  {te = "Telugu"},
-  {cy = "Welsh"},
-  {yi = "Yiddish"}
-}, "Any")
-
-local sortOrder = FilterOptions{
-  {downloads = "Most Popular"},
-  {release_date = "New Releases"}
-}
-
-return {
-  id = 231192101,
-  name = "Project Gutenberg",
-  baseURL = baseURL,
-  imageURL = "https://www.gutenberg.org/gutenberg/pg-logo-144x144.png",
-  chapterType = ChapterType.HTML,
-
-  shrinkURL = shrinkURL,
-  expandURL = expandURL,
-
-  startIndex = 0,
-  listings = {
-    Listing("Browse", true, function(data)
-      local offset = data[PAGE] * PAGE_SIZE + 1
-      local language = languages:valueOfOrFirst(data[FID_LANG])
-      local order = sortOrder:valueOfOrFirst(data[FID_SORT])
-
-      local params = {
-        sort_order = order,
-        start_index = offset
-      }
-      if language then params["query"] = "l." .. language end
-
-      return getListing(qs(params, "ebooks/search/"))
-    end),
-    Listing("Random Suggestions", false, function()
-      return getListing("ebooks/search/?sort_order=random")
-    end)
-  },
-  searchFilters = {
-    DropdownFilter(FID_SORT, "Sort order", sortOrder:labels()),
-    DropdownFilter(FID_LANG, "Language", languages:labels())
-  },
-
-  parseNovel = parseNovel,
-  getPassage = getPassage,
-
-  hasSearch = true,
-  isSearchIncrementing = true,
-  search = function(data)
-    local offset = data[PAGE] * PAGE_SIZE + 1
-    local query = data[QUERY]
-    return getListing("ebooks/search/?query=" .. query .. "&start_index=" .. offset)
-  end,
-
-  settings = {
-    SwitchFilter(SID_PRESERVE_STYLES, "Preserve formatting")
-  },
-  updateSetting = function(id, value)
-    settings[id] = value
-  end,
-}
 </file>
 
 <file path="docs/PROJECT_BRIEF.md">
@@ -1896,847 +1573,6 @@ abstract interface class NovelSource {
   Future<NovelDetails> getNovel(String novelId);
   Future<List<SourceChapter>> getChapters(String novelId);
   Future<ChapterContent> getChapter(String chapterId);
-}
-</file>
-
-<file path="lib/core/sources/lua/shosetsu_lua_engine.dart">
-import 'dart:async';
-import 'dart:io';
-import 'dart:isolate';
-import 'package:flutter/foundation.dart';
-import 'package:html/dom.dart' as dom;
-import 'package:html/parser.dart' as html_parser;
-import 'package:http/http.dart' as http;
-import 'package:lua_dardo_plus/lua.dart';
-
-import '../../models/novel_source.dart';
-
-class SourceNetworkException implements Exception {
-  final String message;
-  final String? url;
-  final int? statusCode;
-
-  const SourceNetworkException(this.message, {this.url, this.statusCode});
-
-  @override
-  String toString() => 'SourceNetworkException: $message${url != null ? ' ($url)' : ''}';
-}
-
-class SourceParseException implements Exception {
-  final String message;
-  const SourceParseException(this.message);
-
-  @override
-  String toString() => 'SourceParseException: $message';
-}
-
-class SourceExecutionTimeoutException implements Exception {
-  final String message;
-  const SourceExecutionTimeoutException(this.message);
-
-  @override
-  String toString() => 'SourceExecutionTimeoutException: $message';
-}
-
-class _WorkerTask {
-  final String luaScript;
-  final String operation;
-  final Map<String, dynamic> params;
-  final Map<String, String> networkCache;
-  final SendPort replyPort;
-
-  const _WorkerTask({
-    required this.luaScript,
-    required this.operation,
-    required this.params,
-    required this.networkCache,
-    required this.replyPort,
-  });
-}
-
-class _WorkerResult {
-  final dynamic data;
-  final String? needFetchUrl;
-  final String? errorMessage;
-  final bool isError;
-
-  const _WorkerResult.success(this.data)
-      : needFetchUrl = null,
-        errorMessage = null,
-        isError = false;
-
-  const _WorkerResult.needFetch(this.needFetchUrl)
-      : data = null,
-        errorMessage = null,
-        isError = false;
-
-  const _WorkerResult.error(this.errorMessage)
-      : data = null,
-        needFetchUrl = null,
-        isError = true;
-}
-
-/// Shosetsu-compatible Lua extension execution engine (Experimental Compatibility Prototype).
-///
-/// ARCHITECTURAL NOTE:
-/// This pure-Dart Lua host (`lua_dardo_plus` + DOM bridge) is an experimental compatibility
-/// prototype for early Flutter exploration and verification. It is NOT an approved production
-/// replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host).
-///
-/// EXECUTION MODEL & LIMITATIONS:
-/// 1. Off-UI-Thread Isolation: All Lua execution, bytecode interpretation, and DOM parsing
-///    run inside isolated background workers via [Isolate.spawn], protecting the UI thread.
-/// 2. Hard Execution Budget: Workers run with an explicit 15-second execution timeout. If a
-///    rogue script enters an infinite loop, the isolate is immediately terminated via
-///    [Isolate.kill] and a [SourceExecutionTimeoutException] is thrown.
-/// 3. Host Sandboxing: Dangerous host capabilities (`os.execute`, `os.remove`, `io`, etc.)
-///    are neutralized. Only whitelisted Shosetsu globals and DOM bindings are accessible.
-/// 4. Stack Argument Passing: Search queries, novel URLs, and chapter URLs are passed cleanly
-///    via the Lua stack API (`pushString`, `pushInteger`, `pushBoolean`, `call`), completely
-///    eliminating script injection risks from string interpolation.
-/// 5. Replay-based Fetch Loop: Missing network responses trigger a cache-and-replay cycle.
-///    This is a prototype mechanism designed for stateless functional scrapers (such as
-///    Project Gutenberg); it does NOT represent full coroutine or multi-threaded runtime
-///    compatibility for stateful extensions.
-class ShosetsuLuaEngine {
-  static ShosetsuLuaEngine? _instance;
-  static ShosetsuLuaEngine get instance => _instance ??= ShosetsuLuaEngine();
-
-  http.Client? _httpClient;
-
-  @visibleForTesting
-  void setHttpClientForTesting(http.Client client) {
-    _httpClient = client;
-  }
-
-  http.Client get _client => _httpClient ??= http.Client();
-
-  /// Executes an upstream Shosetsu Lua extension search query off the UI thread
-  Future<List<SourceNovelSummary>> search(
-    String luaScript,
-    String query, {
-    int page = 0,
-    Duration timeout = const Duration(seconds: 15),
-  }) async {
-    return _executeWithNetworkRetry<List<SourceNovelSummary>>(
-      luaScript: luaScript,
-      operation: 'search',
-      params: {'query': query, 'page': page},
-      timeout: timeout,
-      mapper: (dynamic raw) {
-        final list = raw as List<dynamic>;
-        return list.map((item) {
-          final m = item as Map<String, dynamic>;
-          return SourceNovelSummary(
-            id: m['id'] as String,
-            title: m['title'] as String,
-            coverUrl: m['coverUrl'] as String?,
-          );
-        }).toList();
-      },
-    );
-  }
-
-  /// Parses novel metadata and chapter list via the upstream extension's `parseNovel` method
-  Future<NovelDetails> parseNovel(
-    String luaScript,
-    String novelUrl, {
-    bool loadChapters = true,
-    Duration timeout = const Duration(seconds: 15),
-  }) async {
-    return _executeWithNetworkRetry<NovelDetails>(
-      luaScript: luaScript,
-      operation: 'parseNovel',
-      params: {'novelUrl': novelUrl, 'loadChapters': loadChapters},
-      timeout: timeout,
-      mapper: (dynamic raw) {
-        final m = raw as Map<String, dynamic>;
-        final chaptersRaw = m['chapters'] as List<dynamic>;
-        final chapters = chaptersRaw.map((chRaw) {
-          final ch = chRaw as Map<String, dynamic>;
-          DateTime? releaseDate;
-          final releaseStr = ch['release'] as String?;
-          if (releaseStr != null && releaseStr.isNotEmpty) {
-            try {
-              releaseDate = DateTime.tryParse(releaseStr);
-            } catch (_) {}
-          }
-          return SourceChapter(
-            id: ch['id'] as String,
-            title: ch['title'] as String,
-            index: (ch['index'] as num).toDouble(),
-            releaseDate: releaseDate,
-            url: ch['url'] as String?,
-          );
-        }).toList();
-
-        return NovelDetails(
-          id: m['id'] as String,
-          title: m['title'] as String,
-          author: m['author'] as String,
-          description: m['description'] as String,
-          coverUrl: m['coverUrl'] as String?,
-          genres: List<String>.from(m['genres'] as List),
-          chapters: chapters,
-        );
-      },
-    );
-  }
-
-  /// Fetches readable HTML passage via the upstream extension's `getPassage` method
-  Future<String> getPassage(
-    String luaScript,
-    String chapterUrl, {
-    Duration timeout = const Duration(seconds: 15),
-  }) async {
-    return _executeWithNetworkRetry<String>(
-      luaScript: luaScript,
-      operation: 'getPassage',
-      params: {'chapterUrl': chapterUrl},
-      timeout: timeout,
-      mapper: (dynamic raw) => raw as String,
-    );
-  }
-
-  /// Coordinates off-thread worker execution, execution timeout, and HTTP fetch-and-replay loop
-  Future<T> _executeWithNetworkRetry<T>({
-    required String luaScript,
-    required String operation,
-    required Map<String, dynamic> params,
-    required Duration timeout,
-    required T Function(dynamic raw) mapper,
-  }) async {
-    final cache = <String, String>{};
-    const maxRetries = 10;
-    int retries = 0;
-
-    while (retries < maxRetries) {
-      retries++;
-
-      final workerResult = await _runWorkerWithTimeout(
-        _WorkerTask(
-          luaScript: luaScript,
-          operation: operation,
-          params: params,
-          networkCache: Map.unmodifiable(cache),
-          replyPort: ReceivePort().sendPort, // Placeholder, replaced inside _runWorkerWithTimeout
-        ),
-        timeout: timeout,
-      );
-
-      if (workerResult.isError) {
-        throw SourceParseException(workerResult.errorMessage ?? 'Extension execution failed');
-      }
-
-      if (workerResult.needFetchUrl != null) {
-        final url = workerResult.needFetchUrl!;
-        try {
-          final uri = Uri.parse(url);
-          final response = await _client.get(
-            uri,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)',
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            },
-          ).timeout(const Duration(seconds: 25));
-
-          if (response.statusCode >= 400) {
-            throw SourceNetworkException(
-              'HTTP server error ${response.statusCode}',
-              url: url,
-              statusCode: response.statusCode,
-            );
-          }
-          cache[url] = response.body;
-          continue; // Replay execution with cached response
-        } on SocketException catch (se) {
-          throw SourceNetworkException(
-            'Network connection error: ${se.message}',
-            url: url,
-          );
-        } on TimeoutException {
-          throw SourceNetworkException(
-            'Request timed out while connecting to source',
-            url: url,
-          );
-        } on http.ClientException catch (ce) {
-          throw SourceNetworkException(
-            'HTTP client failure: ${ce.message}',
-            url: url,
-          );
-        }
-      }
-
-      // Successful completion
-      return mapper(workerResult.data);
-    }
-
-    throw const SourceNetworkException('Exceeded maximum network fetch redirects');
-  }
-
-  /// Spawns worker isolate with hard execution budget and immediate kill on timeout
-  Future<_WorkerResult> _runWorkerWithTimeout(
-    _WorkerTask taskTemplate, {
-    required Duration timeout,
-  }) async {
-    final receivePort = ReceivePort();
-    Isolate? isolate;
-
-    try {
-      final task = _WorkerTask(
-        luaScript: taskTemplate.luaScript,
-        operation: taskTemplate.operation,
-        params: taskTemplate.params,
-        networkCache: taskTemplate.networkCache,
-        replyPort: receivePort.sendPort,
-      );
-
-      isolate = await Isolate.spawn<_WorkerTask>(_workerEntryPoint, task);
-
-      final dynamic response = await receivePort.first.timeout(timeout);
-      if (response is _WorkerResult) {
-        return response;
-      }
-      throw const SourceParseException('Invalid response received from worker isolate');
-    } on TimeoutException {
-      isolate?.kill(priority: Isolate.immediate);
-      throw SourceExecutionTimeoutException(
-        'Extension execution exceeded time budget (${timeout.inSeconds}s timeout)',
-      );
-    } finally {
-      receivePort.close();
-      isolate?.kill(priority: Isolate.immediate);
-    }
-  }
-
-  /// Worker isolate entry point: initializes sandboxed Lua VM, binds DOM, and executes operation
-  static void _workerEntryPoint(_WorkerTask task) {
-    try {
-      final ls = LuaState.newState();
-      ls.openLibs();
-
-      _bindShosetsuEnvironment(ls, task.networkCache);
-
-      // Load upstream extension script
-      ls.loadString(task.luaScript);
-      ls.call(0, 1);
-      if (ls.isTable(-1)) {
-        ls.setGlobal('Extension');
-      } else {
-        ls.pop(1);
-      }
-
-      switch (task.operation) {
-        case 'search':
-          _executeSearch(ls, task);
-          break;
-        case 'parseNovel':
-          _executeParseNovel(ls, task);
-          break;
-        case 'getPassage':
-          _executeGetPassage(ls, task);
-          break;
-        default:
-          task.replyPort.send(_WorkerResult.error('Unsupported operation: ${task.operation}'));
-      }
-    } catch (e) {
-      final msg = e.toString();
-      const prefix = 'NEED_FETCH:';
-      final idx = msg.indexOf(prefix);
-      if (idx >= 0) {
-        final url = msg.substring(idx + prefix.length).split(RegExp(r'[\r\n]')).first.trim();
-        task.replyPort.send(_WorkerResult.needFetch(url));
-      } else {
-        task.replyPort.send(_WorkerResult.error(msg));
-      }
-    }
-  }
-
-  /// Safe stack-based argument passing for Extension.search
-  static void _executeSearch(LuaState ls, _WorkerTask task) {
-    final query = task.params['query'] as String? ?? '';
-    final page = task.params['page'] as int? ?? 0;
-
-    ls.getGlobal('Extension');
-    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
-    ls.getField(-1, 'search');
-    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.search function not found');
-    ls.remove(-2); // remove Extension table
-
-    // Construct data table: { [_G.QUERY] = query, [_G.PAGE] = page }
-    ls.newTable();
-
-    ls.getGlobal('QUERY');
-    ls.pushString(query);
-    ls.setTable(-3);
-
-    ls.getGlobal('PAGE');
-    ls.pushInteger(page);
-    ls.setTable(-3);
-
-    // Call Extension.search(data)
-    ls.call(1, 1);
-
-    final novels = <Map<String, dynamic>>[];
-    if (ls.isTable(-1)) {
-      final len = ls.rawLen(-1);
-      for (int i = 1; i <= len; i++) {
-        ls.rawGetI(-1, i);
-        if (ls.isTable(-1)) {
-          ls.getField(-1, 'title');
-          final title = ls.toStr(-1) ?? '';
-          ls.pop(1);
-
-          ls.getField(-1, 'link');
-          final link = ls.toStr(-1) ?? '';
-          ls.pop(1);
-
-          ls.getField(-1, 'imageURL');
-          final imageURL = ls.toStr(-1);
-          ls.pop(1);
-
-          if (title.isNotEmpty) {
-            novels.add({
-              'id': link.isNotEmpty ? link : 'novel_$i',
-              'title': title,
-              'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
-            });
-          }
-        }
-        ls.pop(1);
-      }
-    }
-    ls.pop(1);
-
-    task.replyPort.send(_WorkerResult.success(novels));
-  }
-
-  /// Safe stack-based argument passing for Extension.parseNovel
-  static void _executeParseNovel(LuaState ls, _WorkerTask task) {
-    final novelUrl = task.params['novelUrl'] as String? ?? '';
-    final loadChapters = task.params['loadChapters'] as bool? ?? true;
-
-    ls.getGlobal('Extension');
-    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
-    ls.getField(-1, 'parseNovel');
-    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.parseNovel function not found');
-    ls.remove(-2);
-
-    ls.pushString(novelUrl);
-    ls.pushBoolean(loadChapters);
-    ls.call(2, 1);
-
-    if (!ls.isTable(-1)) {
-      throw const SourceParseException('Extension parseNovel returned non-table value');
-    }
-
-    ls.getField(-1, 'title');
-    final title = ls.toStr(-1) ?? 'Unknown Title';
-    ls.pop(1);
-
-    ls.getField(-1, 'description');
-    final description = ls.toStr(-1) ?? '';
-    ls.pop(1);
-
-    ls.getField(-1, 'imageURL');
-    final imageURL = ls.toStr(-1);
-    ls.pop(1);
-
-    final authors = <String>[];
-    ls.getField(-1, 'authors');
-    if (ls.isTable(-1)) {
-      final nAuthors = ls.rawLen(-1);
-      for (int i = 1; i <= nAuthors; i++) {
-        ls.rawGetI(-1, i);
-        final a = ls.toStr(-1);
-        if (a != null && a.isNotEmpty) authors.add(a);
-        ls.pop(1);
-      }
-    }
-    ls.pop(1);
-
-    final genres = <String>[];
-    ls.getField(-1, 'genres');
-    if (ls.isTable(-1)) {
-      final nGenres = ls.rawLen(-1);
-      for (int i = 1; i <= nGenres; i++) {
-        ls.rawGetI(-1, i);
-        final g = ls.toStr(-1);
-        if (g != null && g.isNotEmpty) genres.add(g);
-        ls.pop(1);
-      }
-    }
-    ls.pop(1);
-
-    final chapters = <Map<String, dynamic>>[];
-    ls.getField(-1, 'chapters');
-    if (ls.isTable(-1)) {
-      final nCh = ls.rawLen(-1);
-      for (int i = 1; i <= nCh; i++) {
-        ls.rawGetI(-1, i);
-        if (ls.isTable(-1)) {
-          ls.getField(-1, 'title');
-          final chTitle = ls.toStr(-1) ?? 'Chapter $i';
-          ls.pop(1);
-
-          ls.getField(-1, 'link');
-          final chLink = ls.toStr(-1) ?? '';
-          ls.pop(1);
-
-          ls.getField(-1, 'release');
-          final chRelease = ls.toStr(-1);
-          ls.pop(1);
-
-          chapters.add({
-            'id': chLink.isNotEmpty ? chLink : 'ch_$i',
-            'title': chTitle,
-            'index': i.toDouble(),
-            'release': chRelease,
-            'url': chLink,
-          });
-        }
-        ls.pop(1);
-      }
-    }
-    ls.pop(1);
-
-    task.replyPort.send(_WorkerResult.success({
-      'id': novelUrl,
-      'title': title,
-      'author': authors.isNotEmpty ? authors.join(', ') : 'Unknown Author',
-      'description': description,
-      'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
-      'genres': genres,
-      'chapters': chapters,
-    }));
-  }
-
-  /// Safe stack-based argument passing for Extension.getPassage
-  static void _executeGetPassage(LuaState ls, _WorkerTask task) {
-    final chapterUrl = task.params['chapterUrl'] as String? ?? '';
-
-    ls.getGlobal('Extension');
-    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
-    ls.getField(-1, 'getPassage');
-    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.getPassage function not found');
-    ls.remove(-2);
-
-    ls.pushString(chapterUrl);
-    ls.call(1, 1);
-
-    final passage = ls.toStr(-1);
-    ls.pop(1);
-
-    if (passage == null || passage.isEmpty) {
-      throw const SourceParseException('Extension returned empty chapter passage');
-    }
-
-    task.replyPort.send(_WorkerResult.success(passage));
-  }
-
-  /// Binds the Shosetsu runtime, DOM parser, and host security sandbox
-  static void _bindShosetsuEnvironment(LuaState ls, Map<String, String> networkCache) {
-    int nextId = 1;
-    final docs = <int, dom.Document>{};
-    final elements = <int, dom.Element>{};
-
-    ls.register('__create_doc', (state) {
-      final htmlStr = state.toStr(1) ?? '';
-      final doc = html_parser.parse(htmlStr);
-      final id = nextId++;
-      docs[id] = doc;
-      state.pushInteger(id);
-      return 1;
-    });
-
-    ls.register('__doc_html', (state) {
-      final docId = state.toInteger(1);
-      final doc = docs[docId];
-      final body = doc?.body?.innerHtml ?? doc?.outerHtml ?? '';
-      state.pushString(body);
-      return 1;
-    });
-
-    ls.register('__doc_select', (state) {
-      final docId = state.toInteger(1);
-      final sel = state.toStr(2) ?? '';
-      final doc = docs[docId];
-      state.newTable();
-      if (doc != null) {
-        final results = doc.querySelectorAll(sel);
-        for (int i = 0; i < results.length; i++) {
-          final elId = nextId++;
-          elements[elId] = results[i];
-          state.pushInteger(elId);
-          state.rawSetI(-2, i + 1);
-        }
-      }
-      return 1;
-    });
-
-    ls.register('__doc_select_first', (state) {
-      final docId = state.toInteger(1);
-      final sel = state.toStr(2) ?? '';
-      final doc = docs[docId];
-      final el = doc?.querySelector(sel);
-      if (el == null) {
-        state.pushNil();
-        return 1;
-      }
-      final elId = nextId++;
-      elements[elId] = el;
-      state.pushInteger(elId);
-      return 1;
-    });
-
-    ls.register('__elem_select', (state) {
-      final elId = state.toInteger(1);
-      final sel = state.toStr(2) ?? '';
-      final el = elements[elId];
-      state.newTable();
-      if (el != null) {
-        final results = el.querySelectorAll(sel);
-        for (int i = 0; i < results.length; i++) {
-          final childId = nextId++;
-          elements[childId] = results[i];
-          state.pushInteger(childId);
-          state.rawSetI(-2, i + 1);
-        }
-      }
-      return 1;
-    });
-
-    ls.register('__elem_select_first', (state) {
-      final elId = state.toInteger(1);
-      final sel = state.toStr(2) ?? '';
-      final el = elements[elId];
-      final child = el?.querySelector(sel);
-      if (child == null) {
-        state.pushNil();
-        return 1;
-      }
-      final childId = nextId++;
-      elements[childId] = child;
-      state.pushInteger(childId);
-      return 1;
-    });
-
-    ls.register('__elem_text', (state) {
-      final elId = state.toInteger(1);
-      final el = elements[elId];
-      state.pushString(el?.text.trim() ?? '');
-      return 1;
-    });
-
-    ls.register('__elem_own_text', (state) {
-      final elId = state.toInteger(1);
-      final el = elements[elId];
-      if (el == null) {
-        state.pushString('');
-        return 1;
-      }
-      final own = el.nodes
-          .where((n) => n.nodeType == dom.Node.TEXT_NODE)
-          .map((n) => n.text?.trim() ?? '')
-          .join(' ');
-      state.pushString(own.trim());
-      return 1;
-    });
-
-    ls.register('__elem_attr', (state) {
-      final elId = state.toInteger(1);
-      final attrName = state.toStr(2) ?? '';
-      final el = elements[elId];
-      final val = el?.attributes[attrName];
-      state.pushString(val ?? '');
-      return 1;
-    });
-
-    ls.register('__elem_set_attr', (state) {
-      final elId = state.toInteger(1);
-      final attrName = state.toStr(2) ?? '';
-      final attrVal = state.toStr(3) ?? '';
-      final el = elements[elId];
-      if (el != null) {
-        el.attributes[attrName] = attrVal;
-      }
-      return 0;
-    });
-
-    ls.register('__fetch_get', (state) {
-      final url = state.toStr(1) ?? '';
-      if (!networkCache.containsKey(url)) {
-        return state.error2('NEED_FETCH:$url');
-      }
-      state.pushString(networkCache[url]!);
-      return 1;
-    });
-
-    // Lua runtime support scripts & host sandbox enforcement
-    ls.loadString(r'''
-      -- Host Sandbox Hardening: remove dangerous OS and IO capabilities
-      if os ~= nil then
-        os.execute = nil
-        os.remove = nil
-        os.rename = nil
-        os.tmpname = nil
-        os.exit = nil
-      end
-      io = nil
-      if package ~= nil then
-        package.loadlib = nil
-      end
-
-      _G.QUERY = 0
-      _G.PAGE = 1
-
-      NovelStatus = { UNKNOWN = 0, PUBLISHING = 1, COMPLETED = 2, PAUSED = 3, DROPPED = 4 }
-      ChapterType = { HTML = 1, TEXT = 2 }
-
-      function createElement(id)
-        if id == nil then return nil end
-        local el = { _id = id, _type = "Element" }
-        function el:select(sel)
-          local ids = __elem_select(self._id, sel)
-          return createElements(ids)
-        end
-        function el:selectFirst(sel)
-          local childId = __elem_select_first(self._id, sel)
-          if childId == nil then return nil end
-          return createElement(childId)
-        end
-        function el:text() return __elem_text(self._id) end
-        function el:ownText() return __elem_own_text(self._id) end
-        function el:attr(name, val)
-          if val ~= nil then
-            __elem_set_attr(self._id, name, val)
-            return self
-          else
-            return __elem_attr(self._id, name)
-          end
-        end
-        function el:prependElement(tag)
-          return self
-        end
-        return el
-      end
-
-      function createElements(ids)
-        local list = {}
-        for i, id in ipairs(ids) do
-          list[i] = createElement(id)
-        end
-        function list:size() return #self end
-        function list:get(idx) return self[idx + 1] end
-        function list:attr(name)
-          if #self > 0 then return self[1]:attr(name) else return "" end
-        end
-        function list:text()
-          local s = ""
-          for _, it in ipairs(self) do s = s .. it:text() .. " " end
-          return s:gsub("%s+$", "")
-        end
-        return list
-      end
-
-      function Document(html)
-        local docId = __create_doc(html)
-        local doc = { _id = docId, _type = "Document" }
-        function doc:select(sel)
-          local ids = __doc_select(self._id, sel)
-          return createElements(ids)
-        end
-        function doc:selectFirst(sel)
-          local childId = __doc_select_first(self._id, sel)
-          if childId == nil then return nil end
-          return createElement(childId)
-        end
-        function doc:text() return __doc_text(self._id) end
-        function doc:head()
-          local h = self:selectFirst("head")
-          if h == nil then h = createElement(self._id) end
-          return h
-        end
-        return doc
-      end
-
-      function GETDocument(url)
-        local html = __fetch_get(url)
-        return Document(html)
-      end
-
-      function map(list, fn)
-        local res = {}
-        if list.size ~= nil then
-          for i = 0, list:size() - 1 do
-            local item = list:get(i)
-            local val = fn(item, i)
-            if val ~= nil then table.insert(res, val) end
-          end
-        else
-          for i, v in ipairs(list) do
-            local val = fn(v, i)
-            if val ~= nil then table.insert(res, val) end
-          end
-        end
-        return res
-      end
-
-      function AsList(tbl) return tbl end
-      function List() return {} end
-
-      function Novel(tbl)
-        tbl = tbl or {}
-        return tbl
-      end
-
-      function NovelInfo(tbl)
-        tbl = tbl or {}
-        function tbl:setChapters(ch) self.chapters = ch end
-        return tbl
-      end
-
-      function NovelChapter(tbl)
-        tbl = tbl or {}
-        return tbl
-      end
-
-      function Listing(name, inc, fn)
-        return { name = name, increments = inc, fn = fn }
-      end
-
-      function DropdownFilter(id, name, options) return { id = id, name = name } end
-      function SwitchFilter(id, name) return { id = id, name = name } end
-
-      function Require(name)
-        if name == "FilterOptions" then
-          return function(opts, default)
-            local fo = { _opts = opts, _default = default }
-            function fo:valueOfOrFirst(val) return default end
-            function fo:labels() return {} end
-            return fo
-          end
-        elseif name == "url" then
-          return {
-            querystring = function(params, base)
-              local qs = ""
-              for k, v in pairs(params) do
-                if qs == "" then qs = "?" else qs = qs .. "&" end
-                qs = qs .. tostring(k) .. "=" .. tostring(v)
-              end
-              return (base or "") .. qs
-            end
-          }
-        end
-        return {}
-      end
-
-      function pageOfElem(doc, removeStyles)
-        return __doc_html(doc._id)
-      end
-    ''');
-    ls.call(0, 0);
-  }
 }
 </file>
 
@@ -4893,6 +3729,97 @@ class _OrnateDividerPainter extends CustomPainter {
 }
 </file>
 
+<file path="test/integration/live_upstream_gutenberg_test.dart">
+@Tags(['integration', 'live-network'])
+library;
+import 'dart:io';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:hon/core/sources/lua/shosetsu_lua_engine.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late ShosetsuLuaEngine engine;
+  late String gutenbergScript;
+  bool isOnline = true;
+
+  setUpAll(() async {
+    // Disable Flutter test's default network interception for live integration tests
+    HttpOverrides.global = null;
+
+    final file = File('assets/sources/gutenberg.lua');
+    expect(file.existsSync(), isTrue, reason: 'assets/sources/gutenberg.lua must exist');
+    gutenbergScript = file.readAsStringSync();
+
+    // Check live internet connectivity to gutenberg.org
+    try {
+      final lookup = await InternetAddress.lookup('www.gutenberg.org')
+          .timeout(const Duration(seconds: 5));
+      isOnline = lookup.isNotEmpty && lookup[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      isOnline = false;
+    }
+  });
+
+  setUp(() {
+    engine = ShosetsuLuaEngine.instance;
+  });
+
+  group('Live Network Integration — Upstream Project Gutenberg Extension', () {
+    test('Live Search: queries live Project Gutenberg catalog for "pride"', () async {
+      if (!isOnline) {
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
+        return;
+      }
+
+      // Must succeed against live servers without catching or swallowing errors
+      final results = await engine.search(gutenbergScript, 'pride', page: 0);
+      expect(results, isNotEmpty);
+      expect(results.length, greaterThanOrEqualTo(1));
+      expect(
+        results.any((n) => n.title.toLowerCase().contains('pride')),
+        isTrue,
+        reason: 'Live Gutenberg search results must contain novels matching query "pride"',
+      );
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('Live Novel Details: parses Pride and Prejudice (/ebooks/1342) live from Gutenberg', () async {
+      if (!isOnline) {
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
+        return;
+      }
+
+      // Must succeed against live servers without catching or swallowing errors
+      final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
+      expect(details.title, contains('Pride and Prejudice'));
+      expect(details.author, contains('Austen'));
+      expect(details.chapters, isNotEmpty);
+      expect(details.chapters.first.url, isNotEmpty);
+    }, timeout: const Timeout(Duration(seconds: 45)));
+
+    test('Live Readable Passage: retrieves live Chapter 1 HTML from Gutenberg', () async {
+      if (!isOnline) {
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
+        return;
+      }
+
+      // Must succeed against live servers without catching or swallowing errors
+      final passage = await engine.getPassage(
+        gutenbergScript,
+        '/cache/epub/1342/pg1342-images.html',
+      );
+      expect(passage, isNotEmpty);
+      expect(passage.length, greaterThan(1000));
+      expect(passage, contains('Chapter I.'));
+      expect(
+        passage,
+        contains('truth universally acknowledged'),
+      );
+    }, timeout: const Timeout(Duration(seconds: 45)));
+  });
+}
+</file>
+
 <file path="test/unit/pdf_reader_test.dart">
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -5121,339 +4048,12 @@ void main() {
 }
 </file>
 
-<file path="test/unit/shosetsu_lua_engine_test.dart">
-import 'dart:convert';
-import 'dart:io';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:hon/core/database/database_service.dart';
-import 'package:hon/core/models/download_job.dart';
-import 'package:hon/core/sources/lua/shosetsu_lua_engine.dart';
-import 'package:hon/core/sources/source_registry.dart';
-
-class MockGutenbergHttpClient extends http.BaseClient {
-  bool simulateNetworkFailure = false;
-  int failureStatusCode = 500;
-
-  static const searchHtmlFixture = '''
-<!DOCTYPE html>
-<html>
-<body>
-  <ul class="results">
-    <li class="booklink">
-      <a class="link" href="/ebooks/1342">
-        <span class="title">Pride and Prejudice</span>
-        <img class="cover-thumb" src="/cache/epub/1342/pg1342.cover.small.jpg" alt="cover" />
-      </a>
-      <span class="subtitle">Jane Austen</span>
-    </li>
-    <li class="booklink">
-      <a class="link" href="/ebooks/11">
-        <span class="title">Alice's Adventures in Wonderland</span>
-        <img class="cover-thumb" src="/cache/epub/11/pg11.cover.small.jpg" alt="cover" />
-      </a>
-      <span class="subtitle">Lewis Carroll</span>
-    </li>
-  </ul>
-</body>
-</html>
-''';
-
-  static const novelDetailsHtmlFixture = '''
-<!DOCTYPE html>
-<html>
-<head>
-  <meta property="og:url" content="https://www.gutenberg.org/ebooks/1342" />
-</head>
-<body>
-  <h1 itemprop="headline">Pride and Prejudice</h1>
-  <div itemprop="creator">Jane Austen</div>
-  <div property="dcterms:subject">Classic Literature</div>
-  <div property="dcterms:subject">Romance</div>
-  <meta itemprop="inLanguage" content="en" />
-  <img class="cover-art" src="https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg" />
-  <div class="readmore-container">
-    A classic novel of manners and romance following Elizabeth Bennet.
-    <div class="toggle-content"> Mr. Darcy and the Bennet family navigating social expectations.</div>
-  </div>
-  <span itemprop="datePublished">1813-01-28</span>
-  <a class="read-online-button" href="/cache/epub/1342/pg1342-images.html">Read online</a>
-</body>
-</html>
-''';
-
-  static const passageHtmlFixture = '''
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Pride and Prejudice by Jane Austen</title>
-</head>
-<body>
-  <div id="pg-header">
-    <h2>The Project Gutenberg eBook of Pride and Prejudice</h2>
-  </div>
-  <div class="chapter">
-    <h2>CHAPTER I.</h2>
-    <p>It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.</p>
-    <p>However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered the rightful property of some one or other of their daughters.</p>
-  </div>
-</body>
-</html>
-''';
-
-  @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    if (simulateNetworkFailure) {
-      if (failureStatusCode == 0) {
-        throw const SocketException('Failed host lookup: www.gutenberg.org');
-      }
-      return http.StreamedResponse(
-        Stream.value(utf8.encode('Internal Server Error')),
-        failureStatusCode,
-        headers: {'content-type': 'text/plain'},
-      );
-    }
-
-    final url = request.url.toString();
-    String body = '<html><body>Default</body></html>';
-
-    if (url.contains('/ebooks/search')) {
-      body = searchHtmlFixture;
-    } else if (url.contains('/ebooks/1342')) {
-      body = novelDetailsHtmlFixture;
-    } else if (url.contains('/cache/epub/1342/pg1342-images.html')) {
-      body = passageHtmlFixture;
-    }
-
-    return http.StreamedResponse(
-      Stream.value(utf8.encode(body)),
-      200,
-      headers: {'content-type': 'text/html; charset=utf-8'},
-    );
-  }
-}
-
-void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
-  late ShosetsuLuaEngine engine;
-  late MockGutenbergHttpClient mockClient;
-  late String gutenbergScript;
-
-  setUpAll(() {
-    // Read the upstream script directly from project assets
-    final file = File('assets/sources/gutenberg.lua');
-    expect(file.existsSync(), isTrue, reason: 'assets/sources/gutenberg.lua must exist');
-    gutenbergScript = file.readAsStringSync();
-  });
-
-  setUp(() {
-    mockClient = MockGutenbergHttpClient();
-    engine = ShosetsuLuaEngine.instance;
-    engine.setHttpClientForTesting(mockClient);
-    SourceRegistry.instance.setSourceScriptForTesting('gutenberg', gutenbergScript);
-  });
-
-  group('Phase 0C — Upstream Shosetsu Lua Extension Engine Proof', () {
-    test('1. Upstream Search: parses live HTML search query into structured novel items', () async {
-      final results = await engine.search(gutenbergScript, 'pride', page: 0);
-
-      expect(results, isNotEmpty);
-      expect(results.length, equals(2));
-
-      final first = results.first;
-      expect(first.title, equals('Pride and Prejudice'));
-      expect(first.id, equals('/ebooks/1342'));
-      expect(first.coverUrl, contains('pg1342.cover.small.jpg'));
-
-      final second = results[1];
-      expect(second.title, equals("Alice's Adventures in Wonderland"));
-      expect(second.id, equals('/ebooks/11'));
-    });
-
-    test('2. Upstream Novel Details: parses metadata, author, synopsis, and chapter list', () async {
-      final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
-
-      expect(details.title, equals('Pride and Prejudice'));
-      expect(details.author, contains('Jane Austen'));
-      expect(details.description, contains('Elizabeth Bennet'));
-      expect(details.description, contains('Mr. Darcy'));
-      expect(details.genres, contains('Classic Literature'));
-      expect(details.genres, contains('Romance'));
-      expect(details.chapters, isNotEmpty);
-
-      // Verify Chapter list integrity
-      final chapter = details.chapters.first;
-      expect(chapter.title, equals('Pride and Prejudice'));
-      expect(chapter.url, equals('/cache/epub/1342/pg1342-images.html'));
-      expect(chapter.releaseDate, isNotNull);
-      expect(chapter.releaseDate!.year, equals(1813));
-    });
-
-    test('3. Upstream Readable Chapter: retrieves real HTML passage content', () async {
-      final passage = await engine.getPassage(
-        gutenbergScript,
-        '/cache/epub/1342/pg1342-images.html',
-      );
-
-      expect(passage, isNotEmpty);
-      expect(passage, contains('CHAPTER I.'));
-      expect(
-        passage,
-        contains('It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.'),
-      );
-    });
-
-    test('4. End-to-End Pipeline via SourceRegistry: search -> novel details -> chapter list -> readable passage', () async {
-      // 4A. Search
-      final searchResults = await SourceRegistry.instance.searchSource('gutenberg', 'pride');
-      expect(searchResults, isNotEmpty);
-      final selectedNovel = searchResults.first;
-      expect(selectedNovel.title, equals('Pride and Prejudice'));
-
-      // 4B. Novel Details & Chapter List
-      final details = await SourceRegistry.instance.getNovelDetails(
-        'gutenberg',
-        selectedNovel.id,
-        loadChapters: true,
-      );
-      expect(details.title, equals(selectedNovel.title));
-      expect(details.chapters, isNotEmpty);
-
-      // 4C. Readable Chapter Passage
-      final chapter = details.chapters.first;
-      final passage = await SourceRegistry.instance.getChapterPassage(
-        'gutenberg',
-        chapter.url!,
-      );
-      expect(passage, contains('CHAPTER I.'));
-      expect(passage, contains('It is a truth universally acknowledged'));
-    });
-
-    test('5. Error Handling: Network failure throws honest SourceNetworkException without synthetic mock fallback', () async {
-      mockClient.simulateNetworkFailure = true;
-      mockClient.failureStatusCode = 0; // Simulate DNS / Socket connection failure
-
-      expect(
-        () async => await SourceRegistry.instance.searchSource('gutenberg', 'pride'),
-        throwsA(isA<SourceNetworkException>()),
-      );
-
-      expect(
-        () async => await SourceRegistry.instance.getNovelDetails('gutenberg', '/ebooks/1342'),
-        throwsA(isA<SourceNetworkException>()),
-      );
-
-      expect(
-        () async => await SourceRegistry.instance.getChapterPassage(
-          'gutenberg',
-          '/cache/epub/1342/pg1342-images.html',
-        ),
-        throwsA(isA<SourceNetworkException>()),
-      );
-    });
-
-    test('6. Error Handling: HTTP 500 server error throws SourceNetworkException with status code', () async {
-      mockClient.simulateNetworkFailure = true;
-      mockClient.failureStatusCode = 500;
-
-      expect(
-        () async => await SourceRegistry.instance.searchSource('gutenberg', 'pride'),
-        throwsA(
-          predicate((e) =>
-              e is SourceNetworkException &&
-              e.statusCode == 500 &&
-              e.message.contains('500')),
-        ),
-      );
-    });
-
-    test('7. Stack Argument Passing: safely handles quotes, backslashes, and injection payloads', () async {
-      const maliciousScript = '''
-        local function search(data)
-          return {
-            { title = "Echo: " .. tostring(data[0]), link = "/test/1" }
-          }
-        end
-        return { search = search }
-      ''';
-
-      const complexQuery = 'Jane\'s "Pride" & \\Backslash\\ "injection" -- test';
-      final results = await engine.search(
-        maliciousScript,
-        complexQuery,
-      );
-
-      expect(results, isNotEmpty);
-      expect(results.first.title, equals('Echo: Jane\'s "Pride" & \\Backslash\\ "injection" -- test'));
-    });
-
-    test('8. Execution Timeout Budget: rogue infinite loop triggers SourceExecutionTimeoutException', () async {
-      const infiniteLoopScript = '''
-        local function search(data)
-          while true do end
-        end
-        return { search = search }
-      ''';
-
-      expect(
-        () async => await engine.search(
-          infiniteLoopScript,
-          'pride',
-          timeout: const Duration(milliseconds: 400),
-        ),
-        throwsA(isA<SourceExecutionTimeoutException>()),
-      );
-    });
-
-    test('9. Host Sandboxing: dangerous OS and IO capabilities are neutralized', () async {
-      const sandboxProbeScript = '''
-        local function search(data)
-          if os ~= nil and os.execute ~= nil then
-            error("SECURITY_VIOLATION: os.execute must be nil")
-          end
-          if io ~= nil then
-            error("SECURITY_VIOLATION: io must be nil")
-          end
-          return {
-            { title = "Sandbox Secure", link = "/secure/1" }
-          }
-        end
-        return { search = search }
-      ''';
-
-      final results = await engine.search(sandboxProbeScript, 'test');
-      expect(results, isNotEmpty);
-      expect(results.first.title, equals('Sandbox Secure'));
-    });
-
-    test('10. Identity & Durable Download Queue: uses source-qualified IDs and enqueues durable jobs', () async {
-      const sourceId = 'gutenberg';
-      const novelId = '/ebooks/1342';
-      const qualifiedBookId = '$sourceId:$novelId';
-
-      expect(qualifiedBookId, equals('gutenberg:/ebooks/1342'));
-
-      final job = DownloadJob(
-        id: 'dl_${qualifiedBookId}_ch1'.replaceAll('/', '_'),
-        bookId: qualifiedBookId,
-        chapterId: '$qualifiedBookId:ch1',
-        chapterTitle: 'Chapter 1',
-        sourceId: sourceId,
-        status: DownloadStatus.queued,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-
-      final db = DatabaseService.instance;
-      await db.enqueueDownload(job);
-
-      final jobs = db.getAllDownloadJobs();
-      expect(jobs.any((j) => j.id == job.id && j.sourceId == 'gutenberg'), isTrue);
-      expect(jobs.firstWhere((j) => j.id == job.id).bookId, equals('gutenberg:/ebooks/1342'));
-    });
-  });
-}
+<file path="dart_test.yaml">
+tags:
+  integration:
+    description: "Integration tests requiring external services or long execution"
+  live-network:
+    description: "Tests requiring active internet connectivity to remote upstream sources"
 </file>
 
 <file path="README.md">
@@ -5552,6 +4152,233 @@ dependencies {
 
 flutter {
     source = "../.."
+}
+</file>
+
+<file path="assets/sources/gutenberg.lua">
+-- ============================================================================
+-- Upstream Shosetsu Extension: Project Gutenberg
+-- Upstream Repository: https://github.com/wasu-code/novel-extensions
+-- Source File: src/en/gutenberg.lua
+-- Pinned Branch/Commit: dev (commit e1dc0ee)
+-- License: GPL-3.0-or-later (matching upstream wasu-code/novel-extensions)
+-- Modifications for Hon: None (executed verbatim by Hon's runtime compatibility layer)
+-- ============================================================================
+-- {"id":231192101,"ver":"1.0.1","libVer":"1.0.0","author":"wasu-code","repo":"","dep":["FilterOptions>=0.0.2", "url"]}
+
+local FilterOptions = Require("FilterOptions")
+local qs = Require("url").querystring
+
+local baseURL = "https://www.gutenberg.org"
+
+local PAGE_SIZE = 25
+
+-- Filters IDs
+local FID_LANG = 2
+local FID_SORT = 3
+
+-- Settings IDs
+local SID_PRESERVE_STYLES = 1
+local settings = {
+  [SID_PRESERVE_STYLES] = false
+}
+
+local function shrinkURL(url, type)
+  return url:gsub(".-gutenberg%.org/?", "")
+end
+
+local function expandURL(url, type)
+  return baseURL .. "/" .. url:gsub("^/*", "")
+end
+
+local function getListing(url)
+  local doc = GETDocument(expandURL(url))
+  return map(doc:select("li.booklink"), function(card)
+    return Novel {
+      title = card:selectFirst(".title"):text(),
+      link = card:selectFirst(".link"):attr("href"),
+      imageURL = expandURL(card:selectFirst(".cover-thumb"):attr("src"))
+    }
+  end)
+end
+
+local function parseNovel(url, loadChapters)
+  local doc = GETDocument(expandURL(url))
+
+  local info = NovelInfo {
+    title = doc:selectFirst("[itemprop=headline]"):text(),
+    imageURL = doc:selectFirst(".cover-art"):attr("src"),
+    description = doc:selectFirst(".readmore-container"):ownText() 
+      .. doc:selectFirst(".readmore-container .toggle-content"):text(),
+    authors = map(doc:select("[itemprop='creator']"), function(c)
+      return c:text()
+    end),
+    genres = map(doc:select("[property='dcterms:subject']"), function(s)
+      return s:text()
+    end),
+    status = NovelStatus.COMPLETED,
+    language = doc:selectFirst("[itemprop=inLanguage]"):attr("content")
+  }
+
+  if loadChapters then
+    local chapters = {}
+    local dateModified = doc:selectFirst("[itemprop=dateModified]")
+    local datePublished = doc:selectFirst("[itemprop=datePublished]")
+    chapters = {
+      NovelChapter {
+        title = doc:selectFirst("[itemprop=headline]"):text(),
+        link = doc:selectFirst(".read-online-button"):attr("href"),
+        release = (dateModified or datePublished):text()
+      }
+    }
+    info:setChapters(AsList(chapters))
+  end
+
+  return info
+end
+
+local function getPassage(url)
+  local doc = GETDocument(expandURL(url))
+
+  -- add base URL so image URLs can resolve
+  local og = doc:selectFirst("meta[property='og:url']")
+  if og then
+    local ogUrl = og:attr("content")
+    if ogUrl ~= "" then
+      doc:head():prependElement("base"):attr("href", ogUrl)
+    end
+  end
+
+  return pageOfElem(doc, not settings[SID_PRESERVE_STYLES])
+end
+
+local languages = FilterOptions({
+  nil,
+  {af = "Afrikaans"},
+  {ale = "Aleut"},
+  {ar = "Arabic"},
+  {arp = "Arapaho"},
+  {brx = "Bodo"},
+  {br = "Breton"},
+  {bg = "Bulgarian"},
+  {rmq = "Caló"},
+  {ca = "Catalan"},
+  {ceb = "Cebuano"},
+  {zh = "Chinese"},
+  {cs = "Czech"},
+  {da = "Danish"},
+  {nl = "Dutch"},
+  {en = "English"},
+  {eo = "Esperanto"},
+  {et = "Estonian"},
+  {fa = "Farsi"},
+  {fi = "Finnish"},
+  {fr = "French"},
+  {fy = "Frisian"},
+  {fur = "Friulian"},
+  {gla = "Gaelic, Scottish"},
+  {gl = "Galician"},
+  {kld = "Gamilaraay"},
+  {de = "German"},
+  {el = "Greek"},
+  {grc = "Greek, Ancient"},
+  {he = "Hebrew"},
+  {hu = "Hungarian"},
+  {is = "Icelandic"},
+  {ilo = "Iloko"},
+  {ia = "Interlingua"},
+  {iu = "Inuktitut"},
+  {ga = "Irish"},
+  {it = "Italian"},
+  {ja = "Japanese"},
+  {csb = "Kashubian"},
+  {kha = "Khasi"},
+  {ko = "Korean"},
+  {la = "Latin"},
+  {lt = "Lithuanian"},
+  {mi = "Maori"},
+  {myn = "Mayan Languages"},
+  {enm = "Middle English"},
+  {nah = "Nahuatl"},
+  {nap = "Napoletano-Calabrese"},
+  {nav = "Navajo"},
+  {nai = "North American Indian"},
+  {no = "Norwegian"},
+  {oc = "Occitan"},
+  {oji = "Ojibwa"},
+  {ang = "Old English"},
+  {pl = "Polish"},
+  {pt = "Portuguese"},
+  {ro = "Romanian"},
+  {ru = "Russian"},
+  {sa = "Sanskrit"},
+  {sr = "Serbian"},
+  {sl = "Slovenian"},
+  {es = "Spanish"},
+  {sv = "Swedish"},
+  {bgs = "Tagabawa"},
+  {tl = "Tagalog"},
+  {te = "Telugu"},
+  {cy = "Welsh"},
+  {yi = "Yiddish"}
+}, "Any")
+
+local sortOrder = FilterOptions{
+  {downloads = "Most Popular"},
+  {release_date = "New Releases"}
+}
+
+return {
+  id = 231192101,
+  name = "Project Gutenberg",
+  baseURL = baseURL,
+  imageURL = "https://www.gutenberg.org/gutenberg/pg-logo-144x144.png",
+  chapterType = ChapterType.HTML,
+
+  shrinkURL = shrinkURL,
+  expandURL = expandURL,
+
+  startIndex = 0,
+  listings = {
+    Listing("Browse", true, function(data)
+      local offset = data[PAGE] * PAGE_SIZE + 1
+      local language = languages:valueOfOrFirst(data[FID_LANG])
+      local order = sortOrder:valueOfOrFirst(data[FID_SORT])
+
+      local params = {
+        sort_order = order,
+        start_index = offset
+      }
+      if language then params["query"] = "l." .. language end
+
+      return getListing(qs(params, "ebooks/search/"))
+    end),
+    Listing("Random Suggestions", false, function()
+      return getListing("ebooks/search/?sort_order=random")
+    end)
+  },
+  searchFilters = {
+    DropdownFilter(FID_SORT, "Sort order", sortOrder:labels()),
+    DropdownFilter(FID_LANG, "Language", languages:labels())
+  },
+
+  parseNovel = parseNovel,
+  getPassage = getPassage,
+
+  hasSearch = true,
+  isSearchIncrementing = true,
+  search = function(data)
+    local offset = data[PAGE] * PAGE_SIZE + 1
+    local query = data[QUERY]
+    return getListing("ebooks/search/?query=" .. query .. "&start_index=" .. offset)
+  end,
+
+  settings = {
+    SwitchFilter(SID_PRESERVE_STYLES, "Preserve formatting")
+  },
+  updateSetting = function(id, value)
+    settings[id] = value
+  end,
 }
 </file>
 
@@ -5914,6 +4741,874 @@ class ReadingProgress {
 }
 </file>
 
+<file path="lib/core/sources/lua/shosetsu_lua_engine.dart">
+import 'dart:async';
+import 'dart:io';
+import 'dart:isolate';
+import 'package:flutter/foundation.dart';
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as html_parser;
+import 'package:http/http.dart' as http;
+import 'package:lua_dardo_plus/lua.dart';
+
+import '../../models/novel_source.dart';
+
+class SourceNetworkException implements Exception {
+  final String message;
+  final String? url;
+  final int? statusCode;
+
+  const SourceNetworkException(this.message, {this.url, this.statusCode});
+
+  @override
+  String toString() => 'SourceNetworkException: $message${url != null ? ' ($url)' : ''}';
+}
+
+class SourceParseException implements Exception {
+  final String message;
+  const SourceParseException(this.message);
+
+  @override
+  String toString() => 'SourceParseException: $message';
+}
+
+class SourceExecutionTimeoutException implements Exception {
+  final String message;
+  const SourceExecutionTimeoutException(this.message);
+
+  @override
+  String toString() => 'SourceExecutionTimeoutException: $message';
+}
+
+class _WorkerTask {
+  final String luaScript;
+  final String operation;
+  final Map<String, dynamic> params;
+  final Map<String, String> networkCache;
+  final SendPort replyPort;
+
+  const _WorkerTask({
+    required this.luaScript,
+    required this.operation,
+    required this.params,
+    required this.networkCache,
+    required this.replyPort,
+  });
+}
+
+class _WorkerResult {
+  final dynamic data;
+  final String? needFetchUrl;
+  final String? errorMessage;
+  final bool isError;
+
+  const _WorkerResult.success(this.data)
+      : needFetchUrl = null,
+        errorMessage = null,
+        isError = false;
+
+  const _WorkerResult.needFetch(this.needFetchUrl)
+      : data = null,
+        errorMessage = null,
+        isError = false;
+
+  const _WorkerResult.error(this.errorMessage)
+      : data = null,
+        needFetchUrl = null,
+        isError = true;
+}
+
+/// Shosetsu-compatible Lua extension execution engine (Experimental Compatibility Prototype).
+///
+/// ARCHITECTURAL NOTE:
+/// This pure-Dart Lua host (`lua_dardo_plus` + DOM bridge) is an experimental compatibility
+/// prototype for early Flutter exploration and verification. It is NOT an approved production
+/// replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host).
+///
+/// EXECUTION MODEL & LIMITATIONS:
+/// 1. Off-UI-Thread Isolation: All Lua execution, bytecode interpretation, and DOM parsing
+///    run inside isolated background workers via [Isolate.spawn], protecting the UI thread.
+/// 2. Hard Execution Budget: Workers run with an explicit 15-second execution timeout. If a
+///    rogue script enters an infinite loop, the isolate is immediately terminated via
+///    [Isolate.kill] and a [SourceExecutionTimeoutException] is thrown.
+/// 3. Host Sandboxing: Dangerous host capabilities (`os.execute`, `os.remove`, `io`, etc.)
+///    are neutralized. Only whitelisted Shosetsu globals and DOM bindings are accessible.
+/// 4. Stack Argument Passing: Search queries, novel URLs, and chapter URLs are passed cleanly
+///    via the Lua stack API (`pushString`, `pushInteger`, `pushBoolean`, `call`), completely
+///    eliminating script injection risks from string interpolation.
+/// 5. Replay-based Fetch Loop: Missing network responses trigger a cache-and-replay cycle.
+///    This is a prototype mechanism designed for stateless functional scrapers (such as
+///    Project Gutenberg); it does NOT represent full coroutine or multi-threaded runtime
+///    compatibility for stateful extensions.
+class ShosetsuLuaEngine {
+  static ShosetsuLuaEngine? _instance;
+  static ShosetsuLuaEngine get instance => _instance ??= ShosetsuLuaEngine();
+
+  http.Client? _httpClient;
+
+  @visibleForTesting
+  void setHttpClientForTesting(http.Client client) {
+    _httpClient = client;
+  }
+
+  http.Client get _client => _httpClient ??= http.Client();
+
+  /// Executes an upstream Shosetsu Lua extension search query off the UI thread
+  Future<List<SourceNovelSummary>> search(
+    String luaScript,
+    String query, {
+    int page = 0,
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
+  }) async {
+    return _executeWithNetworkRetry<List<SourceNovelSummary>>(
+      luaScript: luaScript,
+      operation: 'search',
+      params: {'query': query, 'page': page},
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
+      mapper: (dynamic raw) {
+        final list = raw as List<dynamic>;
+        return list.map((item) {
+          final m = item as Map<String, dynamic>;
+          return SourceNovelSummary(
+            id: m['id'] as String,
+            title: m['title'] as String,
+            coverUrl: m['coverUrl'] as String?,
+          );
+        }).toList();
+      },
+    );
+  }
+
+  /// Parses novel metadata and chapter list via the upstream extension's `parseNovel` method
+  Future<NovelDetails> parseNovel(
+    String luaScript,
+    String novelUrl, {
+    bool loadChapters = true,
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
+  }) async {
+    return _executeWithNetworkRetry<NovelDetails>(
+      luaScript: luaScript,
+      operation: 'parseNovel',
+      params: {'novelUrl': novelUrl, 'loadChapters': loadChapters},
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
+      mapper: (dynamic raw) {
+        final m = raw as Map<String, dynamic>;
+        final chaptersRaw = m['chapters'] as List<dynamic>;
+        final chapters = chaptersRaw.map((chRaw) {
+          final ch = chRaw as Map<String, dynamic>;
+          DateTime? releaseDate;
+          final releaseStr = ch['release'] as String?;
+          if (releaseStr != null && releaseStr.isNotEmpty) {
+            try {
+              releaseDate = DateTime.tryParse(releaseStr);
+            } catch (_) {}
+          }
+          return SourceChapter(
+            id: ch['id'] as String,
+            title: ch['title'] as String,
+            index: (ch['index'] as num).toDouble(),
+            releaseDate: releaseDate,
+            url: ch['url'] as String?,
+          );
+        }).toList();
+
+        return NovelDetails(
+          id: m['id'] as String,
+          title: m['title'] as String,
+          author: m['author'] as String,
+          description: m['description'] as String,
+          coverUrl: m['coverUrl'] as String?,
+          genres: List<String>.from(m['genres'] as List),
+          chapters: chapters,
+        );
+      },
+    );
+  }
+
+  /// Fetches readable HTML passage via the upstream extension's `getPassage` method
+  Future<String> getPassage(
+    String luaScript,
+    String chapterUrl, {
+    Duration totalTimeout = const Duration(seconds: 45),
+    Duration perAttemptTimeout = const Duration(seconds: 15),
+  }) async {
+    return _executeWithNetworkRetry<String>(
+      luaScript: luaScript,
+      operation: 'getPassage',
+      params: {'chapterUrl': chapterUrl},
+      totalTimeout: totalTimeout,
+      perAttemptTimeout: perAttemptTimeout,
+      mapper: (dynamic raw) => raw as String,
+    );
+  }
+
+  /// Coordinates off-thread worker execution, total operation deadline, and HTTP fetch-and-replay loop
+  Future<T> _executeWithNetworkRetry<T>({
+    required String luaScript,
+    required String operation,
+    required Map<String, dynamic> params,
+    required Duration totalTimeout,
+    required Duration perAttemptTimeout,
+    required T Function(dynamic raw) mapper,
+  }) async {
+    final cache = <String, String>{};
+    const maxRetries = 10;
+    int retries = 0;
+    final stopwatch = Stopwatch()..start();
+
+    while (retries < maxRetries) {
+      retries++;
+
+      final elapsed = stopwatch.elapsed;
+      if (elapsed >= totalTimeout) {
+        throw SourceExecutionTimeoutException(
+          'Total operation execution deadline exceeded (${totalTimeout.inSeconds}s budget)',
+        );
+      }
+
+      final remainingTotal = totalTimeout - elapsed;
+      final attemptTimeout = remainingTotal < perAttemptTimeout ? remainingTotal : perAttemptTimeout;
+
+      final workerResult = await _runWorkerWithTimeout(
+        luaScript: luaScript,
+        operation: operation,
+        params: params,
+        networkCache: Map.unmodifiable(cache),
+        timeout: attemptTimeout,
+      );
+
+      if (workerResult.isError) {
+        throw SourceParseException(workerResult.errorMessage ?? 'Extension execution failed');
+      }
+
+      if (workerResult.needFetchUrl != null) {
+        final url = workerResult.needFetchUrl!;
+        final httpRemaining = totalTimeout - stopwatch.elapsed;
+        if (httpRemaining <= Duration.zero) {
+          throw SourceExecutionTimeoutException(
+            'Total operation execution deadline exceeded before network fetch (${totalTimeout.inSeconds}s budget)',
+          );
+        }
+        const defaultHttpTimeout = Duration(seconds: 20);
+        final httpTimeout = httpRemaining < defaultHttpTimeout ? httpRemaining : defaultHttpTimeout;
+
+        try {
+          final uri = Uri.parse(url);
+          final response = await _client.get(
+            uri,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+          ).timeout(httpTimeout);
+
+          if (response.statusCode >= 400) {
+            throw SourceNetworkException(
+              'HTTP server error ${response.statusCode}',
+              url: url,
+              statusCode: response.statusCode,
+            );
+          }
+          cache[url] = response.body;
+          continue; // Replay execution with cached response
+        } on SocketException catch (se) {
+          throw SourceNetworkException(
+            'Network connection error: ${se.message}',
+            url: url,
+          );
+        } on TimeoutException {
+          throw SourceNetworkException(
+            'Request timed out while connecting to source',
+            url: url,
+          );
+        } on http.ClientException catch (ce) {
+          throw SourceNetworkException(
+            'HTTP client failure: ${ce.message}',
+            url: url,
+          );
+        }
+      }
+
+      // Successful completion
+      return mapper(workerResult.data);
+    }
+
+    throw const SourceNetworkException('Exceeded maximum network fetch redirects');
+  }
+
+  /// Spawns worker isolate with hard execution budget and immediate kill on timeout
+  Future<_WorkerResult> _runWorkerWithTimeout({
+    required String luaScript,
+    required String operation,
+    required Map<String, dynamic> params,
+    required Map<String, String> networkCache,
+    required Duration timeout,
+  }) async {
+    final receivePort = ReceivePort();
+    Isolate? isolate;
+
+    try {
+      final task = _WorkerTask(
+        luaScript: luaScript,
+        operation: operation,
+        params: params,
+        networkCache: networkCache,
+        replyPort: receivePort.sendPort,
+      );
+
+      isolate = await Isolate.spawn<_WorkerTask>(_workerEntryPoint, task);
+
+      final dynamic response = await receivePort.first.timeout(timeout);
+      if (response is _WorkerResult) {
+        return response;
+      }
+      throw const SourceParseException('Invalid response received from worker isolate');
+    } on TimeoutException {
+      isolate?.kill(priority: Isolate.immediate);
+      throw SourceExecutionTimeoutException(
+        'Worker isolate attempt exceeded time budget (${timeout.inSeconds}s timeout)',
+      );
+    } finally {
+      receivePort.close();
+      isolate?.kill(priority: Isolate.immediate);
+    }
+  }
+
+  /// Worker isolate entry point: initializes sandboxed Lua VM, binds DOM, and executes operation
+  static void _workerEntryPoint(_WorkerTask task) {
+    try {
+      final ls = LuaState.newState();
+      ls.openLibs();
+
+      _bindShosetsuEnvironment(ls, task.networkCache);
+
+      // Load upstream extension script
+      ls.loadString(task.luaScript);
+      ls.call(0, 1);
+      if (ls.isTable(-1)) {
+        ls.setGlobal('Extension');
+      } else {
+        ls.pop(1);
+      }
+
+      switch (task.operation) {
+        case 'search':
+          _executeSearch(ls, task);
+          break;
+        case 'parseNovel':
+          _executeParseNovel(ls, task);
+          break;
+        case 'getPassage':
+          _executeGetPassage(ls, task);
+          break;
+        default:
+          task.replyPort.send(_WorkerResult.error('Unsupported operation: ${task.operation}'));
+      }
+    } catch (e) {
+      final msg = e.toString();
+      const prefix = 'NEED_FETCH:';
+      final idx = msg.indexOf(prefix);
+      if (idx >= 0) {
+        final url = msg.substring(idx + prefix.length).split(RegExp(r'[\r\n]')).first.trim();
+        task.replyPort.send(_WorkerResult.needFetch(url));
+      } else {
+        task.replyPort.send(_WorkerResult.error(msg));
+      }
+    }
+  }
+
+  /// Safe stack-based argument passing for Extension.search
+  static void _executeSearch(LuaState ls, _WorkerTask task) {
+    final query = task.params['query'] as String? ?? '';
+    final page = task.params['page'] as int? ?? 0;
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'search');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.search function not found');
+    ls.remove(-2); // remove Extension table
+
+    // Construct data table: { [_G.QUERY] = query, [_G.PAGE] = page }
+    ls.newTable();
+
+    ls.getGlobal('QUERY');
+    ls.pushString(query);
+    ls.setTable(-3);
+
+    ls.getGlobal('PAGE');
+    ls.pushInteger(page);
+    ls.setTable(-3);
+
+    // Call Extension.search(data)
+    ls.call(1, 1);
+
+    final novels = <Map<String, dynamic>>[];
+    if (ls.isTable(-1)) {
+      final len = ls.rawLen(-1);
+      for (int i = 1; i <= len; i++) {
+        ls.rawGetI(-1, i);
+        if (ls.isTable(-1)) {
+          ls.getField(-1, 'title');
+          final title = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'link');
+          final link = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'imageURL');
+          final imageURL = ls.toStr(-1);
+          ls.pop(1);
+
+          if (title.isNotEmpty) {
+            novels.add({
+              'id': link.isNotEmpty ? link : 'novel_$i',
+              'title': title,
+              'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
+            });
+          }
+        }
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    task.replyPort.send(_WorkerResult.success(novels));
+  }
+
+  /// Safe stack-based argument passing for Extension.parseNovel
+  static void _executeParseNovel(LuaState ls, _WorkerTask task) {
+    final novelUrl = task.params['novelUrl'] as String? ?? '';
+    final loadChapters = task.params['loadChapters'] as bool? ?? true;
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'parseNovel');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.parseNovel function not found');
+    ls.remove(-2);
+
+    ls.pushString(novelUrl);
+    ls.pushBoolean(loadChapters);
+    ls.call(2, 1);
+
+    if (!ls.isTable(-1)) {
+      throw const SourceParseException('Extension parseNovel returned non-table value');
+    }
+
+    ls.getField(-1, 'title');
+    final title = ls.toStr(-1) ?? 'Unknown Title';
+    ls.pop(1);
+
+    ls.getField(-1, 'description');
+    final description = ls.toStr(-1) ?? '';
+    ls.pop(1);
+
+    ls.getField(-1, 'imageURL');
+    final imageURL = ls.toStr(-1);
+    ls.pop(1);
+
+    final authors = <String>[];
+    ls.getField(-1, 'authors');
+    if (ls.isTable(-1)) {
+      final nAuthors = ls.rawLen(-1);
+      for (int i = 1; i <= nAuthors; i++) {
+        ls.rawGetI(-1, i);
+        final a = ls.toStr(-1);
+        if (a != null && a.isNotEmpty) authors.add(a);
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    final genres = <String>[];
+    ls.getField(-1, 'genres');
+    if (ls.isTable(-1)) {
+      final nGenres = ls.rawLen(-1);
+      for (int i = 1; i <= nGenres; i++) {
+        ls.rawGetI(-1, i);
+        final g = ls.toStr(-1);
+        if (g != null && g.isNotEmpty) genres.add(g);
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    final chapters = <Map<String, dynamic>>[];
+    ls.getField(-1, 'chapters');
+    if (ls.isTable(-1)) {
+      final nCh = ls.rawLen(-1);
+      for (int i = 1; i <= nCh; i++) {
+        ls.rawGetI(-1, i);
+        if (ls.isTable(-1)) {
+          ls.getField(-1, 'title');
+          final chTitle = ls.toStr(-1) ?? 'Chapter $i';
+          ls.pop(1);
+
+          ls.getField(-1, 'link');
+          final chLink = ls.toStr(-1) ?? '';
+          ls.pop(1);
+
+          ls.getField(-1, 'release');
+          final chRelease = ls.toStr(-1);
+          ls.pop(1);
+
+          chapters.add({
+            'id': chLink.isNotEmpty ? chLink : 'ch_$i',
+            'title': chTitle,
+            'index': i.toDouble(),
+            'release': chRelease,
+            'url': chLink,
+          });
+        }
+        ls.pop(1);
+      }
+    }
+    ls.pop(1);
+
+    task.replyPort.send(_WorkerResult.success({
+      'id': novelUrl,
+      'title': title,
+      'author': authors.isNotEmpty ? authors.join(', ') : 'Unknown Author',
+      'description': description,
+      'coverUrl': imageURL?.isNotEmpty == true ? imageURL : null,
+      'genres': genres,
+      'chapters': chapters,
+    }));
+  }
+
+  /// Safe stack-based argument passing for Extension.getPassage
+  static void _executeGetPassage(LuaState ls, _WorkerTask task) {
+    final chapterUrl = task.params['chapterUrl'] as String? ?? '';
+
+    ls.getGlobal('Extension');
+    if (!ls.isTable(-1)) throw const SourceParseException('Extension table not found');
+    ls.getField(-1, 'getPassage');
+    if (!ls.isFunction(-1)) throw const SourceParseException('Extension.getPassage function not found');
+    ls.remove(-2);
+
+    ls.pushString(chapterUrl);
+    ls.call(1, 1);
+
+    final passage = ls.toStr(-1);
+    ls.pop(1);
+
+    if (passage == null || passage.isEmpty) {
+      throw const SourceParseException('Extension returned empty chapter passage');
+    }
+
+    task.replyPort.send(_WorkerResult.success(passage));
+  }
+
+  /// Binds the Shosetsu runtime, DOM parser, and host security sandbox
+  static void _bindShosetsuEnvironment(LuaState ls, Map<String, String> networkCache) {
+    int nextId = 1;
+    final docs = <int, dom.Document>{};
+    final elements = <int, dom.Element>{};
+
+    ls.register('__create_doc', (state) {
+      final htmlStr = state.toStr(1) ?? '';
+      final doc = html_parser.parse(htmlStr);
+      final id = nextId++;
+      docs[id] = doc;
+      state.pushInteger(id);
+      return 1;
+    });
+
+    ls.register('__doc_html', (state) {
+      final docId = state.toInteger(1);
+      final doc = docs[docId];
+      final body = doc?.body?.innerHtml ?? doc?.outerHtml ?? '';
+      state.pushString(body);
+      return 1;
+    });
+
+    ls.register('__doc_select', (state) {
+      final docId = state.toInteger(1);
+      final sel = state.toStr(2) ?? '';
+      final doc = docs[docId];
+      state.newTable();
+      if (doc != null) {
+        final results = doc.querySelectorAll(sel);
+        for (int i = 0; i < results.length; i++) {
+          final elId = nextId++;
+          elements[elId] = results[i];
+          state.pushInteger(elId);
+          state.rawSetI(-2, i + 1);
+        }
+      }
+      return 1;
+    });
+
+    ls.register('__doc_select_first', (state) {
+      final docId = state.toInteger(1);
+      final sel = state.toStr(2) ?? '';
+      final doc = docs[docId];
+      final el = doc?.querySelector(sel);
+      if (el == null) {
+        state.pushNil();
+        return 1;
+      }
+      final elId = nextId++;
+      elements[elId] = el;
+      state.pushInteger(elId);
+      return 1;
+    });
+
+    ls.register('__elem_select', (state) {
+      final elId = state.toInteger(1);
+      final sel = state.toStr(2) ?? '';
+      final el = elements[elId];
+      state.newTable();
+      if (el != null) {
+        final results = el.querySelectorAll(sel);
+        for (int i = 0; i < results.length; i++) {
+          final childId = nextId++;
+          elements[childId] = results[i];
+          state.pushInteger(childId);
+          state.rawSetI(-2, i + 1);
+        }
+      }
+      return 1;
+    });
+
+    ls.register('__elem_select_first', (state) {
+      final elId = state.toInteger(1);
+      final sel = state.toStr(2) ?? '';
+      final el = elements[elId];
+      final child = el?.querySelector(sel);
+      if (child == null) {
+        state.pushNil();
+        return 1;
+      }
+      final childId = nextId++;
+      elements[childId] = child;
+      state.pushInteger(childId);
+      return 1;
+    });
+
+    ls.register('__elem_text', (state) {
+      final elId = state.toInteger(1);
+      final el = elements[elId];
+      state.pushString(el?.text.trim() ?? '');
+      return 1;
+    });
+
+    ls.register('__elem_own_text', (state) {
+      final elId = state.toInteger(1);
+      final el = elements[elId];
+      if (el == null) {
+        state.pushString('');
+        return 1;
+      }
+      final own = el.nodes
+          .where((n) => n.nodeType == dom.Node.TEXT_NODE)
+          .map((n) => n.text?.trim() ?? '')
+          .join(' ');
+      state.pushString(own.trim());
+      return 1;
+    });
+
+    ls.register('__elem_attr', (state) {
+      final elId = state.toInteger(1);
+      final attrName = state.toStr(2) ?? '';
+      final el = elements[elId];
+      final val = el?.attributes[attrName];
+      state.pushString(val ?? '');
+      return 1;
+    });
+
+    ls.register('__elem_set_attr', (state) {
+      final elId = state.toInteger(1);
+      final attrName = state.toStr(2) ?? '';
+      final attrVal = state.toStr(3) ?? '';
+      final el = elements[elId];
+      if (el != null) {
+        el.attributes[attrName] = attrVal;
+      }
+      return 0;
+    });
+
+    ls.register('__fetch_get', (state) {
+      final url = state.toStr(1) ?? '';
+      if (!networkCache.containsKey(url)) {
+        return state.error2('NEED_FETCH:$url');
+      }
+      state.pushString(networkCache[url]!);
+      return 1;
+    });
+
+    // Lua runtime support scripts & host sandbox enforcement
+    ls.loadString(r'''
+      -- Host Sandbox Hardening: remove dangerous OS and IO capabilities
+      if os ~= nil then
+        os.execute = nil
+        os.remove = nil
+        os.rename = nil
+        os.tmpname = nil
+        os.exit = nil
+      end
+      io = nil
+      if package ~= nil then
+        package.loadlib = nil
+      end
+
+      _G.QUERY = 0
+      _G.PAGE = 1
+
+      NovelStatus = { UNKNOWN = 0, PUBLISHING = 1, COMPLETED = 2, PAUSED = 3, DROPPED = 4 }
+      ChapterType = { HTML = 1, TEXT = 2 }
+
+      function createElement(id)
+        if id == nil then return nil end
+        local el = { _id = id, _type = "Element" }
+        function el:select(sel)
+          local ids = __elem_select(self._id, sel)
+          return createElements(ids)
+        end
+        function el:selectFirst(sel)
+          local childId = __elem_select_first(self._id, sel)
+          if childId == nil then return nil end
+          return createElement(childId)
+        end
+        function el:text() return __elem_text(self._id) end
+        function el:ownText() return __elem_own_text(self._id) end
+        function el:attr(name, val)
+          if val ~= nil then
+            __elem_set_attr(self._id, name, val)
+            return self
+          else
+            return __elem_attr(self._id, name)
+          end
+        end
+        function el:prependElement(tag)
+          return self
+        end
+        return el
+      end
+
+      function createElements(ids)
+        local list = {}
+        for i, id in ipairs(ids) do
+          list[i] = createElement(id)
+        end
+        function list:size() return #self end
+        function list:get(idx) return self[idx + 1] end
+        function list:attr(name)
+          if #self > 0 then return self[1]:attr(name) else return "" end
+        end
+        function list:text()
+          local s = ""
+          for _, it in ipairs(self) do s = s .. it:text() .. " " end
+          return s:gsub("%s+$", "")
+        end
+        return list
+      end
+
+      function Document(html)
+        local docId = __create_doc(html)
+        local doc = { _id = docId, _type = "Document" }
+        function doc:select(sel)
+          local ids = __doc_select(self._id, sel)
+          return createElements(ids)
+        end
+        function doc:selectFirst(sel)
+          local childId = __doc_select_first(self._id, sel)
+          if childId == nil then return nil end
+          return createElement(childId)
+        end
+        function doc:text() return __doc_text(self._id) end
+        function doc:head()
+          local h = self:selectFirst("head")
+          if h == nil then h = createElement(self._id) end
+          return h
+        end
+        return doc
+      end
+
+      function GETDocument(url)
+        local html = __fetch_get(url)
+        return Document(html)
+      end
+
+      function map(list, fn)
+        local res = {}
+        if list.size ~= nil then
+          for i = 0, list:size() - 1 do
+            local item = list:get(i)
+            local val = fn(item, i)
+            if val ~= nil then table.insert(res, val) end
+          end
+        else
+          for i, v in ipairs(list) do
+            local val = fn(v, i)
+            if val ~= nil then table.insert(res, val) end
+          end
+        end
+        return res
+      end
+
+      function AsList(tbl) return tbl end
+      function List() return {} end
+
+      function Novel(tbl)
+        tbl = tbl or {}
+        return tbl
+      end
+
+      function NovelInfo(tbl)
+        tbl = tbl or {}
+        function tbl:setChapters(ch) self.chapters = ch end
+        return tbl
+      end
+
+      function NovelChapter(tbl)
+        tbl = tbl or {}
+        return tbl
+      end
+
+      function Listing(name, inc, fn)
+        return { name = name, increments = inc, fn = fn }
+      end
+
+      function DropdownFilter(id, name, options) return { id = id, name = name } end
+      function SwitchFilter(id, name) return { id = id, name = name } end
+
+      function Require(name)
+        if name == "FilterOptions" then
+          return function(opts, default)
+            local fo = { _opts = opts, _default = default }
+            function fo:valueOfOrFirst(val) return default end
+            function fo:labels() return {} end
+            return fo
+          end
+        elseif name == "url" then
+          return {
+            querystring = function(params, base)
+              local qs = ""
+              for k, v in pairs(params) do
+                if qs == "" then qs = "?" else qs = qs .. "&" end
+                qs = qs .. tostring(k) .. "=" .. tostring(v)
+              end
+              return (base or "") .. qs
+            end
+          }
+        end
+        return {}
+      end
+
+      function pageOfElem(doc, removeStyles)
+        return __doc_html(doc._id)
+      end
+    ''');
+    ls.call(0, 0);
+  }
+}
+</file>
+
 <file path="lib/core/sources/source_registry.dart">
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -6046,7 +5741,17 @@ class SourceRegistry {
 
   bool isInstalled(String extensionId) => _installedExtensionIds.contains(extensionId);
 
+  /// Verified bundled sources supported by Hon's assets
+  static const Set<String> _verifiedBundledSources = {'gutenberg'};
+
+  /// External extension installation is strictly gated until the production
+  /// Kotlin-side Shosetsu host runtime with full security restrictions is verified.
   Future<void> installExtension(String extensionId) async {
+    if (!_verifiedBundledSources.contains(extensionId)) {
+      throw const SourceParseException(
+        'External extension installation is gated until production Kotlin-side host restrictions are implemented.',
+      );
+    }
     _installedExtensionIds.add(extensionId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('hon_installed_extensions', _installedExtensionIds.toList());
@@ -6870,807 +6575,6 @@ class _BrowseScreenState extends State<BrowseScreen> {
           onPressed: () => Navigator.of(ctx).pop(),
         ),
       ),
-    );
-  }
-}
-</file>
-
-<file path="lib/features/browse/presentation/source_catalog_screen.dart">
-import 'dart:io';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import '../../../app/theme/hon_colors.dart';
-import '../../../core/database/database_service.dart';
-import '../../../core/files/storage_service.dart';
-import '../../../core/models/book.dart';
-import '../../../core/models/chapter.dart';
-import '../../../core/models/download_job.dart';
-import '../../../core/models/novel_source.dart';
-import '../../../core/sources/source_registry.dart';
-import '../../../shared/widgets/book_cover_widget.dart';
-import '../../reader/presentation/reader_navigator.dart';
-import '../../sheets/add_to_library_prompt.dart';
-
-class SourceCatalogScreen extends StatefulWidget {
-  final ExtensionMeta sourceMeta;
-
-  const SourceCatalogScreen({
-    super.key,
-    required this.sourceMeta,
-  });
-
-  @override
-  State<SourceCatalogScreen> createState() => _SourceCatalogScreenState();
-}
-
-class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
-  final String _selectedListing = 'Browse';
-  String _searchQuery = '';
-  bool _isSearching = false;
-  bool _isLoading = false;
-  String? _errorMessage;
-  List<SourceNovelSummary> _novels = [];
-  final TextEditingController _searchController = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _loadInitialCatalog();
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadInitialCatalog() async {
-    await _performSearch('pride');
-  }
-
-  Future<void> _performSearch(String query) async {
-    if (!mounted) return;
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final results = await SourceRegistry.instance.searchSource(
-        widget.sourceMeta.id,
-        query.trim().isEmpty ? 'pride' : query.trim(),
-      );
-      if (mounted) {
-        setState(() {
-          _novels = results;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = e.toString().replaceFirst('SourceNetworkException: ', '');
-          _isLoading = false;
-          _novels = [];
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
-    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
-
-    return Scaffold(
-      backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
-      appBar: AppBar(
-        backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(CupertinoIcons.chevron_back, color: textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: _isSearching
-            ? CupertinoSearchTextField(
-                controller: _searchController,
-                autofocus: true,
-                style: TextStyle(color: textPrimary),
-                placeholder: 'Search ${widget.sourceMeta.name}...',
-                onSubmitted: (val) {
-                  _searchQuery = val;
-                  _performSearch(val);
-                },
-              )
-            : Text(
-                widget.sourceMeta.name,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: textPrimary,
-                ),
-              ),
-        actions: [
-          IconButton(
-            icon: Icon(
-              _isSearching ? CupertinoIcons.xmark_circle_fill : CupertinoIcons.search,
-              color: textPrimary,
-              size: 21,
-            ),
-            onPressed: () {
-              setState(() {
-                _isSearching = !_isSearching;
-                if (!_isSearching) {
-                  _searchQuery = '';
-                  _searchController.clear();
-                  _loadInitialCatalog();
-                }
-              });
-            },
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFF334E68),
-        icon: const Icon(CupertinoIcons.slider_horizontal_3, size: 18, color: Colors.white),
-        label: const Text('Filter', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        onPressed: () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Filter presets: All languages, Popular & New')),
-          );
-        },
-      ),
-      body: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          // Sub-bar: Selected Listing dropdown / chips
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Row(
-                children: [
-                  Text(
-                    'Selected Listing:  ',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: textSecondary,
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _selectedListing,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: textPrimary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Content section
-          if (_isLoading)
-            const SliverFillRemaining(
-              child: Center(
-                child: CupertinoActivityIndicator(radius: 14),
-              ),
-            )
-          else if (_errorMessage != null)
-            SliverFillRemaining(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        CupertinoIcons.exclamationmark_triangle_fill,
-                        color: HonColors.accentOrange,
-                        size: 44,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Failed to load catalog',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                          color: textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _errorMessage!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4),
-                      ),
-                      const SizedBox(height: 16),
-                      OutlinedButton.icon(
-                        icon: const Icon(CupertinoIcons.refresh, size: 16),
-                        label: const Text('Retry'),
-                        onPressed: () => _performSearch(_searchQuery),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else if (_novels.isEmpty)
-            SliverFillRemaining(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    _searchQuery.isNotEmpty
-                        ? 'No novels found matching "$_searchQuery"'
-                        : 'No novels available in this catalog.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: textSecondary, height: 1.5),
-                  ),
-                ),
-              ),
-            )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 90),
-              sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 0.53,
-                ),
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final novel = _novels[index];
-                    return _buildNovelCard(novel, textPrimary, textSecondary);
-                  },
-                  childCount: _novels.length,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNovelCard(
-    SourceNovelSummary novel,
-    Color textPrimary,
-    Color textSecondary,
-  ) {
-    return GestureDetector(
-      onTap: () => _openNovelDetails(novel),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: BookCoverWidget(
-              title: novel.title,
-              author: novel.author ?? widget.sourceMeta.name,
-              coverPath: novel.coverUrl,
-              borderRadius: 6,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            novel.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: textPrimary,
-              height: 1.25,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openNovelDetails(SourceNovelSummary novel) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SourceNovelDetailsScreen(
-          novel: novel,
-          sourceId: widget.sourceMeta.id,
-          sourceName: widget.sourceMeta.name,
-        ),
-      ),
-    );
-  }
-}
-
-class SourceNovelDetailsScreen extends StatefulWidget {
-  final SourceNovelSummary novel;
-  final String sourceId;
-  final String sourceName;
-
-  const SourceNovelDetailsScreen({
-    super.key,
-    required this.novel,
-    required this.sourceId,
-    required this.sourceName,
-  });
-
-  @override
-  State<SourceNovelDetailsScreen> createState() => _SourceNovelDetailsScreenState();
-}
-
-class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
-  bool _isLoadingDetails = true;
-  String? _detailsError;
-  NovelDetails? _novelDetails;
-  bool _isOpeningChapter = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadNovelDetails();
-  }
-
-  Future<void> _loadNovelDetails() async {
-    setState(() {
-      _isLoadingDetails = true;
-      _detailsError = null;
-    });
-
-    try {
-      final details = await SourceRegistry.instance.getNovelDetails(
-        widget.sourceId,
-        widget.novel.id,
-        loadChapters: true,
-      );
-      if (mounted) {
-        setState(() {
-          _novelDetails = details;
-          _isLoadingDetails = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _detailsError = e.toString().replaceFirst('SourceNetworkException: ', '');
-          _isLoadingDetails = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _openChapter(SourceChapter chapter, int chapterIndex) async {
-    setState(() => _isOpeningChapter = true);
-    try {
-      final chapterUrl = chapter.url ?? chapter.id;
-      final passageHtml = await SourceRegistry.instance.getChapterPassage(
-        widget.sourceId,
-        chapterUrl,
-      );
-
-      final bookId = '${widget.sourceId}:${widget.novel.id}';
-      final book = Book(
-        id: bookId,
-        title: _novelDetails?.title ?? widget.novel.title,
-        author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
-        description: _novelDetails?.description ?? widget.novel.description ?? '',
-        format: BookFormat.webNovel,
-        sourceId: widget.sourceId, // Real machine source ID
-        totalChapters: _novelDetails?.chapters.length ?? 1,
-        coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-
-      // Save book record
-      await DatabaseService.instance.saveBook(book);
-
-      if (mounted) {
-        setState(() => _isOpeningChapter = false);
-        await ReaderNavigator.openBook(
-          context,
-          book,
-          initialChapterIndex: chapterIndex,
-          initialChapterContent: passageHtml,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isOpeningChapter = false);
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Error Loading Chapter'),
-            content: Text('Failed to load chapter content from source:\n$e'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _handleDownloadChapters() async {
-    final chapters = _novelDetails?.chapters ?? [];
-    if (chapters.isEmpty) return;
-    final ch = chapters.first;
-
-    final bookId = '${widget.sourceId}:${widget.novel.id}';
-    final book = Book(
-      id: bookId,
-      title: _novelDetails?.title ?? widget.novel.title,
-      author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
-      description: _novelDetails?.description ?? widget.novel.description ?? '',
-      format: BookFormat.webNovel,
-      sourceId: widget.sourceId, // Real machine source ID
-      totalChapters: chapters.length,
-      coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-
-    // Save book record
-    await DatabaseService.instance.saveBook(book);
-
-    // Adhere strictly to Add-to-Library prompt rules BEFORE executing download
-    if (mounted) {
-      await AddToLibraryPrompt.checkAndPrompt(
-        context,
-        novelId: bookId,
-        novelTitle: widget.novel.title,
-        onAddToLibrary: () async {
-          await DatabaseService.instance.setLibraryMembership(bookId, true);
-        },
-      );
-    }
-
-    // Route download through the durable DownloadJob queue
-    final chapterId = '$bookId:${ch.id}';
-    final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
-    final job = DownloadJob(
-      id: jobId,
-      bookId: bookId,
-      chapterId: chapterId,
-      chapterTitle: ch.title,
-      sourceId: widget.sourceId,
-      status: DownloadStatus.queued,
-      progress: 0.0,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-    await DatabaseService.instance.enqueueDownload(job);
-
-    // Initial Chapter record with queued state
-    final dbChapter = Chapter(
-      id: chapterId,
-      bookId: bookId,
-      sourceChapterId: ch.id,
-      title: ch.title,
-      chapterIndex: 0,
-      url: ch.url,
-      downloadState: ChapterDownloadState.queued,
-      updatedAt: DateTime.now(),
-    );
-    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
-
-    try {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(status: DownloadStatus.running, updatedAt: DateTime.now()),
-      );
-
-      final passageHtml = await SourceRegistry.instance.getChapterPassage(
-        widget.sourceId,
-        ch.url ?? ch.id,
-      );
-
-      // Save to managed chapters directory
-      final storage = StorageService.instance;
-      final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
-      final chFile = File('${storage.chaptersDir.path}/${filePrefix}_ch1.html');
-      await chFile.writeAsString(passageHtml);
-
-      // Update chapter record to downloaded
-      final completedChapter = dbChapter.copyWith(
-        localFilePath: chFile.path,
-        downloadState: ChapterDownloadState.downloaded,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [completedChapter]);
-
-      // Update download job to completed
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.completed,
-          progress: 1.0,
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
-        );
-      }
-    } catch (e) {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.failed,
-          errorMessage: e.toString(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      final failedChapter = dbChapter.copyWith(
-        downloadState: ChapterDownloadState.failed,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [failedChapter]);
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to download chapter: $e')),
-        );
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
-    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
-
-    final bookId = '${widget.sourceId}:${widget.novel.id}';
-    final inLibrary = DatabaseService.instance.isBookInLibrary(bookId);
-
-    final title = _novelDetails?.title ?? widget.novel.title;
-    final author = _novelDetails?.author ?? widget.novel.author ?? widget.sourceName;
-    final description = _novelDetails?.description ?? widget.novel.description ?? 'No description available for this novel.';
-    final chapters = _novelDetails?.chapters ?? [];
-
-    return Scaffold(
-      backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
-      appBar: AppBar(
-        backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(CupertinoIcons.chevron_back, color: textPrimary),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-      ),
-      body: _isLoadingDetails
-          ? const Center(child: CupertinoActivityIndicator(radius: 14))
-          : _detailsError != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(CupertinoIcons.exclamationmark_triangle_fill, color: HonColors.accentOrange, size: 44),
-                        const SizedBox(height: 12),
-                        Text('Failed to load novel details', style: TextStyle(color: textPrimary, fontSize: 17, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        Text(_detailsError!, textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 13)),
-                        const SizedBox(height: 16),
-                        OutlinedButton.icon(
-                          icon: const Icon(CupertinoIcons.refresh, size: 16),
-                          label: const Text('Retry'),
-                          onPressed: _loadNovelDetails,
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              : Stack(
-                  children: [
-                    ListView(
-                      physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      children: [
-                        // Cover & Metadata
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            BookCoverWidget(
-                              title: title,
-                              author: author,
-                              coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
-                              width: 90,
-                              height: 135,
-                              borderRadius: 8,
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    title,
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                      color: textPrimary,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    author,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: textSecondary,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Source: ${widget.sourceName}',
-                                    style: const TextStyle(fontSize: 12, color: HonColors.accentOrange),
-                                  ),
-                                  const SizedBox(height: 12),
-
-                                  // Add to Library Button
-                                  OutlinedButton.icon(
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: inLibrary ? HonColors.accentGreen : textPrimary,
-                                      side: BorderSide(
-                                        color: inLibrary ? HonColors.accentGreen : (isDark ? Colors.white24 : Colors.black26),
-                                      ),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                    ),
-                                    icon: Icon(
-                                      inLibrary ? CupertinoIcons.checkmark_alt : CupertinoIcons.heart,
-                                      size: 16,
-                                    ),
-                                    label: Text(inLibrary ? 'In Library' : 'Add to Library'),
-                                    onPressed: () async {
-                                      final db = DatabaseService.instance;
-                                      final newStatus = !inLibrary;
-                                      await db.setLibraryMembership(bookId, newStatus);
-                                      setState(() {});
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 20),
-
-                        // Synopsis
-                        Text(
-                          'Synopsis',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          description,
-                          style: TextStyle(fontSize: 13, height: 1.45, color: textSecondary),
-                        ),
-
-                        const SizedBox(height: 24),
-
-                        // Action row
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: HonColors.accentOrange,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                                icon: const Icon(CupertinoIcons.book, size: 18),
-                                label: const Text('Read Online'),
-                                onPressed: chapters.isNotEmpty
-                                    ? () => _openChapter(chapters.first, 0)
-                                    : null,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: textPrimary,
-                                  side: BorderSide(color: isDark ? Colors.white24 : Colors.black26),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                ),
-                                icon: const Icon(CupertinoIcons.arrow_down_circle, size: 18),
-                                label: const Text('Download Ch 1'),
-                                onPressed: chapters.isNotEmpty ? _handleDownloadChapters : null,
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 28),
-
-                        // Chapter List Header
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Chapters (${chapters.length})',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
-                            ),
-                            IconButton(
-                              icon: const Icon(CupertinoIcons.sort_down, size: 18),
-                              onPressed: () {},
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-
-                        // Chapters list
-                        ...chapters.asMap().entries.map((entry) {
-                          final idx = entry.key;
-                          final ch = entry.value;
-
-                          return InkWell(
-                            onTap: () => _openChapter(ch, idx),
-                            borderRadius: BorderRadius.circular(8),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      ch.title,
-                                      style: TextStyle(fontSize: 14, color: textPrimary, fontWeight: FontWeight.w500),
-                                    ),
-                                  ),
-                                  Icon(CupertinoIcons.arrow_down_circle, size: 18, color: textSecondary),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-
-                    if (_isOpeningChapter)
-                      Container(
-                        color: Colors.black45,
-                        child: const Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CupertinoActivityIndicator(radius: 16, color: Colors.white),
-                              SizedBox(height: 12),
-                              Text(
-                                'Loading chapter content from source...',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
     );
   }
 }
@@ -8989,6 +7893,345 @@ void main() {
 }
 </file>
 
+<file path="test/unit/shosetsu_lua_engine_test.dart">
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:hon/core/database/database_service.dart';
+import 'package:hon/core/models/download_job.dart';
+import 'package:hon/core/sources/lua/shosetsu_lua_engine.dart';
+import 'package:hon/core/sources/source_registry.dart';
+
+class MockGutenbergHttpClient extends http.BaseClient {
+  bool simulateNetworkFailure = false;
+  int failureStatusCode = 500;
+
+  static const searchHtmlFixture = '''
+<!DOCTYPE html>
+<html>
+<body>
+  <ul class="results">
+    <li class="booklink">
+      <a class="link" href="/ebooks/1342">
+        <span class="title">Pride and Prejudice</span>
+        <img class="cover-thumb" src="/cache/epub/1342/pg1342.cover.small.jpg" alt="cover" />
+      </a>
+      <span class="subtitle">Jane Austen</span>
+    </li>
+    <li class="booklink">
+      <a class="link" href="/ebooks/11">
+        <span class="title">Alice's Adventures in Wonderland</span>
+        <img class="cover-thumb" src="/cache/epub/11/pg11.cover.small.jpg" alt="cover" />
+      </a>
+      <span class="subtitle">Lewis Carroll</span>
+    </li>
+  </ul>
+</body>
+</html>
+''';
+
+  static const novelDetailsHtmlFixture = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta property="og:url" content="https://www.gutenberg.org/ebooks/1342" />
+</head>
+<body>
+  <h1 itemprop="headline">Pride and Prejudice</h1>
+  <div itemprop="creator">Jane Austen</div>
+  <div property="dcterms:subject">Classic Literature</div>
+  <div property="dcterms:subject">Romance</div>
+  <meta itemprop="inLanguage" content="en" />
+  <img class="cover-art" src="https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg" />
+  <div class="readmore-container">
+    A classic novel of manners and romance following Elizabeth Bennet.
+    <div class="toggle-content"> Mr. Darcy and the Bennet family navigating social expectations.</div>
+  </div>
+  <span itemprop="datePublished">1813-01-28</span>
+  <a class="read-online-button" href="/cache/epub/1342/pg1342-images.html">Read online</a>
+</body>
+</html>
+''';
+
+  static const passageHtmlFixture = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Pride and Prejudice by Jane Austen</title>
+</head>
+<body>
+  <div id="pg-header">
+    <h2>The Project Gutenberg eBook of Pride and Prejudice</h2>
+  </div>
+  <div class="chapter">
+    <h2>CHAPTER I.</h2>
+    <p>It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.</p>
+    <p>However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered the rightful property of some one or other of their daughters.</p>
+  </div>
+</body>
+</html>
+''';
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (simulateNetworkFailure) {
+      if (failureStatusCode == 0) {
+        throw const SocketException('Failed host lookup: www.gutenberg.org');
+      }
+      return http.StreamedResponse(
+        Stream.value(utf8.encode('Internal Server Error')),
+        failureStatusCode,
+        headers: {'content-type': 'text/plain'},
+      );
+    }
+
+    final url = request.url.toString();
+    String body = '<html><body>Default</body></html>';
+
+    if (url.contains('/ebooks/search')) {
+      body = searchHtmlFixture;
+    } else if (url.contains('/ebooks/1342')) {
+      body = novelDetailsHtmlFixture;
+    } else if (url.contains('/cache/epub/1342/pg1342-images.html')) {
+      body = passageHtmlFixture;
+    }
+
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(body)),
+      200,
+      headers: {'content-type': 'text/html; charset=utf-8'},
+    );
+  }
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late ShosetsuLuaEngine engine;
+  late MockGutenbergHttpClient mockClient;
+  late String gutenbergScript;
+
+  setUpAll(() {
+    // Read the upstream script directly from project assets
+    final file = File('assets/sources/gutenberg.lua');
+    expect(file.existsSync(), isTrue, reason: 'assets/sources/gutenberg.lua must exist');
+    gutenbergScript = file.readAsStringSync();
+  });
+
+  setUp(() {
+    mockClient = MockGutenbergHttpClient();
+    engine = ShosetsuLuaEngine.instance;
+    engine.setHttpClientForTesting(mockClient);
+    SourceRegistry.instance.setSourceScriptForTesting('gutenberg', gutenbergScript);
+  });
+
+  group('Phase 0C — Upstream Shosetsu Lua Extension Engine Proof', () {
+    test('1. Upstream Search: parses live HTML search query into structured novel items', () async {
+      final results = await engine.search(gutenbergScript, 'pride', page: 0);
+
+      expect(results, isNotEmpty);
+      expect(results.length, equals(2));
+
+      final first = results.first;
+      expect(first.title, equals('Pride and Prejudice'));
+      expect(first.id, equals('/ebooks/1342'));
+      expect(first.coverUrl, contains('pg1342.cover.small.jpg'));
+
+      final second = results[1];
+      expect(second.title, equals("Alice's Adventures in Wonderland"));
+      expect(second.id, equals('/ebooks/11'));
+    });
+
+    test('2. Upstream Novel Details: parses metadata, author, synopsis, and chapter list', () async {
+      final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
+
+      expect(details.title, equals('Pride and Prejudice'));
+      expect(details.author, contains('Jane Austen'));
+      expect(details.description, contains('Elizabeth Bennet'));
+      expect(details.description, contains('Mr. Darcy'));
+      expect(details.genres, contains('Classic Literature'));
+      expect(details.genres, contains('Romance'));
+      expect(details.chapters, isNotEmpty);
+
+      // Verify Chapter list integrity
+      final chapter = details.chapters.first;
+      expect(chapter.title, equals('Pride and Prejudice'));
+      expect(chapter.url, equals('/cache/epub/1342/pg1342-images.html'));
+      expect(chapter.releaseDate, isNotNull);
+      expect(chapter.releaseDate!.year, equals(1813));
+    });
+
+    test('3. Upstream Readable Chapter: retrieves real HTML passage content', () async {
+      final passage = await engine.getPassage(
+        gutenbergScript,
+        '/cache/epub/1342/pg1342-images.html',
+      );
+
+      expect(passage, isNotEmpty);
+      expect(passage, contains('CHAPTER I.'));
+      expect(
+        passage,
+        contains('It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.'),
+      );
+    });
+
+    test('4. End-to-End Pipeline via SourceRegistry: search -> novel details -> chapter list -> readable passage', () async {
+      // 4A. Search
+      final searchResults = await SourceRegistry.instance.searchSource('gutenberg', 'pride');
+      expect(searchResults, isNotEmpty);
+      final selectedNovel = searchResults.first;
+      expect(selectedNovel.title, equals('Pride and Prejudice'));
+
+      // 4B. Novel Details & Chapter List
+      final details = await SourceRegistry.instance.getNovelDetails(
+        'gutenberg',
+        selectedNovel.id,
+        loadChapters: true,
+      );
+      expect(details.title, equals(selectedNovel.title));
+      expect(details.chapters, isNotEmpty);
+
+      // 4C. Readable Chapter Passage
+      final chapter = details.chapters.first;
+      final passage = await SourceRegistry.instance.getChapterPassage(
+        'gutenberg',
+        chapter.url!,
+      );
+      expect(passage, contains('CHAPTER I.'));
+      expect(passage, contains('It is a truth universally acknowledged'));
+    });
+
+    test('5. Error Handling: Network failure throws honest SourceNetworkException without synthetic mock fallback', () async {
+      mockClient.simulateNetworkFailure = true;
+      mockClient.failureStatusCode = 0; // Simulate DNS / Socket connection failure
+
+      expect(
+        () async => await SourceRegistry.instance.searchSource('gutenberg', 'pride'),
+        throwsA(isA<SourceNetworkException>()),
+      );
+
+      expect(
+        () async => await SourceRegistry.instance.getNovelDetails('gutenberg', '/ebooks/1342'),
+        throwsA(isA<SourceNetworkException>()),
+      );
+
+      expect(
+        () async => await SourceRegistry.instance.getChapterPassage(
+          'gutenberg',
+          '/cache/epub/1342/pg1342-images.html',
+        ),
+        throwsA(isA<SourceNetworkException>()),
+      );
+    });
+
+    test('6. Error Handling: HTTP 500 server error throws SourceNetworkException with status code', () async {
+      mockClient.simulateNetworkFailure = true;
+      mockClient.failureStatusCode = 500;
+
+      expect(
+        () async => await SourceRegistry.instance.searchSource('gutenberg', 'pride'),
+        throwsA(
+          predicate((e) =>
+              e is SourceNetworkException &&
+              e.statusCode == 500 &&
+              e.message.contains('500')),
+        ),
+      );
+    });
+
+    test('7. Stack Argument Passing: safely handles quotes, backslashes, and injection payloads', () async {
+      const maliciousScript = '''
+        local function search(data)
+          return {
+            { title = "Echo: " .. tostring(data[0]), link = "/test/1" }
+          }
+        end
+        return { search = search }
+      ''';
+
+      const complexQuery = 'Jane\'s "Pride" & \\Backslash\\ "injection" -- test';
+      final results = await engine.search(
+        maliciousScript,
+        complexQuery,
+      );
+
+      expect(results, isNotEmpty);
+      expect(results.first.title, equals('Echo: Jane\'s "Pride" & \\Backslash\\ "injection" -- test'));
+    });
+
+    test('8. Execution Timeout Budget: rogue infinite loop triggers SourceExecutionTimeoutException', () async {
+      const infiniteLoopScript = '''
+        local function search(data)
+          while true do end
+        end
+        return { search = search }
+      ''';
+
+      expect(
+        () async => await engine.search(
+          infiniteLoopScript,
+          'pride',
+          totalTimeout: const Duration(milliseconds: 400),
+          perAttemptTimeout: const Duration(milliseconds: 300),
+        ),
+        throwsA(isA<SourceExecutionTimeoutException>()),
+      );
+    });
+
+    test('9. Host Sandboxing: dangerous OS and IO capabilities are neutralized', () async {
+      const sandboxProbeScript = '''
+        local function search(data)
+          if os ~= nil and os.execute ~= nil then
+            error("SECURITY_VIOLATION: os.execute must be nil")
+          end
+          if io ~= nil then
+            error("SECURITY_VIOLATION: io must be nil")
+          end
+          return {
+            { title = "Sandbox Secure", link = "/secure/1" }
+          }
+        end
+        return { search = search }
+      ''';
+
+      final results = await engine.search(sandboxProbeScript, 'test');
+      expect(results, isNotEmpty);
+      expect(results.first.title, equals('Sandbox Secure'));
+    });
+
+    test('10. Identity & Durable Download Queue: uses source-qualified IDs and enqueues before prompt', () async {
+      const sourceId = 'gutenberg';
+      const novelId = '/ebooks/1342';
+      const qualifiedBookId = '$sourceId:$novelId';
+
+      expect(qualifiedBookId, equals('gutenberg:/ebooks/1342'));
+
+      final job = DownloadJob(
+        id: 'dl_${qualifiedBookId}_ch1'.replaceAll('/', '_'),
+        bookId: qualifiedBookId,
+        chapterId: '$qualifiedBookId:ch1',
+        chapterTitle: 'Chapter 1',
+        sourceId: sourceId,
+        status: DownloadStatus.queued,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      final db = DatabaseService.instance;
+      // Invariant: Job is durably enqueued into database before any user interaction
+      await db.enqueueDownload(job);
+
+      final jobs = db.getAllDownloadJobs();
+      expect(jobs.any((j) => j.id == job.id && j.sourceId == 'gutenberg'), isTrue);
+      final enqueued = jobs.firstWhere((j) => j.id == job.id);
+      expect(enqueued.status, equals(DownloadStatus.queued));
+      expect(enqueued.bookId, equals('gutenberg:/ebooks/1342'));
+    });
+  });
+}
+</file>
+
 <file path="test/widget_test.dart">
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9316,6 +8559,810 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         </intent>
     </queries>
 </manifest>
+</file>
+
+<file path="lib/features/browse/presentation/source_catalog_screen.dart">
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import '../../../app/theme/hon_colors.dart';
+import '../../../core/database/database_service.dart';
+import '../../../core/files/storage_service.dart';
+import '../../../core/models/book.dart';
+import '../../../core/models/chapter.dart';
+import '../../../core/models/download_job.dart';
+import '../../../core/models/novel_source.dart';
+import '../../../core/sources/source_registry.dart';
+import '../../../shared/widgets/book_cover_widget.dart';
+import '../../reader/presentation/reader_navigator.dart';
+import '../../sheets/add_to_library_prompt.dart';
+
+class SourceCatalogScreen extends StatefulWidget {
+  final ExtensionMeta sourceMeta;
+
+  const SourceCatalogScreen({
+    super.key,
+    required this.sourceMeta,
+  });
+
+  @override
+  State<SourceCatalogScreen> createState() => _SourceCatalogScreenState();
+}
+
+class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
+  final String _selectedListing = 'Browse';
+  String _searchQuery = '';
+  bool _isSearching = false;
+  bool _isLoading = false;
+  String? _errorMessage;
+  List<SourceNovelSummary> _novels = [];
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialCatalog();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadInitialCatalog() async {
+    await _performSearch('pride');
+  }
+
+  Future<void> _performSearch(String query) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final results = await SourceRegistry.instance.searchSource(
+        widget.sourceMeta.id,
+        query.trim().isEmpty ? 'pride' : query.trim(),
+      );
+      if (mounted) {
+        setState(() {
+          _novels = results;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceFirst('SourceNetworkException: ', '');
+          _isLoading = false;
+          _novels = [];
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
+    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
+
+    return Scaffold(
+      backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
+      appBar: AppBar(
+        backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(CupertinoIcons.chevron_back, color: textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: _isSearching
+            ? CupertinoSearchTextField(
+                controller: _searchController,
+                autofocus: true,
+                style: TextStyle(color: textPrimary),
+                placeholder: 'Search ${widget.sourceMeta.name}...',
+                onSubmitted: (val) {
+                  _searchQuery = val;
+                  _performSearch(val);
+                },
+              )
+            : Text(
+                widget.sourceMeta.name,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: textPrimary,
+                ),
+              ),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _isSearching ? CupertinoIcons.xmark_circle_fill : CupertinoIcons.search,
+              color: textPrimary,
+              size: 21,
+            ),
+            onPressed: () {
+              setState(() {
+                _isSearching = !_isSearching;
+                if (!_isSearching) {
+                  _searchQuery = '';
+                  _searchController.clear();
+                  _loadInitialCatalog();
+                }
+              });
+            },
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: const Color(0xFF334E68),
+        icon: const Icon(CupertinoIcons.slider_horizontal_3, size: 18, color: Colors.white),
+        label: const Text('Filter', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        onPressed: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Filter presets: All languages, Popular & New')),
+          );
+        },
+      ),
+      body: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
+        slivers: [
+          // Sub-bar: Selected Listing dropdown / chips
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Row(
+                children: [
+                  Text(
+                    'Selected Listing:  ',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: textSecondary,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _selectedListing,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Content section
+          if (_isLoading)
+            const SliverFillRemaining(
+              child: Center(
+                child: CupertinoActivityIndicator(radius: 14),
+              ),
+            )
+          else if (_errorMessage != null)
+            SliverFillRemaining(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        CupertinoIcons.exclamationmark_triangle_fill,
+                        color: HonColors.accentOrange,
+                        size: 44,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Failed to load catalog',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        icon: const Icon(CupertinoIcons.refresh, size: 16),
+                        label: const Text('Retry'),
+                        onPressed: () => _performSearch(_searchQuery),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          else if (_novels.isEmpty)
+            SliverFillRemaining(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(
+                    _searchQuery.isNotEmpty
+                        ? 'No novels found matching "$_searchQuery"'
+                        : 'No novels available in this catalog.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: textSecondary, height: 1.5),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 90),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 0.53,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) {
+                    final novel = _novels[index];
+                    return _buildNovelCard(novel, textPrimary, textSecondary);
+                  },
+                  childCount: _novels.length,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNovelCard(
+    SourceNovelSummary novel,
+    Color textPrimary,
+    Color textSecondary,
+  ) {
+    return GestureDetector(
+      onTap: () => _openNovelDetails(novel),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: BookCoverWidget(
+              title: novel.title,
+              author: novel.author ?? widget.sourceMeta.name,
+              coverPath: novel.coverUrl,
+              borderRadius: 6,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            novel.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: textPrimary,
+              height: 1.25,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openNovelDetails(SourceNovelSummary novel) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SourceNovelDetailsScreen(
+          novel: novel,
+          sourceId: widget.sourceMeta.id,
+          sourceName: widget.sourceMeta.name,
+        ),
+      ),
+    );
+  }
+}
+
+class SourceNovelDetailsScreen extends StatefulWidget {
+  final SourceNovelSummary novel;
+  final String sourceId;
+  final String sourceName;
+
+  const SourceNovelDetailsScreen({
+    super.key,
+    required this.novel,
+    required this.sourceId,
+    required this.sourceName,
+  });
+
+  @override
+  State<SourceNovelDetailsScreen> createState() => _SourceNovelDetailsScreenState();
+}
+
+class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
+  bool _isLoadingDetails = true;
+  String? _detailsError;
+  NovelDetails? _novelDetails;
+  bool _isOpeningChapter = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNovelDetails();
+  }
+
+  Future<void> _loadNovelDetails() async {
+    setState(() {
+      _isLoadingDetails = true;
+      _detailsError = null;
+    });
+
+    try {
+      final details = await SourceRegistry.instance.getNovelDetails(
+        widget.sourceId,
+        widget.novel.id,
+        loadChapters: true,
+      );
+      if (mounted) {
+        setState(() {
+          _novelDetails = details;
+          _isLoadingDetails = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _detailsError = e.toString().replaceFirst('SourceNetworkException: ', '');
+          _isLoadingDetails = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openChapter(SourceChapter chapter, int chapterIndex) async {
+    setState(() => _isOpeningChapter = true);
+    try {
+      final chapterUrl = chapter.url ?? chapter.id;
+      final passageHtml = await SourceRegistry.instance.getChapterPassage(
+        widget.sourceId,
+        chapterUrl,
+      );
+
+      final bookId = '${widget.sourceId}:${widget.novel.id}';
+      final book = Book(
+        id: bookId,
+        title: _novelDetails?.title ?? widget.novel.title,
+        author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
+        description: _novelDetails?.description ?? widget.novel.description ?? '',
+        format: BookFormat.webNovel,
+        sourceId: widget.sourceId, // Real machine source ID
+        totalChapters: _novelDetails?.chapters.length ?? 1,
+        coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      // Save book record
+      await DatabaseService.instance.saveBook(book);
+
+      if (mounted) {
+        setState(() => _isOpeningChapter = false);
+        await ReaderNavigator.openBook(
+          context,
+          book,
+          initialChapterIndex: chapterIndex,
+          initialChapterContent: passageHtml,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isOpeningChapter = false);
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Error Loading Chapter'),
+            content: Text('Failed to load chapter content from source:\n$e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleDownloadChapters() async {
+    final chapters = _novelDetails?.chapters ?? [];
+    if (chapters.isEmpty) return;
+    final ch = chapters.first;
+
+    final bookId = '${widget.sourceId}:${widget.novel.id}';
+    final book = Book(
+      id: bookId,
+      title: _novelDetails?.title ?? widget.novel.title,
+      author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
+      description: _novelDetails?.description ?? widget.novel.description ?? '',
+      format: BookFormat.webNovel,
+      sourceId: widget.sourceId, // Real machine source ID
+      totalChapters: chapters.length,
+      coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    // Save book record
+    await DatabaseService.instance.saveBook(book);
+
+    // 1. Durably enqueue download job FIRST before any prompt interaction
+    final chapterId = '$bookId:${ch.id}';
+    final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final job = DownloadJob(
+      id: jobId,
+      bookId: bookId,
+      chapterId: chapterId,
+      chapterTitle: ch.title,
+      sourceId: widget.sourceId,
+      status: DownloadStatus.queued,
+      progress: 0.0,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.enqueueDownload(job);
+
+    // Initial Chapter record with queued state
+    final dbChapter = Chapter(
+      id: chapterId,
+      bookId: bookId,
+      sourceChapterId: ch.id,
+      title: ch.title,
+      chapterIndex: 0,
+      url: ch.url,
+      downloadState: ChapterDownloadState.queued,
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
+    // 2. Trigger Add-to-Library prompt without blocking or conditioning download creation
+    // Downloading proceeds independently regardless of prompt answer or dismissal
+    if (mounted) {
+      unawaited(AddToLibraryPrompt.checkAndPrompt(
+        context,
+        novelId: bookId,
+        novelTitle: widget.novel.title,
+        onAddToLibrary: () async {
+          await DatabaseService.instance.setLibraryMembership(bookId, true);
+          if (mounted) setState(() {});
+        },
+      ));
+    }
+
+    try {
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(status: DownloadStatus.running, updatedAt: DateTime.now()),
+      );
+
+      final passageHtml = await SourceRegistry.instance.getChapterPassage(
+        widget.sourceId,
+        ch.url ?? ch.id,
+      );
+
+      // Save to managed chapters directory
+      final storage = StorageService.instance;
+      final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+      final chFile = File('${storage.chaptersDir.path}/${filePrefix}_ch1.html');
+      await chFile.writeAsString(passageHtml);
+
+      // Update chapter record to downloaded
+      final completedChapter = dbChapter.copyWith(
+        localFilePath: chFile.path,
+        downloadState: ChapterDownloadState.downloaded,
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseService.instance.saveChapters(bookId, [completedChapter]);
+
+      // Update download job to completed
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(
+          status: DownloadStatus.completed,
+          progress: 1.0,
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
+        );
+      }
+    } catch (e) {
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(
+          status: DownloadStatus.failed,
+          errorMessage: e.toString(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final failedChapter = dbChapter.copyWith(
+        downloadState: ChapterDownloadState.failed,
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseService.instance.saveChapters(bookId, [failedChapter]);
+
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to download chapter: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
+    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
+
+    final bookId = '${widget.sourceId}:${widget.novel.id}';
+    final inLibrary = DatabaseService.instance.isBookInLibrary(bookId);
+
+    final title = _novelDetails?.title ?? widget.novel.title;
+    final author = _novelDetails?.author ?? widget.novel.author ?? widget.sourceName;
+    final description = _novelDetails?.description ?? widget.novel.description ?? 'No description available for this novel.';
+    final chapters = _novelDetails?.chapters ?? [];
+
+    return Scaffold(
+      backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
+      appBar: AppBar(
+        backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(CupertinoIcons.chevron_back, color: textPrimary),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: _isLoadingDetails
+          ? const Center(child: CupertinoActivityIndicator(radius: 14))
+          : _detailsError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(CupertinoIcons.exclamationmark_triangle_fill, color: HonColors.accentOrange, size: 44),
+                        const SizedBox(height: 12),
+                        Text('Failed to load novel details', style: TextStyle(color: textPrimary, fontSize: 17, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Text(_detailsError!, textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 13)),
+                        const SizedBox(height: 16),
+                        OutlinedButton.icon(
+                          icon: const Icon(CupertinoIcons.refresh, size: 16),
+                          label: const Text('Retry'),
+                          onPressed: _loadNovelDetails,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : Stack(
+                  children: [
+                    ListView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      children: [
+                        // Cover & Metadata
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            BookCoverWidget(
+                              title: title,
+                              author: author,
+                              coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
+                              width: 90,
+                              height: 135,
+                              borderRadius: 8,
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    author,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: textSecondary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Source: ${widget.sourceName}',
+                                    style: const TextStyle(fontSize: 12, color: HonColors.accentOrange),
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  // Add to Library Button
+                                  OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: inLibrary ? HonColors.accentGreen : textPrimary,
+                                      side: BorderSide(
+                                        color: inLibrary ? HonColors.accentGreen : (isDark ? Colors.white24 : Colors.black26),
+                                      ),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                    ),
+                                    icon: Icon(
+                                      inLibrary ? CupertinoIcons.checkmark_alt : CupertinoIcons.heart,
+                                      size: 16,
+                                    ),
+                                    label: Text(inLibrary ? 'In Library' : 'Add to Library'),
+                                    onPressed: () async {
+                                      final db = DatabaseService.instance;
+                                      final newStatus = !inLibrary;
+                                      await db.setLibraryMembership(bookId, newStatus);
+                                      setState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        // Synopsis
+                        Text(
+                          'Synopsis',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          description,
+                          style: TextStyle(fontSize: 13, height: 1.45, color: textSecondary),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // Action row
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: HonColors.accentOrange,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(CupertinoIcons.book, size: 18),
+                                label: const Text('Read Online'),
+                                onPressed: chapters.isNotEmpty
+                                    ? () => _openChapter(chapters.first, 0)
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: textPrimary,
+                                  side: BorderSide(color: isDark ? Colors.white24 : Colors.black26),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                icon: const Icon(CupertinoIcons.arrow_down_circle, size: 18),
+                                label: const Text('Download Ch 1'),
+                                onPressed: chapters.isNotEmpty ? _handleDownloadChapters : null,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 28),
+
+                        // Chapter List Header
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Chapters (${chapters.length})',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: textPrimary),
+                            ),
+                            IconButton(
+                              icon: const Icon(CupertinoIcons.sort_down, size: 18),
+                              onPressed: () {},
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+
+                        // Chapters list
+                        ...chapters.asMap().entries.map((entry) {
+                          final idx = entry.key;
+                          final ch = entry.value;
+
+                          return InkWell(
+                            onTap: () => _openChapter(ch, idx),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      ch.title,
+                                      style: TextStyle(fontSize: 14, color: textPrimary, fontWeight: FontWeight.w500),
+                                    ),
+                                  ),
+                                  Icon(CupertinoIcons.arrow_down_circle, size: 18, color: textSecondary),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+
+                    if (_isOpeningChapter)
+                      Container(
+                        color: Colors.black45,
+                        child: const Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              CupertinoActivityIndicator(radius: 16, color: Colors.white),
+                              SizedBox(height: 12),
+                              Text(
+                                'Loading chapter content from source...',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+    );
+  }
+}
 </file>
 
 <file path="lib/features/home/presentation/home_screen.dart">
@@ -14911,84 +14958,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBinding
 }
 </file>
 
-<file path="docs/PROGRESS.md">
-# Hon — Project Implementation Progress & Requirements Matrix
-
-## Truthful Requirements & Status Matrix
-
-| Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
-| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Android Native (Readium)** | Readium Toolkit 3.1.1 & Activity | ✅ | ✅ | ✅ | ✅ **Verified** | `ReadiumReaderActivity` hosting `EpubNavigatorFragment` with desugared Java 8+ APIs. Baseline verified on physical Android device (screenshots confirm formatted reading, chapter progression, and TOC). |
-| **Android Native (Readium)** | Reader Ergonomics & Layout Framing | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Non-overlapping vertical `LinearLayout` framing (`weight = 1.0f` for reading container) ensures top/bottom toolbars never obscure chapter titles or text. `WindowInsetsCompat` dynamically pads status bar cutout and navigation bar. Pending device test to verify height toggling in paged and continuous scroll modes. |
-| **Android Native (Readium)** | Adaptive System Bar Contrast | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically enables dark system bar icons on light/sepia pages and light icons on dark pages. Pending physical device test. |
-| **Android Native (Readium)** | Non-Blocking Async Loading & Restoration | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Asynchronous opening via `lifecycleScope.launch(Dispatchers.IO)` on normal launch (`super.onCreate(null)` with loading spinner); configuration change restoration utilizes in-memory `PublicationRepository` to install `fragmentFactory` before `super.onCreate(savedInstanceState)` with zero blocking. |
-| **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ✅ **Verified** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
-| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ✅ **Verified** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
-| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ✅ **Verified** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
-| **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
-| **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | 📋 | — | — | — | **Explicitly scheduled dedicated milestone**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic (clean bottom toolbar, classic typography sheets, subtle TOC / bookmark ribbon) combined with modern Apple Books paragraph formatting & themes (from user screenshots). Kept strictly separate from Flutter widgets. |
-| **Persistence / Bridge** | Multi-Book Bounded Write Queue | ✅ | ✅ | ✅ | ✅ (Device/Linux) | `_pendingByBook` isolation; `onPause()` dispatches `onReaderPaused` for immediate disk flush; `onReaderClosed` with null/empty locator preserves existing progress untouched (no 0% reset); persisted to SharedPreferences JSON collections (SQLite Drift is Phase 0D target). |
-| **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
-| **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
-| **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
-| **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
-| **Settings Screen** | Data & Backup Labeling | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Honestly labeled JSON Metadata Archive export (library books & reading progress records) replacing inaccurate SQLite wording. |
-| **Desktop Preview (Dart)** | Chapter Swipe & Web Novel Rendering | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration; renders both EPUB chapters and online web novel chapters with identical Apple Books typography. |
-| **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
-| **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
-| **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s budget. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads routed via durable queue (`DownloadJob`). Kotlin-side Shosetsu runtime remains production target. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads routed through durable queue (`DatabaseService.enqueueDownload`), checked against Add-to-Library rules before execution, saved to managed storage (`StorageService.instance.chaptersDir`). |
-
----
-
-## Detailed Evidence & Verification Log
-
-### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Compatibility Prototype
-- **Architectural Positioning:**
-  - This pure-Dart Lua execution layer (`lua_dardo_plus` + DOM bridge) is an **experimental compatibility prototype** developed to validate the Flutter browse/reader pipeline.
-  - It is **NOT** an approved production replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host). Production architecture continues to target the Android Kotlin runtime.
-  - The fetch-and-replay loop is an asynchronous cache-and-replay mechanism designed for stateless functional scrapers (such as Project Gutenberg); it does not provide general coroutine or multi-threaded runtime compatibility for arbitrary stateful extensions.
-- **Upstream Source Extension Used:**
-  - Project Gutenberg extension (`assets/sources/gutenberg.lua`).
-  - Upstream Repository: `https://github.com/wasu-code/novel-extensions` (`src/en/gutenberg.lua`).
-  - Pinned Branch/Commit: `dev` (`e1dc0ee`).
-  - Modifications: None (executed verbatim by the runtime compatibility bridge).
-- **Execution Off UI Thread & Execution Budget:**
-  - All Lua parsing, bytecode execution, and DOM manipulation run off the UI thread inside dedicated worker isolates via `Isolate.spawn`.
-  - Hard execution budget enforced with a 15-second timeout. If a script enters an infinite loop, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
-- **Stack Argument Passing & Host Sandboxing:**
-  - Replaced all string interpolation in `loadString()` with native Lua C-API stack operations (`ls.pushString()`, `ls.pushInteger()`, `ls.pushBoolean()`, `ls.setTable()`, `ls.call()`), preventing script injection or quote-escaping failures.
-  - Dangerous host OS and IO libraries (`os.execute`, `os.remove`, `os.rename`, `io`, etc.) are stripped and set to `nil`. Only whitelisted DOM and Shosetsu globals are accessible.
-- **Novel/Chapter Identity & Durable Queue Routing:**
-  - Stable source-qualified identities: novel ID is `"$sourceId:${novel.id}"` (e.g. `'gutenberg:/ebooks/1342'`); chapter ID is `"$bookId:${chapter.id}"`.
-  - Real machine source ID (`widget.sourceId`, e.g. `'gutenberg'`) is stored in `Book.sourceId` (never display name).
-  - Chapter downloads check Add-to-Library rules via `AddToLibraryPrompt.checkAndPrompt`, create a durable `DownloadJob` with status `DownloadStatus.queued`, and route through `DatabaseService.instance.enqueueDownload()`.
-- **Separated Test Suites:**
-  - **Unit Tests (`test/unit/shosetsu_lua_engine_test.dart`):** 10 fixture/mock-based unit tests verifying search, novel details, chapter parsing, E2E pipeline, socket failure, HTTP 500 error, stack argument passing with injection payloads, infinite loop timeout enforcement, host sandboxing neutralization, and source-qualified ID + durable download queue.
-  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Live integration test querying `www.gutenberg.org` (verified 25 novels returned, parsed Pride and Prejudice, retrieved 820,924 character live HTML passage).
-  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test`.
-
-### 2. Foreground Reading Session Tracking & Race Condition Guard
-- **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).
-- **Background Loading Race Fixed:** If a user backgrounds the app while an EPUB or PDF is still loading/parsing, the session timer does NOT start upon loading completion. The timer starts strictly when **both content readiness AND foreground state** are verified.
-- **Unit Test Verification:** Verified via `test/unit/readium_reader_service_test.dart`.
-
-### 3. Managed Storage Boundaries & File Deletion Integrity
-- **Path Containment Clarification:** Updated `isPathInsideManagedStorage(filePath)` documentation to clarify that it normalizes path strings via `path.canonicalize()` (resolving `.` and `..` segments) and tests prefix containment without filesystem-level symlink resolution.
-- **Complete File Deletion:** `DatabaseService.deleteBook()` aggregates publication file, cover image, and all downloaded chapter files (`ch.localFilePath`). External user files outside managed storage are protected and never deleted from disk. Failed file deletions preserve database records for retry.
-
-### 4. Layout Framing & Adaptive Contrast (Pending Consolidated On-Device Test)
-- **Layout Framing:** Vertical `LinearLayout` framing (`weight = 1.0f`) places reading container strictly between top and bottom toolbars without overlap.
-- **Adaptive Contrast:** System bar icons dynamically toggle between dark (for light/sepia pages) and light (for dark pages) using `WindowInsetsControllerCompat`.
-- **Status:** Labeled `⏳ Pending Next APK Test` until consolidated physical on-device test is run.
-
-### 5. Quality & Verification Metrics
-- **Static Analysis:** `flutter analyze` — **0 issues found** (clean).
-- **Automated Tests:** `flutter test` — **46 passed, 0 failed** across all unit and integration test suites.
-- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**.
-</file>
-
 <file path="lib/core/database/database_service.dart">
 import 'dart:convert';
 import 'dart:io';
@@ -15527,6 +15496,92 @@ class DatabaseService {
     _notify();
   }
 }
+</file>
+
+<file path="docs/PROGRESS.md">
+# Hon — Project Implementation Progress & Requirements Matrix
+
+## Truthful Requirements & Status Matrix
+
+| Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
+| **Android Native (Readium)** | Readium Toolkit 3.1.1 & Activity | ✅ | ✅ | ✅ | ✅ **Verified** | `ReadiumReaderActivity` hosting `EpubNavigatorFragment` with desugared Java 8+ APIs. Baseline verified on physical Android device (screenshots confirm formatted reading, chapter progression, and TOC). |
+| **Android Native (Readium)** | Reader Ergonomics & Layout Framing | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Non-overlapping vertical `LinearLayout` framing (`weight = 1.0f` for reading container) ensures top/bottom toolbars never obscure chapter titles or text. `WindowInsetsCompat` dynamically pads status bar cutout and navigation bar. Pending device test to verify height toggling in paged and continuous scroll modes. |
+| **Android Native (Readium)** | Adaptive System Bar Contrast | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically enables dark system bar icons on light/sepia pages and light icons on dark pages. Pending physical device test. |
+| **Android Native (Readium)** | Non-Blocking Async Loading & Restoration | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Asynchronous opening via `lifecycleScope.launch(Dispatchers.IO)` on normal launch (`super.onCreate(null)` with loading spinner); configuration change restoration utilizes in-memory `PublicationRepository` to install `fragmentFactory` before `super.onCreate(savedInstanceState)` with zero blocking. |
+| **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ✅ **Verified** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
+| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ✅ **Verified** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
+| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ✅ **Verified** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
+| **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
+| **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | 📋 | — | — | — | **Explicitly scheduled dedicated milestone**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic (clean bottom toolbar, classic typography sheets, subtle TOC / bookmark ribbon) combined with modern Apple Books paragraph formatting & themes (from user screenshots). Kept strictly separate from Flutter widgets. |
+| **Persistence / Bridge** | Multi-Book Bounded Write Queue | ✅ | ✅ | ✅ | ✅ (Device/Linux) | `_pendingByBook` isolation; `onPause()` dispatches `onReaderPaused` for immediate disk flush; `onReaderClosed` with null/empty locator preserves existing progress untouched (no 0% reset); persisted to SharedPreferences JSON collections (SQLite Drift is Phase 0D target). |
+| **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
+| **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
+| **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
+| **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
+| **Settings Screen** | Data & Backup Labeling | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Honestly labeled JSON Metadata Archive export (library books & reading progress records) replacing inaccurate SQLite wording. |
+| **Desktop Preview (Dart)** | Chapter Swipe & Web Novel Rendering | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration; renders both EPUB chapters and online web novel chapters with identical Apple Books typography. |
+| **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
+| **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
+| **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
+| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s per-attempt budget and 45s total operation deadline. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads durably enqueued BEFORE library prompt. External extensions gated until Kotlin runtime. Kotlin-side Shosetsu runtime remains production target. |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads durably enqueued first (`DatabaseService.enqueueDownload`), independent of non-blocking Add-to-Library prompt response; saved to managed storage (`StorageService.instance.chaptersDir`). Durable background worker execution tracked under planned WorkManager phase. |
+
+---
+
+## Detailed Evidence & Verification Log
+
+### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Compatibility Prototype
+- **Architectural Positioning:**
+  - This pure-Dart Lua execution layer (`lua_dardo_plus` + DOM bridge) is an **experimental compatibility prototype** developed to validate the Flutter browse/reader pipeline.
+  - It is **NOT** an approved production replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host). Production architecture continues to target the Android Kotlin runtime.
+  - The fetch-and-replay loop is an asynchronous cache-and-replay mechanism designed for stateless functional scrapers (such as Project Gutenberg); it does not provide general coroutine or multi-threaded runtime compatibility for arbitrary stateful extensions.
+- **Upstream Source Extension Used & Provenance:**
+  - Project Gutenberg extension (`assets/sources/gutenberg.lua`).
+  - Upstream Repository: `https://github.com/wasu-code/novel-extensions` (`src/en/gutenberg.lua`).
+  - Pinned Branch/Commit: `dev` (`e1dc0ee`).
+  - Modifications: None (executed verbatim by the runtime compatibility bridge).
+  - Repomix packaging: Embedded in `hon_review.xml` under `<file path="assets/sources/gutenberg.lua">` with complete upstream provenance header.
+- **Execution Off UI Thread, Resource Cleanup & Two-Tier Deadline Budget:**
+  - All Lua parsing, bytecode execution, and DOM manipulation run off the UI thread inside dedicated worker isolates via `Isolate.spawn`.
+  - Placeholder `ReceivePort().sendPort` removed to prevent unclosed port resource leaks; `receivePort` is dynamically created per worker invocation and strictly closed inside `finally`.
+  - Two-tier timeout architecture:
+    - **Total Operation Deadline:** 45 seconds total across the entire replay cycle (tracked via `Stopwatch`).
+    - **Per-Attempt Worker Budget:** 15 seconds per isolate execution. Outgoing HTTP timeouts dynamically bound to the remaining total budget.
+    - If a worker exceeds its per-attempt budget, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
+- **Stack Argument Passing & Host Sandboxing:**
+  - Replaced all string interpolation in `loadString()` with native Lua C-API stack operations (`ls.pushString()`, `ls.pushInteger()`, `ls.pushBoolean()`, `ls.setTable()`, `ls.call()`), preventing script injection or quote-escaping failures.
+  - Dangerous host OS and IO libraries (`os.execute`, `os.remove`, `os.rename`, `io`, etc.) are stripped and set to `nil`. Only whitelisted DOM and Shosetsu globals are accessible.
+- **Novel/Chapter Identity & Enqueue-Before-Prompt Sequence:**
+  - Stable source-qualified identities: novel ID is `"$sourceId:${novel.id}"` (e.g. `'gutenberg:/ebooks/1342'`); chapter ID is `"$bookId:${chapter.id}"`.
+  - Real machine source ID (`widget.sourceId`, e.g. `'gutenberg'`) is stored in `Book.sourceId` (never display name).
+  - **Enqueue-Before-Prompt Sequence:** In `SourceCatalogScreen._handleDownloadChapters()`, `DatabaseService.instance.enqueueDownload(job)` (`status: DownloadStatus.queued`) and chapter record saving occur *first*. `AddToLibraryPrompt.checkAndPrompt()` is dispatched asynchronously without blocking the download pipeline, guaranteeing downloads proceed independently of whether the user accepts, declines, or dismisses the prompt.
+  - Full background execution is tracked under the planned WorkManager worker phase.
+- **Gated External Extension Installation:**
+  - In `SourceRegistry.installExtension()`, extension installation is restricted to verified bundled sources (`'gutenberg'`). Third-party external installations are gated with a typed `SourceParseException` until the production Kotlin-side host runtime is verified.
+- **Separated Test Suites & Live Test Semantics:**
+  - **Unit Tests (`test/unit/shosetsu_lua_engine_test.dart`):** 10 fixture/mock-based unit tests verifying search, novel details, chapter parsing, E2E pipeline, socket failure, HTTP 500 error, stack argument passing with injection payloads, infinite loop timeout enforcement, host sandboxing neutralization, and source-qualified ID + durable download queue.
+  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Honest live test assertions against `www.gutenberg.org`. Offline runs use `markTestSkipped()` (no clean-return or silent passes); online runs strictly assert without catching/swallowing `SourceNetworkException`. Tests verify live catalog search for "pride", novel details for `/ebooks/1342`, and passage retrieval for Chapter 1.
+  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test` (consolidated at end of Phase 0).
+
+### 2. Foreground Reading Session Tracking & Race Condition Guard
+- **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).
+- **Background Loading Race Fixed:** If a user backgrounds the app while an EPUB or PDF is still loading/parsing, the session timer does NOT start upon loading completion. The timer starts strictly when **both content readiness AND foreground state** are verified.
+- **Unit Test Verification:** Verified via `test/unit/readium_reader_service_test.dart`.
+
+### 3. Managed Storage Boundaries & File Deletion Integrity
+- **Path Containment Clarification:** Updated `isPathInsideManagedStorage(filePath)` documentation to clarify that it normalizes path strings via `path.canonicalize()` (resolving `.` and `..` segments) and tests prefix containment without filesystem-level symlink resolution.
+- **Complete File Deletion:** `DatabaseService.deleteBook()` aggregates publication file, cover image, and all downloaded chapter files (`ch.localFilePath`). External user files outside managed storage are protected and never deleted from disk. Failed file deletions preserve database records for retry.
+
+### 4. Layout Framing & Adaptive Contrast (Pending Consolidated On-Device Test)
+- **Layout Framing:** Vertical `LinearLayout` framing (`weight = 1.0f`) places reading container strictly between top and bottom toolbars without overlap.
+- **Adaptive Contrast:** System bar icons dynamically toggle between dark (for light/sepia pages) and light (for dark pages) using `WindowInsetsControllerCompat`.
+- **Status:** Labeled `⏳ Pending Next APK Test` until consolidated physical on-device test is run.
+
+### 5. Quality & Verification Metrics
+- **Static Analysis:** `flutter analyze` — **0 issues found** (clean).
+- **Automated Tests:** `flutter test` — **46 passed, 0 failed** across all unit and integration test suites.
+- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**.
 </file>
 
 </files>

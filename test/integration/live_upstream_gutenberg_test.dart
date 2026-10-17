@@ -36,61 +36,53 @@ void main() {
   group('Live Network Integration — Upstream Project Gutenberg Extension', () {
     test('Live Search: queries live Project Gutenberg catalog for "pride"', () async {
       if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;
       }
 
-      try {
-        final results = await engine.search(gutenbergScript, 'pride', page: 0);
-        expect(results, isNotEmpty);
-        // ignore: avoid_print
-        print('Live search returned ${results.length} novels from Project Gutenberg.');
-        expect(results.any((n) => n.title.toLowerCase().contains('pride')), isTrue);
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
+      // Must succeed against live servers without catching or swallowing errors
+      final results = await engine.search(gutenbergScript, 'pride', page: 0);
+      expect(results, isNotEmpty);
+      expect(results.length, greaterThanOrEqualTo(1));
+      expect(
+        results.any((n) => n.title.toLowerCase().contains('pride')),
+        isTrue,
+        reason: 'Live Gutenberg search results must contain novels matching query "pride"',
+      );
     }, timeout: const Timeout(Duration(seconds: 45)));
 
     test('Live Novel Details: parses Pride and Prejudice (/ebooks/1342) live from Gutenberg', () async {
       if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;
       }
 
-      try {
-        final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
-        expect(details.title, isNotEmpty);
-        expect(details.chapters, isNotEmpty);
-        // ignore: avoid_print
-        print('Live novel details loaded: "${details.title}" with ${details.chapters.length} chapters.');
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
+      // Must succeed against live servers without catching or swallowing errors
+      final details = await engine.parseNovel(gutenbergScript, '/ebooks/1342', loadChapters: true);
+      expect(details.title, contains('Pride and Prejudice'));
+      expect(details.author, contains('Austen'));
+      expect(details.chapters, isNotEmpty);
+      expect(details.chapters.first.url, isNotEmpty);
     }, timeout: const Timeout(Duration(seconds: 45)));
 
     test('Live Readable Passage: retrieves live Chapter 1 HTML from Gutenberg', () async {
       if (!isOnline) {
-        // ignore: avoid_print
-        print('SKIPPING: No internet connectivity to www.gutenberg.org');
+        markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;
       }
 
-      try {
-        final passage = await engine.getPassage(
-          gutenbergScript,
-          '/cache/epub/1342/pg1342-images.html',
-        );
-        expect(passage, isNotEmpty);
-        // ignore: avoid_print
-        print('Live passage retrieved: ${passage.length} characters.');
-      } on SourceNetworkException catch (e) {
-        // ignore: avoid_print
-        print('Live network request encountered: $e (skipping live assertion)');
-      }
+      // Must succeed against live servers without catching or swallowing errors
+      final passage = await engine.getPassage(
+        gutenbergScript,
+        '/cache/epub/1342/pg1342-images.html',
+      );
+      expect(passage, isNotEmpty);
+      expect(passage.length, greaterThan(1000));
+      expect(passage, contains('Chapter I.'));
+      expect(
+        passage,
+        contains('truth universally acknowledged'),
+      );
     }, timeout: const Timeout(Duration(seconds: 45)));
   });
 }

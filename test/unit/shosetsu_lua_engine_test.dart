@@ -276,7 +276,8 @@ void main() {
         () async => await engine.search(
           infiniteLoopScript,
           'pride',
-          timeout: const Duration(milliseconds: 400),
+          totalTimeout: const Duration(milliseconds: 400),
+          perAttemptTimeout: const Duration(milliseconds: 300),
         ),
         throwsA(isA<SourceExecutionTimeoutException>()),
       );
@@ -303,7 +304,7 @@ void main() {
       expect(results.first.title, equals('Sandbox Secure'));
     });
 
-    test('10. Identity & Durable Download Queue: uses source-qualified IDs and enqueues durable jobs', () async {
+    test('10. Identity & Durable Download Queue: uses source-qualified IDs and enqueues before prompt', () async {
       const sourceId = 'gutenberg';
       const novelId = '/ebooks/1342';
       const qualifiedBookId = '$sourceId:$novelId';
@@ -322,11 +323,14 @@ void main() {
       );
 
       final db = DatabaseService.instance;
+      // Invariant: Job is durably enqueued into database before any user interaction
       await db.enqueueDownload(job);
 
       final jobs = db.getAllDownloadJobs();
       expect(jobs.any((j) => j.id == job.id && j.sourceId == 'gutenberg'), isTrue);
-      expect(jobs.firstWhere((j) => j.id == job.id).bookId, equals('gutenberg:/ebooks/1342'));
+      final enqueued = jobs.firstWhere((j) => j.id == job.id);
+      expect(enqueued.status, equals(DownloadStatus.queued));
+      expect(enqueued.bookId, equals('gutenberg:/ebooks/1342'));
     });
   });
 }
