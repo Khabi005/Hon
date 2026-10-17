@@ -9,12 +9,13 @@
 | **Android Native (Readium)** | Adaptive System Bar Contrast | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically enables dark system bar icons on light/sepia pages and light icons on dark pages. Pending physical device test. |
 | **Android Native (Readium)** | Non-Blocking Async Loading & Restoration | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Asynchronous opening via `lifecycleScope.launch(Dispatchers.IO)` on normal launch (`super.onCreate(null)` with loading spinner); configuration change restoration utilizes in-memory `PublicationRepository` to install `fragmentFactory` before `super.onCreate(savedInstanceState)` with zero blocking. |
 | **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ✅ **Verified** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
-| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ✅ **Verified** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
-| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ✅ **Verified** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
+| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
+| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
 | **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
-| **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | 📋 | — | — | — | **Explicitly scheduled dedicated milestone**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic (clean bottom toolbar, classic typography sheets, subtle TOC / bookmark ribbon) combined with modern Apple Books paragraph formatting & themes (from user screenshots). Kept strictly separate from Flutter widgets. |
-| **Persistence / Bridge** | Multi-Book Bounded Write Queue | ✅ | ✅ | ✅ | ✅ (Device/Linux) | `_pendingByBook` isolation; `onPause()` dispatches `onReaderPaused` for immediate disk flush; `onReaderClosed` with null/empty locator preserves existing progress untouched (no 0% reset); persisted to SharedPreferences JSON collections (SQLite Drift is Phase 0D target). |
+| **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Milestone Implemented**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic: frosted rounded action pills (`✕`, `≡`, `Aa`), centered scrubber pill showing chapter title and percentage, Apple Books typography bottom sheet with "A / A" font size steppers, 3 reference theme cards (Light, Sepia, Dark) with selection borders, and segmented Paged vs Scroll switcher. |
+| **Persistence / Bridge (Drift SQLite)** | Drift Database & Migration (Phase 0D) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Type-safe SQLite persistence via Drift (`app_database.dart`) with `NativeDatabase.createInBackground(hon.sqlite)`. Seamless automatic migration (`_migrateFromSharedPreferencesIfNeeded`) safely imports existing SharedPreferences JSON stores into SQLite on first launch. High-performance in-memory cache preserves synchronous API compatibility. Verified via `drift_persistence_migration_test.dart`. |
 | **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
+| **Downloads (WorkManager)** | Background Download Worker & Recovery (Phase 0E) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Android native WorkManager worker (`HonDownloadWorker.kt`) runs out-of-process downloads with exponential backoff and network constraints. `HonDownloadManager.recoverInterruptedDownloads()` scans for downloads interrupted by process termination, resets `running` jobs to `queued`, and enqueues recovery. Verified via `download_recovery_test.dart`. |
 | **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
 | **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
 | **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
@@ -23,61 +24,56 @@
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Upstream Shosetsu Lua Engine Prototype (Phase 0C) | ⚠️ Prototype Implemented | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Experimental compatibility prototype**: pure-Dart Lua host (`lua_dardo_plus`) with DOM bridge, sandboxing, and worker isolate offloading. Executes upstream Project Gutenberg extension (`assets/sources/gutenberg.lua`, commit `e1dc0ee`). Stack argument passing eliminates injection. Off-UI-thread execution with 15s per-attempt budget and 45s total operation deadline. Stable source-qualified IDs (`$sourceId:${novel.id}`). Downloads durably enqueued BEFORE library prompt. External extensions gated until Kotlin runtime. Kotlin-side Shosetsu runtime remains production target. |
+| **Browse (Sources)** | Production Kotlin-Side Shosetsu Integration (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Production Architecture Complete**: Android native Kotlin engine (`ShosetsuKotlinEngine.kt` + `ShosetsuBridge.kt`) executing Shosetsu Lua extensions via sandboxed Luaj (`org.luaj:luaj-jse`), Jsoup DOM parser, and OkHttp. Connected to Flutter via MethodChannel (`com.hon.reader/shosetsu_native`) in `SourceRegistry`. Clean fallback to Dart isolate worker on desktop/headless test environments. |
 | **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads durably enqueued first (`DatabaseService.enqueueDownload`), independent of non-blocking Add-to-Library prompt response; saved to managed storage (`StorageService.instance.chaptersDir`). Durable background worker execution tracked under planned WorkManager phase. |
 
 ---
 
 ## Detailed Evidence & Verification Log
 
-### 1. Phase 0C: Upstream Shosetsu Lua Extension Engine Compatibility Prototype
-- **Architectural Positioning:**
-  - This pure-Dart Lua execution layer (`lua_dardo_plus` + DOM bridge) is an **experimental compatibility prototype** developed to validate the Flutter browse/reader pipeline.
-  - It is **NOT** an approved production replacement for the agreed Android Kotlin-side Shosetsu integration (`kotlin-lib` native host). Production architecture continues to target the Android Kotlin runtime.
-  - The fetch-and-replay loop is an asynchronous cache-and-replay mechanism designed for stateless functional scrapers (such as Project Gutenberg); it does not provide general coroutine or multi-threaded runtime compatibility for arbitrary stateful extensions.
-- **Upstream Source Extension Used & Provenance:**
-  - Project Gutenberg extension (`assets/sources/gutenberg.lua`).
-  - Upstream Repository: `https://github.com/wasu-code/novel-extensions` (`src/en/gutenberg.lua`).
-  - Pinned Branch/Commit: `dev` (`e1dc0ee`).
-  - Modifications: None (executed verbatim by the runtime compatibility bridge).
-  - Repomix packaging: Embedded in `hon_review.xml` under `<file path="assets/sources/gutenberg.lua">` with complete upstream provenance header.
-- **Execution Off UI Thread, Resource Cleanup & Two-Tier Deadline Budget:**
-  - All Lua parsing, bytecode execution, and DOM manipulation run off the UI thread inside dedicated worker isolates via `Isolate.spawn`.
-  - Placeholder `ReceivePort().sendPort` removed to prevent unclosed port resource leaks; `receivePort` is dynamically created per worker invocation and strictly closed inside `finally`.
-  - Two-tier timeout architecture:
-    - **Total Operation Deadline:** 45 seconds total across the entire replay cycle (tracked via `Stopwatch`).
-    - **Per-Attempt Worker Budget:** 15 seconds per isolate execution. Outgoing HTTP timeouts dynamically bound to the remaining total budget.
-    - If a worker exceeds its per-attempt budget, the isolate is terminated immediately via `isolate.kill(priority: Isolate.immediate)` and throws `SourceExecutionTimeoutException`.
-- **Stack Argument Passing & Host Sandboxing:**
-  - Replaced all string interpolation in `loadString()` with native Lua C-API stack operations (`ls.pushString()`, `ls.pushInteger()`, `ls.pushBoolean()`, `ls.setTable()`, `ls.call()`), preventing script injection or quote-escaping failures.
-  - Dangerous host OS and IO libraries (`os.execute`, `os.remove`, `os.rename`, `io`, etc.) are stripped and set to `nil`. Only whitelisted DOM and Shosetsu globals are accessible.
-- **Novel/Chapter Identity & Enqueue-Before-Prompt Sequence:**
-  - Stable source-qualified identities: novel ID is `"$sourceId:${novel.id}"` (e.g. `'gutenberg:/ebooks/1342'`); chapter ID is `"$bookId:${chapter.id}"`.
-  - Real machine source ID (`widget.sourceId`, e.g. `'gutenberg'`) is stored in `Book.sourceId` (never display name).
-  - **Enqueue-Before-Prompt Sequence:** In `SourceCatalogScreen._handleDownloadChapters()`, `DatabaseService.instance.enqueueDownload(job)` (`status: DownloadStatus.queued`) and chapter record saving occur *first*. `AddToLibraryPrompt.checkAndPrompt()` is dispatched asynchronously without blocking the download pipeline, guaranteeing downloads proceed independently of whether the user accepts, declines, or dismisses the prompt.
-  - Full background execution is tracked under the planned WorkManager worker phase.
-- **Gated External Extension Installation:**
-  - In `SourceRegistry.installExtension()`, extension installation is restricted to verified bundled sources (`'gutenberg'`). Third-party external installations are gated with a typed `SourceParseException` until the production Kotlin-side host runtime is verified.
-- **Separated Test Suites & Live Test Semantics:**
-  - **Unit Tests (`test/unit/shosetsu_lua_engine_test.dart`):** 10 fixture/mock-based unit tests verifying search, novel details, chapter parsing, E2E pipeline, socket failure, HTTP 500 error, stack argument passing with injection payloads, infinite loop timeout enforcement, host sandboxing neutralization, and source-qualified ID + durable download queue.
-  - **Live Network Integration Tests (`test/integration/live_upstream_gutenberg_test.dart`):** Honest live test assertions against `www.gutenberg.org`. Offline runs use `markTestSkipped()` (no clean-return or silent passes); online runs strictly assert without catching/swallowing `SourceNetworkException`. Tests verify live catalog search for "pride", novel details for `/ebooks/1342`, and passage retrieval for Chapter 1.
-  - **Physical Device Runtime:** Explicitly labeled `⏳ Pending Next APK Test` (consolidated at end of Phase 0).
+### 1. Phase 0C: Native Kotlin-Side Shosetsu Engine & MethodChannel Integration
+- **Architectural Completion:**
+  - Integrated native Android Kotlin host runtime: `android/app/src/main/kotlin/com/hon/reader/hon/shosetsu/ShosetsuKotlinEngine.kt` and `ShosetsuBridge.kt`.
+  - Sandboxed Luaj (`org.luaj:luaj-jse:3.0.1`) strips host OS, IO, and Java reflection globals.
+  - Implements Shosetsu extension environment:
+    - Global `Require("FilterOptions")` and `Require("url")`.
+    - Real network `GET()` and `POST()` executing via `OkHttpClient`.
+    - Rich DOM querying using `org.jsoup:jsoup:1.18.1`, exposing `.select()`, `.text()`, `.attr()`, `.first()`, `.last()`, and `.html()` on responses and elements.
+  - Flutter integration in `lib/core/sources/native_shosetsu_bridge.dart` and `SourceRegistry`:
+    - On Android, routes catalog search, novel details, and passage retrieval directly to the native Kotlin engine.
+    - On desktop and headless unit test environments, falls back cleanly to the pure-Dart Lua engine.
 
-### 2. Foreground Reading Session Tracking & Race Condition Guard
-- **Lifecycle Guard:** Tracked `_isForegrounded` state across `ReadiumReaderService` (native Android), `PdfReaderScreen`, and `ReaderScreen` (Dart reader).
-- **Background Loading Race Fixed:** If a user backgrounds the app while an EPUB or PDF is still loading/parsing, the session timer does NOT start upon loading completion. The timer starts strictly when **both content readiness AND foreground state** are verified.
-- **Unit Test Verification:** Verified via `test/unit/readium_reader_service_test.dart`.
+### 2. Phase 0D: Drift (SQLite) Persistence & Seamless SharedPreferences Migration
+- **Drift SQLite Architecture:**
+  - Implemented `lib/core/database/app_database.dart` with Drift 2.34.4 and `sqlite3_flutter_libs 0.6.0+eol`.
+  - Tables: `BooksTable`, `LibraryEntriesTable`, `ChaptersTable`, `DownloadJobsTable`, `ReadingProgressTable`, `BookmarksTable`, `AppSettingsTable`.
+  - Runs in background isolate via `NativeDatabase.createInBackground(hon.sqlite)`, with automatic memory fallback for headless testing.
+- **Seamless Migration:**
+  - `_migrateFromSharedPreferencesIfNeeded()` checks if legacy JSON stores exist in SharedPreferences (`hon_books`, `hon_library`, `hon_chapters`, `hon_progress`, `hon_downloads`, `hon_bookmarks`).
+  - Automatically imports all legacy records into Drift in a single atomic database batch transaction on first run.
+  - Verified via dedicated test suite: `test/unit/drift_persistence_migration_test.dart` (2/2 passing).
 
-### 3. Managed Storage Boundaries & File Deletion Integrity
-- **Path Containment Clarification:** Updated `isPathInsideManagedStorage(filePath)` documentation to clarify that it normalizes path strings via `path.canonicalize()` (resolving `.` and `..` segments) and tests prefix containment without filesystem-level symlink resolution.
-- **Complete File Deletion:** `DatabaseService.deleteBook()` aggregates publication file, cover image, and all downloaded chapter files (`ch.localFilePath`). External user files outside managed storage are protected and never deleted from disk. Failed file deletions preserve database records for retry.
+### 3. Phase 0E: Android WorkManager Download Recovery & Background Worker
+- **WorkManager Background Execution:**
+  - Implemented `android/app/src/main/kotlin/com/hon/reader/hon/HonDownloadWorker.kt` extending `CoroutineWorker` from `androidx.work:work-runtime-ktx:2.9.1`.
+  - Background downloads run out-of-process with exponential backoff (15s) and network constraints. Downloads write to atomic `.tmp` files and update the SQLite database upon completion.
+  - Interfaced with Flutter via `HonDownloadManagerBridge.kt` and `lib/core/downloads/hon_download_manager.dart`.
+- **Process Termination Recovery:**
+  - `HonDownloadManager.recoverInterruptedDownloads()` executes on app startup.
+  - Detects any job left in `DownloadStatus.running` from an earlier terminated process, resets it to `DownloadStatus.queued` in `DatabaseService` with an honest recovery message, and re-schedules execution with WorkManager.
+  - Verified via dedicated test suite: `test/unit/download_recovery_test.dart` (1/1 passing).
 
-### 4. Layout Framing & Adaptive Contrast (Pending Consolidated On-Device Test)
-- **Layout Framing:** Vertical `LinearLayout` framing (`weight = 1.0f`) places reading container strictly between top and bottom toolbars without overlap.
-- **Adaptive Contrast:** System bar icons dynamically toggle between dark (for light/sepia pages) and light (for dark pages) using `WindowInsetsControllerCompat`.
-- **Status:** Labeled `⏳ Pending Next APK Test` until consolidated physical on-device test is run.
+### 4. Phase 0-ReaderUI: Native Android Reader Classic Apple Books Design Pass
+- **Layout & Controls Redesign:**
+  - `ReadiumReaderActivity.kt` updated to Classic Apple Books aesthetic across top bar, bottom scrubber, appearance dialog, and table of contents.
+  - Top bar features circular action pills (`✕`, `≡`, `Aa`), refined title, and dynamic theme backgrounds.
+  - Bottom bar features a centered Apple Books progress scrubber pill showing chapter title and percentage (`14% • Chapter 1`), framed by subtle navigation buttons (`❮ Prev`, `Next ❯`).
+  - Appearance dialog (`Aa`) redesigned with Apple Books typography stepping ("A / A" buttons with centered percentage), 3 reference theme cards (Light, Sepia, Dark) with selection indicator borders, and segmented Paged vs Scroll switcher.
+  - Table of Contents sheet matches the active theme with rounded card framing, recursive depth indentation, and active chapter highlights.
+  - Preserves all layout framing (weight 1.0f non-overlapping middle container) and adaptive system bar contrast.
 
 ### 5. Quality & Verification Metrics
-- **Static Analysis:** `flutter analyze` — **0 issues found** (clean).
-- **Automated Tests:** `flutter test` — **46 passed, 0 failed** across all unit and integration test suites.
-- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**.
+- **Static Analysis:** `flutter analyze` — **0 issues found** (clean across all files).
+- **Automated Tests:** `flutter test` — **49 passed, 0 failed** across all unit and integration test suites.
+- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**. Output: `build/app/outputs/flutter-apk/app-debug.apk` (213MB).
+- **Physical Device Acceptance:** Marked **⏳ Pending User Device Testing** per milestone agreement before proceeding to Phase 1.
