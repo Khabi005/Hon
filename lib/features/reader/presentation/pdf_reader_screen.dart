@@ -24,7 +24,7 @@ class PdfReaderScreen extends StatefulWidget {
   State<PdfReaderScreen> createState() => _PdfReaderScreenState();
 }
 
-class _PdfReaderScreenState extends State<PdfReaderScreen> {
+class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingObserver {
   PdfControllerPinch? _pinchController;
   PdfController? _flipController;
 
@@ -40,11 +40,33 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   Offset? _pointerDownPos;
   DateTime? _pointerDownTime;
+  DateTime? _sessionStartTime;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _sessionStartTime = DateTime.now();
     _initPdf();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _flushReadingTime();
+    } else if (state == AppLifecycleState.resumed) {
+      _sessionStartTime = DateTime.now();
+    }
+  }
+
+  void _flushReadingTime() {
+    if (_sessionStartTime != null) {
+      final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
+      if (elapsed > 0) {
+        DatabaseService.instance.addReadingTime(elapsed);
+      }
+      _sessionStartTime = DateTime.now();
+    }
   }
 
   Future<void> _initPdf() async {
@@ -331,6 +353,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _flushReadingTime();
     _pinchController?.dispose();
     _flipController?.dispose();
     super.dispose();

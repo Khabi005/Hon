@@ -398,6 +398,103 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     );
   }
 
+  void _showBookOptionsSheet(BuildContext context, Book book) {
+    final messenger = ScaffoldMessenger.of(context);
+    showCupertinoModalPopup(
+      context: context,
+      builder: (ctx) => CupertinoActionSheet(
+        title: Text(
+          book.title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        message: Text(book.author.isNotEmpty ? book.author : 'Library Book'),
+        actions: [
+          CupertinoActionSheetAction(
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(CupertinoIcons.minus_circle, size: 20),
+                SizedBox(width: 8),
+                Text('Remove from Library'),
+              ],
+            ),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await DatabaseService.instance.removeFromLibrary(book.id);
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text('Removed "${book.title}" from Library (files kept).'),
+                  action: SnackBarAction(
+                    label: 'Undo',
+                    onPressed: () {
+                      DatabaseService.instance.setLibraryMembership(book.id, true);
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(CupertinoIcons.trash, size: 20, color: CupertinoColors.destructiveRed),
+                SizedBox(width: 8),
+                Text('Remove from Library and Delete'),
+              ],
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _confirmDeleteBook(context, book);
+            },
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          child: const Text('Cancel'),
+          onPressed: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteBook(BuildContext context, Book book) {
+    final messenger = ScaffoldMessenger.of(context);
+    showCupertinoDialog(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('Remove from Library and Delete?'),
+        content: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(
+            'This will remove "${book.title}" from your library and permanently delete all downloaded files from your device. This action cannot be undone.',
+          ),
+        ),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(ctx).pop(),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Delete'),
+            onPressed: () async {
+              Navigator.of(ctx).pop();
+              await DatabaseService.instance.deleteBook(book.id);
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text('Removed and deleted "${book.title}".'),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGridItem(Book book) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final prog = DatabaseService.instance.getProgress(book.id);
@@ -406,10 +503,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
     return GestureDetector(
       onTap: () => ReaderNavigator.openBook(context, book),
+      onLongPress: () => _showBookOptionsSheet(context, book),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Tactile cover with chapter count badge on top right
+          // Tactile cover with chapter count badge on top right and options button
           Expanded(
             child: Stack(
               children: [
@@ -418,6 +516,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                   author: book.author,
                   coverPath: book.coverPath,
                   borderRadius: 6,
+                ),
+                // Options button on top-left of cover
+                Positioned(
+                  top: 6,
+                  left: 6,
+                  child: GestureDetector(
+                    onTap: () => _showBookOptionsSheet(context, book),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.68),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        CupertinoIcons.ellipsis,
+                        size: 13,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
                 // Chapter Count Badge in top-right corner (matching reference screenshot)
                 if (totalChapters > 0)
@@ -491,6 +609,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: InkWell(
         onTap: () => ReaderNavigator.openBook(context, book),
+        onLongPress: () => _showBookOptionsSheet(context, book),
         borderRadius: BorderRadius.circular(12),
         child: Row(
           children: [
@@ -539,10 +658,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 ],
               ),
             ),
-            Icon(
-              CupertinoIcons.chevron_right,
-              size: 16,
-              color: isDark ? Colors.white38 : Colors.black38,
+            IconButton(
+              icon: const Icon(CupertinoIcons.ellipsis_vertical, size: 18),
+              color: isDark ? Colors.white54 : Colors.black45,
+              onPressed: () => _showBookOptionsSheet(context, book),
             ),
           ],
         ),

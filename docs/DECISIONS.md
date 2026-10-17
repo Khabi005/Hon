@@ -69,5 +69,12 @@
     1. Framing: Top and bottom toolbars are placed in a non-overlapping vertical `LinearLayout` with the fragment container given `weight = 1.0f` and `WindowInsetsCompat` padding. When controls are visible, chapter titles and bottom text are never obscured.
     2. System Bar Contrast: In light and sepia reading modes, `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically sets dark status-bar icons so indicators remain legible against light page backgrounds.
     3. Typography & Spacing: Publisher CSS margins and text alignment (e.g., `margin: 0 0 30pt;`) are preserved by default rather than globally stripped, respecting intentional publisher formatting.
-  - The visual redesign of native Kotlin reader controls (translucent floating frosted bars, Apple Books iOS 18 typography sheets, smooth spring animations) is tracked as a dedicated milestone: **Phase 0B: Native Android Reader Apple Books UI Redesign**.
+  - The visual redesign of native Kotlin reader controls is tracked as a dedicated milestone: **Phase 0-ReaderUI: Native Android Reader Apple Books Design Pass (Classic Apple Books aesthetic + modern paragraph formatting & typography)**.
+    - References approved: Classic Apple Books overall aesthetic (clean bottom toolbar, classic typography sheets, subtle TOC / bookmark ribbon) combined with modern Apple Books paragraph formatting & themes (from user screenshots).
+
+## ADR-009: Library Removal & Deletion Semantics
+- **Decision:** Provide two distinct, explicit actions for removing books from the Library screen:
+  1. **"Remove from Library"**: Sets `isInLibrary = false`. Preserves the book record, reading progress, and all downloaded chapter/file data on disk. Available with quick Undo option.
+  2. **"Remove from Library and Delete"**: Requires explicit user confirmation dialog. Permanently deletes the local EPUB/PDF file and local cover from disk, purges database entries, and cleans up associated download jobs.
+- **Reading Minutes Tracking**: Foreground reader sessions in Readium (`ReadiumReaderActivity`), `PdfReaderScreen`, and `ReaderScreen` accumulate active seconds and dynamically increment daily reading minutes in `DatabaseService` (`addReadingTime`).
 

@@ -44,6 +44,9 @@ class ReadiumReaderService {
   static void Function(String bookId)? onReadyCallback;
   static void Function(String bookId, double totalProgression)? onClosedCallback;
 
+  // Active foreground session time tracking
+  static DateTime? _activeSessionStartTime;
+
   static bool get isAndroidNativeSupported => Platform.isAndroid;
 
   /// Ensures native-to-Dart locator updates are handled and persisted with bounded debounced disk I/O
@@ -85,6 +88,7 @@ class ReadiumReaderService {
           if (args != null) {
             final bookId = args['bookId'] as String? ?? '';
             final reqId = args['requestId'] as String? ?? '';
+            _activeSessionStartTime = DateTime.now();
             lastErrorNotifier.value = null;
             onReadyCallback?.call(bookId);
 
@@ -134,6 +138,15 @@ class ReadiumReaderService {
             final progression = (args['totalProgression'] as num?)?.toDouble() ??
                 (args['progression'] as num?)?.toDouble();
 
+            // Accumulate active foreground reading time
+            if (_activeSessionStartTime != null) {
+              final elapsed = DateTime.now().difference(_activeSessionStartTime!).inSeconds;
+              if (elapsed > 0) {
+                DatabaseService.instance.addReadingTime(elapsed);
+              }
+              _activeSessionStartTime = DateTime.now();
+            }
+
             if (bookId.isNotEmpty && locatorJson != null && locatorJson.trim().isNotEmpty) {
               final existing = DatabaseService.instance.getProgress(bookId);
               final updated = (existing ?? ReadingProgress(
@@ -159,6 +172,15 @@ class ReadiumReaderService {
             final bookId = args['bookId'] as String? ?? '';
             final locatorJson = args['locator'] as String?;
             final progression = (args['totalProgression'] as num?)?.toDouble();
+
+            // Accumulate any remaining reading time before closing
+            if (_activeSessionStartTime != null) {
+              final elapsed = DateTime.now().difference(_activeSessionStartTime!).inSeconds;
+              if (elapsed > 0) {
+                DatabaseService.instance.addReadingTime(elapsed);
+              }
+              _activeSessionStartTime = null;
+            }
 
             if (bookId.isNotEmpty) {
               final existing = DatabaseService.instance.getProgress(bookId);

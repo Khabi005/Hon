@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/database/database_service.dart';
@@ -164,6 +165,65 @@ void main() {
       expect(state.lineHeight, equals(1.8));
       expect(state.themePreset, equals(ReaderThemePreset.quiet));
       expect(state.layoutMode, equals(ReaderLayoutMode.verticalScroll));
+    });
+  });
+
+  group('Library Removal Actions & Reading Time Tracking', () {
+    test('removeFromLibrary removes membership but keeps book entity and downloads', () async {
+      const bookId = 'book_keep_test';
+      final book = Book(
+        id: bookId,
+        title: 'Keep Files Book',
+        author: 'Author',
+        filePath: '/tmp/keep_book.epub',
+        format: BookFormat.epub,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await db.saveBook(book);
+      await db.setLibraryMembership(bookId, true);
+      expect(db.isBookInLibrary(bookId), isTrue);
+
+      await db.removeFromLibrary(bookId);
+      expect(db.isBookInLibrary(bookId), isFalse);
+      expect(db.getBookById(bookId), isNotNull);
+    });
+
+    test('deleteBook permanently removes book record, library membership, and local file', () async {
+      const bookId = 'book_delete_test';
+      final tempFile = File('/tmp/delete_book_test_${DateTime.now().millisecondsSinceEpoch}.epub');
+      await tempFile.writeAsString('mock content');
+      expect(tempFile.existsSync(), isTrue);
+
+      final book = Book(
+        id: bookId,
+        title: 'Delete Test Book',
+        author: 'Author',
+        filePath: tempFile.path,
+        format: BookFormat.epub,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      await db.saveBook(book);
+      await db.setLibraryMembership(bookId, true);
+
+      await db.deleteBook(bookId);
+
+      expect(db.getBookById(bookId), isNull);
+      expect(db.isBookInLibrary(bookId), isFalse);
+      expect(tempFile.existsSync(), isFalse);
+    });
+
+    test('addReadingTime accumulates seconds and increments getTodayReadingMinutes', () async {
+      final initialMins = db.getTodayReadingMinutes();
+
+      // Add 120 seconds (2 minutes)
+      await db.addReadingTime(120);
+      expect(db.getTodayReadingMinutes(), equals(initialMins + 2));
+
+      // Add 60 seconds (1 minute)
+      await db.addReadingTime(60);
+      expect(db.getTodayReadingMinutes(), equals(initialMins + 3));
     });
   });
 }

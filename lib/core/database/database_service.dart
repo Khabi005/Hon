@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/book.dart';
@@ -232,12 +233,36 @@ class DatabaseService {
     _notify();
   }
 
+  Future<void> removeFromLibrary(String bookId) async {
+    await setLibraryMembership(bookId, false);
+  }
+
   Future<void> deleteBook(String bookId) async {
+    final book = _books[bookId];
+    if (book != null && book.filePath != null) {
+      try {
+        final f = File(book.filePath!);
+        if (f.existsSync()) {
+          f.deleteSync();
+        }
+      } catch (_) {}
+      if (book.coverPath != null &&
+          !book.coverPath!.startsWith('http') &&
+          !book.coverPath!.startsWith('assets/')) {
+        try {
+          final c = File(book.coverPath!);
+          if (c.existsSync()) {
+            c.deleteSync();
+          }
+        } catch (_) {}
+      }
+    }
     _books.remove(bookId);
     _libraryEntries.remove(bookId);
     _readingProgress.remove(bookId);
     _chapters.remove(bookId);
     _bookmarks.remove(bookId);
+    _downloadJobs.removeWhere((k, v) => v.bookId == bookId);
     await _saveToDisk();
     _notify();
   }

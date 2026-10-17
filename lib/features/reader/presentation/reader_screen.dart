@@ -39,7 +39,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends ConsumerState<ReaderScreen> {
+class _ReaderScreenState extends ConsumerState<ReaderScreen> with WidgetsBindingObserver {
   bool _showControls = true;
   bool _isLoading = true;
   String? _errorMessage;
@@ -54,10 +54,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   late PageController _pageController;
   late ScrollController _scrollController;
   Timer? _saveDebounceTimer;
+  DateTime? _sessionStartTime;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _sessionStartTime = DateTime.now();
     _currentChapterIndex = widget.initialChapterIndex;
     _currentPageIndex = widget.initialPageIndex;
     _pageController = PageController(initialPage: _currentChapterIndex);
@@ -68,7 +71,28 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _flushReadingTime();
+    } else if (state == AppLifecycleState.resumed) {
+      _sessionStartTime = DateTime.now();
+    }
+  }
+
+  void _flushReadingTime() {
+    if (_sessionStartTime != null) {
+      final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
+      if (elapsed > 0) {
+        DatabaseService.instance.addReadingTime(elapsed);
+      }
+      _sessionStartTime = DateTime.now();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _flushReadingTime();
     _saveDebounceTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
