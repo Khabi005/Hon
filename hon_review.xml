@@ -95,6 +95,13 @@ android/
         AndroidManifest.xml
       profile/
         AndroidManifest.xml
+      test/
+        kotlin/
+          com/
+            hon/
+              reader/
+                hon/
+                  ShosetsuKotlinEngineTest.kt
     build.gradle.kts
   gradle/
     wrapper/
@@ -217,6 +224,7 @@ test/
     pdf_reader_test.dart
     readium_reader_service_test.dart
     shosetsu_lua_engine_test.dart
+  flutter_test_config.dart
   widget_test.dart
 dart_test.yaml
 pubspec.yaml
@@ -225,6 +233,182 @@ README.md
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="android/app/src/test/kotlin/com/hon/reader/hon/ShosetsuKotlinEngineTest.kt">
+package com.hon.reader.hon
+
+import com.hon.reader.hon.shosetsu.ShosetsuKotlinEngine
+import kotlinx.coroutines.runBlocking
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.*
+import org.junit.Test
+import java.io.File
+
+class ShosetsuKotlinEngineTest {
+
+    private val sampleGutenbergSearchHtml = """
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <li class="booklink">
+                <span class="title">Pride and Prejudice</span>
+                <a class="link" href="/ebooks/1342">Link</a>
+                <img class="cover-thumb" src="/cache/epub/1342/pg1342.cover.small.jpg" />
+            </li>
+            <li class="booklink">
+                <span class="title">Frankenstein; Or, The Modern Prometheus</span>
+                <a class="link" href="/ebooks/84">Link</a>
+                <img class="cover-thumb" src="/cache/epub/84/pg84.cover.small.jpg" />
+            </li>
+        </body>
+        </html>
+    """.trimIndent()
+
+    private val sampleGutenbergNovelHtml = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta property="og:url" content="https://www.gutenberg.org/ebooks/1342" />
+        </head>
+        <body>
+            <h1 itemprop="headline">Pride and Prejudice</h1>
+            <img class="cover-art" src="https://www.gutenberg.org/cache/epub/1342/pg1342.cover.medium.jpg" />
+            <div class="readmore-container">
+                A classic story of love and manners.
+                <span class="toggle-content"> Exploring Elizabeth Bennet's journey.</span>
+            </div>
+            <div itemprop="creator">Jane Austen</div>
+            <div property="dcterms:subject">Courtship -- Fiction</div>
+            <div property="dcterms:subject">Sisters -- Fiction</div>
+            <meta itemprop="inLanguage" content="en" />
+            <a class="read-online-button" href="/ebooks/1342.html.images">Read Online</a>
+            <div itemprop="datePublished">1998-06-01</div>
+        </body>
+        </html>
+    """.trimIndent()
+
+    private val sampleGutenbergPassageHtml = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Pride and Prejudice</title>
+        </head>
+        <body>
+            <div class="chapter">
+                <h2>CHAPTER I.</h2>
+                <p>It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.</p>
+            </div>
+        </body>
+        </html>
+    """.trimIndent()
+
+    private fun createMockClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val url = chain.request().url.toString()
+                val (content, code) = when {
+                    url.contains("ebooks/search") -> Pair(sampleGutenbergSearchHtml, 200)
+                    url.contains("/ebooks/1342.html") -> Pair(sampleGutenbergPassageHtml, 200)
+                    url.contains("/ebooks/1342") -> Pair(sampleGutenbergNovelHtml, 200)
+                    else -> Pair("<html><body>Not Found</body></html>", 404)
+                }
+
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("OK")
+                    .body(content.toResponseBody("text/html; charset=utf-8".toMediaType()))
+                    .build()
+            }
+            .build()
+    }
+
+    private fun loadBundledGutenbergScript(): String {
+        // Resolve assets/sources/gutenberg.lua relative to project root
+        val possiblePaths = listOf(
+            File("assets/sources/gutenberg.lua"),
+            File("../../assets/sources/gutenberg.lua"),
+            File("../../../assets/sources/gutenberg.lua"),
+            File("/home/khabi005/Flutter Prjoct/Hon/assets/sources/gutenberg.lua")
+        )
+        for (f in possiblePaths) {
+            if (f.exists()) return f.readText()
+        }
+        throw IllegalStateException("assets/sources/gutenberg.lua not found in search paths")
+    }
+
+    @Test
+    fun testKotlinEngineConsumesBundledGutenbergScriptAndSearches() = runBlocking {
+        val script = loadBundledGutenbergScript()
+        val engine = ShosetsuKotlinEngine(createMockClient())
+
+        val results = engine.search(script, "pride", 0)
+        assertNotNull(results)
+        assertEquals(2, results.size)
+
+        val first = results[0]
+        assertEquals("Pride and Prejudice", first["title"])
+        assertEquals("/ebooks/1342", first["id"])
+        assertTrue((first["cover"] as String).contains("pg1342.cover.small.jpg"))
+    }
+
+    @Test
+    fun testKotlinEngineParsesNovelDetailsAndChapters() = runBlocking {
+        val script = loadBundledGutenbergScript()
+        val engine = ShosetsuKotlinEngine(createMockClient())
+
+        val details = engine.parseNovel(script, "/ebooks/1342", true)
+        assertNotNull(details)
+        assertEquals("Pride and Prejudice", details["title"])
+        assertEquals("Jane Austen", details["author"])
+        assertTrue((details["synopsis"] as String).contains("Elizabeth Bennet"))
+
+        @Suppress("UNCHECKED_CAST")
+        val chapters = details["chapters"] as List<Map<String, Any?>>
+        assertNotNull(chapters)
+        assertEquals(1, chapters.size)
+        assertEquals("/ebooks/1342.html.images", chapters[0]["url"])
+    }
+
+    @Test
+    fun testKotlinEngineRetrievesPassage() = runBlocking {
+        val script = loadBundledGutenbergScript()
+        val engine = ShosetsuKotlinEngine(createMockClient())
+
+        val passage = engine.getPassage(script, "/ebooks/1342.html.images")
+        assertNotNull(passage)
+        assertTrue(passage.contains("truth universally acknowledged"))
+        assertTrue(passage.contains("CHAPTER I."))
+    }
+
+    @Test
+    fun testKotlinEngineHostSandboxingNeutralizesDangerousGlobals() {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val globals = engine.createSandboxedGlobals()
+
+        assertTrue(globals.get("os").isnil())
+        assertTrue(globals.get("io").isnil())
+        assertTrue(globals.get("luajava").isnil())
+        assertTrue(globals.get("debug").isnil())
+    }
+}
+</file>
+
+<file path="test/flutter_test_config.dart">
+import 'dart:async';
+import 'package:hon/core/database/app_database.dart';
+
+/// Flutter test runner configuration hook.
+/// Explicitly configures in-memory database fallback for headless unit tests
+/// while ensuring production remains strictly protected against data loss.
+Future<void> testExecutable(FutureOr<void> Function() testMain) async {
+  AppDatabase.allowMemoryFallbackForTesting = true;
+  await testMain();
+}
+</file>
 
 <file path="android/app/src/debug/AndroidManifest.xml">
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -339,41 +523,46 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.luaj.vm2.*
 import org.luaj.vm2.lib.OneArgFunction
+import org.luaj.vm2.lib.ThreeArgFunction
 import org.luaj.vm2.lib.TwoArgFunction
 import org.luaj.vm2.lib.VarArgFunction
 import org.luaj.vm2.lib.jse.JsePlatform
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-class ShosetsuKotlinEngine {
-
-    private val httpClient = OkHttpClient.Builder()
+class ShosetsuKotlinEngine(
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
         .readTimeout(35, TimeUnit.SECONDS)
         .build()
+) {
 
     suspend fun search(luaScript: String, query: String, page: Int): List<Map<String, Any?>> = withContext(Dispatchers.IO) {
-        val globals = createSandboxedGlobals()
-        globals.load(luaScript).call()
-
-        val searchFn = globals.get("Search")
-        if (searchFn.isnil()) {
-            throw IllegalArgumentException("Script does not export Search function")
+        val (globals, extensionTable) = loadExtension(luaScript)
+        val searchFn = extensionTable.get("search")
+        if (searchFn.isnil() || !searchFn.isfunction()) {
+            throw IllegalArgumentException("Script does not export 'search' function in returned extension table")
         }
 
-        val result = searchFn.call(LuaValue.valueOf(query), LuaValue.valueOf(page))
+        val data = LuaTable()
+        data.set(globals.get("QUERY"), LuaValue.valueOf(query))
+        data.set(globals.get("PAGE"), LuaValue.valueOf(page))
+        data.set(LuaValue.valueOf("query"), LuaValue.valueOf(query))
+        data.set(LuaValue.valueOf("page"), LuaValue.valueOf(page))
+
+        val result = searchFn.call(data)
         return@withContext parseNovelList(result)
     }
 
     suspend fun parseNovel(luaScript: String, novelUrl: String, loadChapters: Boolean): Map<String, Any?> = withContext(Dispatchers.IO) {
-        val globals = createSandboxedGlobals()
-        globals.load(luaScript).call()
-
-        val parseFn = globals.get("Parse")
-        if (parseFn.isnil()) {
-            throw IllegalArgumentException("Script does not export Parse function")
+        val (_, extensionTable) = loadExtension(luaScript)
+        val parseFn = extensionTable.get("parseNovel")
+        if (parseFn.isnil() || !parseFn.isfunction()) {
+            throw IllegalArgumentException("Script does not export 'parseNovel' function in returned extension table")
         }
 
         val result = parseFn.call(LuaValue.valueOf(novelUrl), LuaValue.valueOf(loadChapters))
@@ -381,28 +570,170 @@ class ShosetsuKotlinEngine {
     }
 
     suspend fun getPassage(luaScript: String, chapterUrl: String): String = withContext(Dispatchers.IO) {
-        val globals = createSandboxedGlobals()
-        globals.load(luaScript).call()
-
-        val passageFn = globals.get("Passage")
-        if (passageFn.isnil()) {
-            throw IllegalArgumentException("Script does not export Passage function")
+        val (_, extensionTable) = loadExtension(luaScript)
+        val passageFn = extensionTable.get("getPassage")
+        if (passageFn.isnil() || !passageFn.isfunction()) {
+            throw IllegalArgumentException("Script does not export 'getPassage' function in returned extension table")
         }
 
         val result = passageFn.call(LuaValue.valueOf(chapterUrl))
         return@withContext result.tojstring()
     }
 
-    private fun createSandboxedGlobals(): Globals {
+    private fun loadExtension(luaScript: String): Pair<Globals, LuaTable> {
+        val globals = createSandboxedGlobals()
+        val chunk = globals.load(luaScript)
+        val extensionTable = chunk.call()
+        if (!extensionTable.istable()) {
+            throw IllegalArgumentException("Upstream Shosetsu extension script must return an extension table")
+        }
+        return Pair(globals, extensionTable.checktable())
+    }
+
+    fun createSandboxedGlobals(): Globals {
         val globals = JsePlatform.standardGlobals()
 
-        // Strip dangerous libraries
+        // Strip dangerous host libraries for security
         globals.set("os", LuaValue.NIL)
         globals.set("io", LuaValue.NIL)
         globals.set("luajava", LuaValue.NIL)
         globals.set("debug", LuaValue.NIL)
+        val packageTable = globals.get("package")
+        if (packageTable.istable()) {
+            packageTable.set("loadlib", LuaValue.NIL)
+        }
 
-        // Shosetsu standard global functions
+        // Shosetsu standard constants
+        globals.set("QUERY", LuaValue.valueOf(0))
+        globals.set("PAGE", LuaValue.valueOf(1))
+
+        val novelStatus = LuaTable()
+        novelStatus.set("UNKNOWN", LuaValue.valueOf(0))
+        novelStatus.set("PUBLISHING", LuaValue.valueOf(1))
+        novelStatus.set("COMPLETED", LuaValue.valueOf(2))
+        novelStatus.set("PAUSED", LuaValue.valueOf(3))
+        novelStatus.set("DROPPED", LuaValue.valueOf(4))
+        globals.set("NovelStatus", novelStatus)
+
+        val chapterType = LuaTable()
+        chapterType.set("HTML", LuaValue.valueOf(1))
+        chapterType.set("TEXT", LuaValue.valueOf(2))
+        globals.set("ChapterType", chapterType)
+
+        // Shosetsu standard types / constructors
+        globals.set("Novel", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue = if (arg.istable()) arg else LuaTable()
+        })
+
+        globals.set("NovelInfo", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue {
+                val table = if (arg.istable()) arg.checktable() else LuaTable()
+                table.set("setChapters", object : TwoArgFunction() {
+                    override fun call(self: LuaValue, chapters: LuaValue): LuaValue {
+                        self.set("chapters", chapters)
+                        return self
+                    }
+                })
+                return table
+            }
+        })
+
+        globals.set("NovelChapter", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue = if (arg.istable()) arg else LuaTable()
+        })
+
+        globals.set("AsList", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue = arg
+        })
+
+        globals.set("List", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs = LuaTable()
+        })
+
+        globals.set("Listing", object : ThreeArgFunction() {
+            override fun call(name: LuaValue, inc: LuaValue, fn: LuaValue): LuaValue {
+                val t = LuaTable()
+                t.set("name", name)
+                t.set("increments", inc)
+                t.set("fn", fn)
+                return t
+            }
+        })
+
+        globals.set("DropdownFilter", object : ThreeArgFunction() {
+            override fun call(id: LuaValue, name: LuaValue, options: LuaValue): LuaValue {
+                val t = LuaTable()
+                t.set("id", id)
+                t.set("name", name)
+                t.set("options", options)
+                return t
+            }
+        })
+
+        globals.set("SwitchFilter", object : TwoArgFunction() {
+            override fun call(id: LuaValue, name: LuaValue): LuaValue {
+                val t = LuaTable()
+                t.set("id", id)
+                t.set("name", name)
+                return t
+            }
+        })
+
+        // Standard Shosetsu collection helper: map(list, fn)
+        globals.set("map", object : TwoArgFunction() {
+            override fun call(list: LuaValue, fn: LuaValue): LuaValue {
+                val res = LuaTable()
+                var outIdx = 1
+                if (list.istable()) {
+                    val tbl = list.checktable()
+                    val sizeFn = tbl.get("size")
+                    if (sizeFn.isfunction()) {
+                        val size = sizeFn.call(tbl).toint()
+                        val getFn = tbl.get("get")
+                        for (i in 0 until size) {
+                            val item = getFn.call(tbl, LuaValue.valueOf(i))
+                            val mapped = fn.call(item, LuaValue.valueOf(i))
+                            if (!mapped.isnil()) {
+                                res.set(outIdx++, mapped)
+                            }
+                        }
+                    } else {
+                        val len = tbl.length()
+                        for (i in 1..len) {
+                            val item = tbl.get(i)
+                            val mapped = fn.call(item, LuaValue.valueOf(i - 1))
+                            if (!mapped.isnil()) {
+                                res.set(outIdx++, mapped)
+                            }
+                        }
+                    }
+                }
+                return res
+            }
+        })
+
+        // Shosetsu standard: pageOfElem(doc, removeStyles)
+        globals.set("pageOfElem", object : TwoArgFunction() {
+            override fun call(docOrElem: LuaValue, removeStyles: LuaValue): LuaValue {
+                if (docOrElem.istable()) {
+                    val bodyFn = docOrElem.get("body")
+                    if (bodyFn.isfunction()) {
+                        val body = bodyFn.call(docOrElem)
+                        val htmlFn = body.get("html")
+                        if (htmlFn.isfunction()) {
+                            return htmlFn.call(body)
+                        }
+                    }
+                    val htmlFn = docOrElem.get("html")
+                    if (htmlFn.isfunction()) {
+                        return htmlFn.call(docOrElem)
+                    }
+                }
+                return LuaValue.valueOf(docOrElem.tojstring())
+            }
+        })
+
+        // Shosetsu Require("FilterOptions") and Require("url")
         globals.set("Require", object : OneArgFunction() {
             override fun call(arg: LuaValue): LuaValue {
                 val mod = arg.tojstring()
@@ -414,24 +745,52 @@ class ShosetsuKotlinEngine {
             }
         })
 
-        globals.set("GET", object : VarArgFunction() {
-            override fun invoke(args: Varargs): Varargs {
-                val url = args.arg(1).tojstring()
-                return executeHttpRequest(url, "GET", null)
+        // Shosetsu GETDocument(url)
+        globals.set("GETDocument", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue {
+                val url = arg.tojstring()
+                return executeHttpDocument(url)
             }
         })
 
+        // Shosetsu raw GET(url)
+        globals.set("GET", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val url = args.arg(1).tojstring()
+                return executeHttpRequest(url, "GET")
+            }
+        })
+
+        // Shosetsu raw POST(url)
         globals.set("POST", object : VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
                 val url = args.arg(1).tojstring()
-                return executeHttpRequest(url, "POST", null)
+                return executeHttpRequest(url, "POST")
             }
         })
 
         return globals
     }
 
-    private fun executeHttpRequest(url: String, method: String, headers: LuaTable?): Varargs {
+    private fun executeHttpDocument(url: String): LuaValue {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .build()
+
+        val response = httpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IllegalStateException("HTTP GET failed with code ${response.code} for $url")
+        }
+        val html = response.body?.string() ?: ""
+        val doc = Jsoup.parse(html, url)
+        val docTable = LuaTable()
+        wrapDocumentMethods(docTable, doc)
+        return docTable
+    }
+
+    private fun executeHttpRequest(url: String, method: String): Varargs {
         val requestBuilder = Request.Builder()
             .url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
@@ -444,11 +803,32 @@ class ShosetsuKotlinEngine {
         responseTable.set("code", LuaValue.valueOf(response.code))
         responseTable.set("body", LuaValue.valueOf(htmlContent))
 
-        // Wrap Jsoup DOM query functions directly on the response table
         val doc = Jsoup.parse(htmlContent, url)
-        wrapElementMethods(responseTable, doc)
+        wrapDocumentMethods(responseTable, doc)
 
         return responseTable
+    }
+
+    private fun wrapDocumentMethods(table: LuaTable, doc: Document) {
+        wrapElementMethods(table, doc)
+
+        table.set("head", object : OneArgFunction() {
+            override fun call(self: LuaValue): LuaValue {
+                val headEl = doc.head() ?: doc
+                val elTable = LuaTable()
+                wrapElementMethods(elTable, headEl)
+                return elTable
+            }
+        })
+
+        table.set("body", object : OneArgFunction() {
+            override fun call(self: LuaValue): LuaValue {
+                val bodyEl = doc.body() ?: doc
+                val elTable = LuaTable()
+                wrapElementMethods(elTable, bodyEl)
+                return elTable
+            }
+        })
     }
 
     private fun wrapElementMethods(table: LuaTable, element: Element) {
@@ -463,80 +843,130 @@ class ShosetsuKotlinEngine {
                     wrapElementMethods(elTable, el)
                     listTable.set(i + 1, elTable)
                 }
+                listTable.set("size", object : OneArgFunction() {
+                    override fun call(s: LuaValue): LuaValue = LuaValue.valueOf(elements.size)
+                })
+                listTable.set("get", object : TwoArgFunction() {
+                    override fun call(s: LuaValue, idx: LuaValue): LuaValue {
+                        val i = idx.toint()
+                        if (i in 0 until elements.size) {
+                            return listTable.get(i + 1)
+                        }
+                        return LuaValue.NIL
+                    }
+                })
+                listTable.set("text", object : OneArgFunction() {
+                    override fun call(s: LuaValue): LuaValue = LuaValue.valueOf(elements.text().trim())
+                })
+                listTable.set("attr", object : TwoArgFunction() {
+                    override fun call(s: LuaValue, attrName: LuaValue): LuaValue =
+                        LuaValue.valueOf(elements.attr(attrName.tojstring()))
+                })
                 return listTable
             }
         })
 
-        table.set("text", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                return LuaValue.valueOf(element.text())
-            }
-        })
-
-        table.set("attr", object : TwoArgFunction() {
-            override fun call(self: LuaValue, attrName: LuaValue): LuaValue {
-                return LuaValue.valueOf(element.attr(attrName.tojstring()))
-            }
-        })
-
-        table.set("first", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                val firstChild = element.children().firstOrNull() ?: return LuaValue.NIL
+        table.set("selectFirst", object : TwoArgFunction() {
+            override fun call(self: LuaValue, cssSelector: LuaValue): LuaValue {
+                val query = cssSelector.tojstring()
+                val el = element.selectFirst(query) ?: return LuaValue.NIL
                 val elTable = LuaTable()
-                wrapElementMethods(elTable, firstChild)
+                wrapElementMethods(elTable, el)
                 return elTable
             }
         })
 
-        table.set("last", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                val lastChild = element.children().lastOrNull() ?: return LuaValue.NIL
+        table.set("text", object : OneArgFunction() {
+            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.text().trim())
+        })
+
+        table.set("ownText", object : OneArgFunction() {
+            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.ownText().trim())
+        })
+
+        table.set("attr", object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val self = args.arg(1)
+                val attrName = args.arg(2).tojstring()
+                val attrVal = args.arg(3)
+                return if (!attrVal.isnil()) {
+                    element.attr(attrName, attrVal.tojstring())
+                    self
+                } else {
+                    LuaValue.valueOf(element.attr(attrName))
+                }
+            }
+        })
+
+        table.set("prependElement", object : TwoArgFunction() {
+            override fun call(self: LuaValue, tag: LuaValue): LuaValue {
+                val created = element.prependElement(tag.tojstring())
                 val elTable = LuaTable()
-                wrapElementMethods(elTable, lastChild)
+                wrapElementMethods(elTable, created)
                 return elTable
             }
         })
 
         table.set("html", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                return LuaValue.valueOf(element.html())
-            }
+            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.html())
         })
     }
 
-    private fun createFilterOptionsModule(): LuaTable {
-        val module = LuaTable()
-        module.set("new", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                return LuaTable()
+    private fun createFilterOptionsModule(): LuaValue {
+        // Require("FilterOptions") returns a callable factory function: FilterOptions(options, default)
+        return object : VarArgFunction() {
+            override fun invoke(args: Varargs): Varargs {
+                val options = args.arg(1)
+                val defaultVal = args.arg(2)
+
+                val fo = LuaTable()
+                fo.set("valueOfOrFirst", object : TwoArgFunction() {
+                    override fun call(self: LuaValue, v: LuaValue): LuaValue {
+                        if (!v.isnil()) return v
+                        return if (!defaultVal.isnil()) defaultVal else LuaValue.NIL
+                    }
+                })
+                fo.set("labels", object : OneArgFunction() {
+                    override fun call(self: LuaValue): LuaValue = LuaTable()
+                })
+                return fo
             }
-        })
-        return module
+        }
     }
 
     private fun createUrlModule(): LuaTable {
         val module = LuaTable()
-        val qs = LuaTable()
-        qs.set("stringify", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                if (!arg.istable()) return LuaValue.valueOf("")
-                val table = arg.checktable()
+        // Require("url").querystring(params, base)
+        module.set("querystring", object : TwoArgFunction() {
+            override fun call(params: LuaValue, base: LuaValue): LuaValue {
+                val basePath = if (base.isnil()) "" else base.tojstring()
                 val sb = StringBuilder()
-                var first = true
-                var k = LuaValue.NIL
-                while (true) {
-                    val next = table.next(k)
-                    k = next.arg1()
-                    if (k.isnil()) break
-                    val v = next.arg(2)
-                    if (!first) sb.append("&")
-                    sb.append(k.tojstring()).append("=").append(v.tojstring())
-                    first = false
+                if (params.istable()) {
+                    val tbl = params.checktable()
+                    var k = LuaValue.NIL
+                    while (true) {
+                        val next = tbl.next(k)
+                        k = next.arg1()
+                        if (k.isnil()) break
+                        val v = next.arg(2)
+                        if (sb.isNotEmpty()) sb.append("&")
+                        try {
+                            sb.append(URLEncoder.encode(k.tojstring(), "UTF-8"))
+                                .append("=")
+                                .append(URLEncoder.encode(v.tojstring(), "UTF-8"))
+                        } catch (_: Exception) {
+                            sb.append(k.tojstring()).append("=").append(v.tojstring())
+                        }
+                    }
                 }
-                return LuaValue.valueOf(sb.toString())
+                val query = sb.toString()
+                return when {
+                    query.isEmpty() -> LuaValue.valueOf(basePath)
+                    basePath.contains("?") -> LuaValue.valueOf("$basePath&$query")
+                    else -> LuaValue.valueOf("$basePath?$query")
+                }
             }
         })
-        module.set("querystring", qs)
         return module
     }
 
@@ -550,11 +980,18 @@ class ShosetsuKotlinEngine {
             val item = table.get(i)
             if (item.istable()) {
                 val novelMap = mutableMapOf<String, Any?>()
-                novelMap["id"] = item.get("id").takeIf { !it.isnil() }?.tojstring() ?: ""
-                novelMap["title"] = item.get("title").takeIf { !it.isnil() }?.tojstring() ?: ""
-                novelMap["cover"] = item.get("image").takeIf { !it.isnil() }?.tojstring()
+                val link = item.get("link").takeIf { !it.isnil() }?.tojstring()
+                    ?: item.get("id").takeIf { !it.isnil() }?.tojstring() ?: ""
+                val title = item.get("title").takeIf { !it.isnil() }?.tojstring() ?: ""
+                val cover = item.get("imageURL").takeIf { !it.isnil() }?.tojstring()
+                    ?: item.get("image").takeIf { !it.isnil() }?.tojstring()
                     ?: item.get("cover").takeIf { !it.isnil() }?.tojstring()
-                novelMap["author"] = item.get("author").takeIf { !it.isnil() }?.tojstring() ?: ""
+                val author = item.get("author").takeIf { !it.isnil() }?.tojstring() ?: ""
+
+                novelMap["id"] = link
+                novelMap["title"] = title
+                novelMap["cover"] = cover
+                novelMap["author"] = author
                 list.add(novelMap)
             }
         }
@@ -566,12 +1003,24 @@ class ShosetsuKotlinEngine {
         if (!result.istable()) return map
 
         map["title"] = result.get("title").takeIf { !it.isnil() }?.tojstring() ?: ""
-        map["author"] = result.get("author").takeIf { !it.isnil() }?.tojstring()
-            ?: result.get("authors").takeIf { !it.isnil() }?.tojstring() ?: ""
+
+        val authorsVal = result.get("authors")
+        if (authorsVal.istable()) {
+            val authorsList = mutableListOf<String>()
+            val aTable = authorsVal.checktable()
+            for (i in 1..aTable.length()) {
+                val a = aTable.get(i).takeIf { !it.isnil() }?.tojstring()
+                if (!a.isNullOrBlank()) authorsList.add(a)
+            }
+            map["author"] = authorsList.joinToString(", ")
+        } else {
+            map["author"] = result.get("author").takeIf { !it.isnil() }?.tojstring() ?: ""
+        }
+
         map["synopsis"] = result.get("description").takeIf { !it.isnil() }?.tojstring()
             ?: result.get("synopsis").takeIf { !it.isnil() }?.tojstring() ?: ""
-        map["cover"] = result.get("image").takeIf { !it.isnil() }?.tojstring()
-            ?: result.get("cover").takeIf { !it.isnil() }?.tojstring()
+        map["cover"] = result.get("imageURL").takeIf { !it.isnil() }?.tojstring()
+            ?: itemOrNil(result, "cover") ?: itemOrNil(result, "image")
 
         val chaptersList = mutableListOf<Map<String, Any?>>()
         val chaptersVal = result.get("chapters")
@@ -580,17 +1029,28 @@ class ShosetsuKotlinEngine {
             for (i in 1..chTable.length()) {
                 val chItem = chTable.get(i)
                 if (chItem.istable()) {
+                    val link = chItem.get("link").takeIf { !it.isnil() }?.tojstring()
+                        ?: chItem.get("url").takeIf { !it.isnil() }?.tojstring()
+                        ?: chItem.get("id").takeIf { !it.isnil() }?.tojstring() ?: ""
+                    val chTitle = chItem.get("title").takeIf { !it.isnil() }?.tojstring() ?: "Chapter $i"
+                    val release = chItem.get("release").takeIf { !it.isnil() }?.tojstring()
+
                     chaptersList.add(mapOf(
-                        "id" to (chItem.get("id").takeIf { !it.isnil() }?.tojstring() ?: ""),
-                        "title" to (chItem.get("title").takeIf { !it.isnil() }?.tojstring() ?: "Chapter $i"),
-                        "url" to (chItem.get("url").takeIf { !it.isnil() }?.tojstring()
-                            ?: chItem.get("id").takeIf { !it.isnil() }?.tojstring() ?: "")
+                        "id" to link,
+                        "title" to chTitle,
+                        "url" to link,
+                        "release" to release
                     ))
                 }
             }
         }
         map["chapters"] = chaptersList
         return map
+    }
+
+    private fun itemOrNil(table: LuaValue, key: String): String? {
+        val v = table.get(key)
+        return if (!v.isnil()) v.tojstring() else null
     }
 }
 </file>
@@ -599,6 +1059,8 @@ class ShosetsuKotlinEngine {
 package com.hon.reader.hon
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.work.*
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -612,11 +1074,37 @@ class HonDownloadManagerBridge(
 
     private val channel = MethodChannel(messenger, "com.hon.reader/download_worker")
 
+    companion object {
+        @Volatile
+        private var instance: HonDownloadManagerBridge? = null
+
+        fun notifyStateChanged(bookId: String?, jobId: String, status: String, progress: Double) {
+            val bridge = instance ?: return
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    bridge.channel.invokeMethod(
+                        "onDownloadStateChanged",
+                        mapOf(
+                            "bookId" to bookId,
+                            "jobId" to jobId,
+                            "status" to status,
+                            "progress" to progress
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     init {
+        instance = this
         channel.setMethodCallHandler(this)
     }
 
     fun cleanup() {
+        if (instance == this) {
+            instance = null
+        }
         channel.setMethodCallHandler(null)
     }
 
@@ -631,6 +1119,7 @@ class HonDownloadManagerBridge(
                 val targetPath = call.argument<String>("targetPath")
                 val bookId = call.argument<String>("bookId")
                 val chapterId = call.argument<String>("chapterId")
+                val sourceId = call.argument<String>("sourceId") ?: "gutenberg"
                 val wifiOnly = call.argument<Boolean>("wifiOnly") ?: false
 
                 if (jobId.isNullOrBlank() || url.isNullOrBlank() || targetPath.isNullOrBlank()) {
@@ -647,7 +1136,8 @@ class HonDownloadManagerBridge(
                     "url" to url,
                     "targetPath" to targetPath,
                     "bookId" to bookId,
-                    "chapterId" to chapterId
+                    "chapterId" to chapterId,
+                    "sourceId" to sourceId
                 )
 
                 val workRequest = OneTimeWorkRequestBuilder<HonDownloadWorker>()
@@ -709,6 +1199,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.hon.reader.hon.shosetsu.ShosetsuKotlinEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -727,12 +1218,15 @@ class HonDownloadWorker(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val shosetsuEngine = ShosetsuKotlinEngine(httpClient)
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString("jobId")
         val url = inputData.getString("url")
         val targetPath = inputData.getString("targetPath")
         val bookId = inputData.getString("bookId")
         val chapterId = inputData.getString("chapterId")
+        val sourceId = inputData.getString("sourceId") ?: "gutenberg"
 
         if (jobId == "RECOVER_ALL") {
             return@withContext recoverAllDownloads()
@@ -742,17 +1236,19 @@ class HonDownloadWorker(
             return@withContext Result.failure()
         }
 
-        return@withContext executeDownload(jobId, url, targetPath, bookId, chapterId)
+        return@withContext executeDownload(jobId, url, targetPath, bookId, chapterId, sourceId)
     }
 
-    private fun executeDownload(
+    private suspend fun executeDownload(
         jobId: String,
         url: String,
         targetPath: String,
         bookId: String?,
-        chapterId: String?
+        chapterId: String?,
+        sourceId: String
     ): Result {
         updateJobStatusInDb(jobId, "running", 0.1)
+        HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "running", 0.1)
 
         val targetFile = File(targetPath)
         val parentDir = targetFile.parentFile
@@ -763,91 +1259,127 @@ class HonDownloadWorker(
         val tempFile = File("$targetPath.tmp_${System.currentTimeMillis()}")
 
         return try {
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .build()
-
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                if (runAttemptCount < 3) {
-                    updateJobStatusInDb(jobId, "retryWaiting", 0.0, "HTTP error: ${response.code}")
-                    return Result.retry()
-                } else {
-                    updateJobStatusInDb(jobId, "failed", 0.0, "HTTP error: ${response.code}")
-                    return Result.failure()
-                }
-            }
-
-            val body = response.body ?: throw IllegalStateException("Empty response body")
-            FileOutputStream(tempFile).use { output ->
-                body.byteStream().use { input ->
-                    input.copyTo(output)
-                }
-            }
-
-            if (tempFile.exists() && tempFile.length() > 0) {
-                if (targetFile.exists()) {
-                    targetFile.delete()
-                }
-                tempFile.renameTo(targetFile)
-
-                // Update SQLite database: mark job completed and chapter downloaded
-                updateJobStatusInDb(jobId, "completed", 1.0)
-                if (!bookId.isNullOrBlank() && !chapterId.isNullOrBlank()) {
-                    updateChapterDownloadedInDb(chapterId, targetPath)
-                }
-                Result.success()
+            // 1. Passage Extraction via Extension Runtime (or direct HTTP fallback)
+            val luaScript = getSourceScript(sourceId)
+            val passageContent: String = if (luaScript != null) {
+                shosetsuEngine.getPassage(luaScript, url)
             } else {
+                fetchDirectHttp(url)
+            }
+
+            if (passageContent.isBlank()) {
+                throw IllegalStateException("Extracted chapter passage was empty for $url")
+            }
+
+            // Write atomically to temp file
+            FileOutputStream(tempFile).use { output ->
+                output.write(passageContent.toByteArray(Charsets.UTF_8))
+            }
+
+            if (!tempFile.exists() || tempFile.length() == 0L) {
                 tempFile.delete()
-                if (runAttemptCount < 3) {
-                    updateJobStatusInDb(jobId, "retryWaiting", 0.0, "Downloaded file was empty")
-                    Result.retry()
-                } else {
-                    updateJobStatusInDb(jobId, "failed", 0.0, "Downloaded file was empty")
-                    Result.failure()
+                throw IllegalStateException("Temporary chapter file was empty after write")
+            }
+
+            // 2. Commit file with verified rename/copy
+            val renameSucceeded = if (targetFile.exists()) {
+                targetFile.delete()
+                tempFile.renameTo(targetFile)
+            } else {
+                tempFile.renameTo(targetFile)
+            }
+
+            if (!renameSucceeded) {
+                try {
+                    tempFile.copyTo(targetFile, overwrite = true)
+                    tempFile.delete()
+                } catch (e: Exception) {
+                    tempFile.delete()
+                    throw IllegalStateException("Failed to commit chapter file to target: ${targetFile.absolutePath}", e)
                 }
             }
+
+            if (!targetFile.exists() || targetFile.length() == 0L) {
+                throw IllegalStateException("Target chapter file missing or empty after commit: ${targetFile.absolutePath}")
+            }
+
+            // 3. Update SQLite database (throws on failure)
+            updateJobStatusInDb(jobId, "completed", 1.0)
+            if (!bookId.isNullOrBlank() && !chapterId.isNullOrBlank()) {
+                updateChapterDownloadedInDb(chapterId, targetPath)
+            }
+
+            // Notify Flutter runtime
+            HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "completed", 1.0)
+            Result.success()
         } catch (e: Exception) {
-            tempFile.delete()
+            if (tempFile.exists()) {
+                tempFile.delete()
+            }
+
+            val errorMsg = e.message ?: e.toString()
             if (runAttemptCount < 3) {
-                updateJobStatusInDb(jobId, "retryWaiting", 0.0, e.message)
+                try {
+                    updateJobStatusInDb(jobId, "retryWaiting", 0.0, errorMsg)
+                    HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "retryWaiting", 0.0)
+                } catch (_: Exception) {}
                 Result.retry()
             } else {
-                updateJobStatusInDb(jobId, "failed", 0.0, e.message)
+                try {
+                    updateJobStatusInDb(jobId, "failed", 0.0, errorMsg)
+                    HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "failed", 0.0)
+                } catch (_: Exception) {}
                 Result.failure()
             }
         }
     }
 
-    private fun recoverAllDownloads(): Result {
+    private suspend fun recoverAllDownloads(): Result {
         val db = openDatabase() ?: return Result.failure()
+        val pendingJobs = mutableListOf<PendingJobData>()
         try {
-            // Find any jobs that were interrupted or queued
+            // Join download_jobs_table with chapters_table according to real Drift schema
             val cursor = db.rawQuery(
-                "SELECT id, url, target_path, book_id, chapter_id FROM download_jobs_table WHERE status IN ('queued', 'running', 'retryWaiting')",
+                """
+                SELECT d.id, c.url, c.local_file_path, d.book_id, d.chapter_id, d.source_id 
+                FROM download_jobs_table d 
+                JOIN chapters_table c ON d.chapter_id = c.id 
+                WHERE d.status IN ('queued', 'running', 'retryWaiting')
+                """.trimIndent(),
                 null
             )
-            val pendingJobs = mutableListOf<PendingJobData>()
             while (cursor.moveToNext()) {
                 val jId = cursor.getString(0)
                 val u = cursor.getString(1)
                 val path = cursor.getString(2)
                 val bId = cursor.getString(3)
                 val chId = cursor.getString(4)
-                pendingJobs.add(PendingJobData(jId, u, path, bId, chId))
+                val sId = cursor.getString(5) ?: "gutenberg"
+                if (!u.isNullOrBlank() && !path.isNullOrBlank()) {
+                    pendingJobs.add(PendingJobData(jId, u, path, bId, chId, sId))
+                }
             }
             cursor.close()
-
-            for (job in pendingJobs) {
-                executeDownload(job.jobId, job.url, job.targetPath, job.bookId, job.chapterId)
-            }
-            return Result.success()
-        } catch (e: Exception) {
-            return Result.failure()
         } finally {
             db.close()
+        }
+
+        var hasRetry = false
+        var hasFailure = false
+
+        for (job in pendingJobs) {
+            val res = executeDownload(job.jobId, job.url, job.targetPath, job.bookId, job.chapterId, job.sourceId)
+            if (res is Result.Retry) {
+                hasRetry = true
+            } else if (res is Result.Failure) {
+                hasFailure = true
+            }
+        }
+
+        return when {
+            hasRetry -> Result.retry()
+            hasFailure -> Result.failure()
+            else -> Result.success()
         }
     }
 
@@ -856,8 +1388,38 @@ class HonDownloadWorker(
         val url: String,
         val targetPath: String,
         val bookId: String,
-        val chapterId: String
+        val chapterId: String,
+        val sourceId: String
     )
+
+    private fun getSourceScript(sourceId: String): String? {
+        val candidatePaths = listOf(
+            "flutter_assets/assets/sources/$sourceId.lua",
+            "assets/sources/$sourceId.lua"
+        )
+        for (path in candidatePaths) {
+            try {
+                context.assets.open(path).use { input ->
+                    return input.bufferedReader().readText()
+                }
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
+    private fun fetchDirectHttp(url: String): String {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .build()
+
+        val response = httpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IllegalStateException("HTTP GET failed with code ${response.code} for $url")
+        }
+        return response.body?.string() ?: throw IllegalStateException("Empty HTTP body for $url")
+    }
 
     private fun openDatabase(): SQLiteDatabase? {
         val candidates = listOf(
@@ -876,7 +1438,7 @@ class HonDownloadWorker(
     }
 
     private fun updateJobStatusInDb(jobId: String, status: String, progress: Double, error: String? = null) {
-        val db = openDatabase() ?: return
+        val db = openDatabase() ?: throw IllegalStateException("Failed to open SQLite database for job $jobId")
         try {
             val values = ContentValues().apply {
                 put("status", status)
@@ -886,23 +1448,27 @@ class HonDownloadWorker(
                     put("error_message", error)
                 }
             }
-            db.update("download_jobs_table", values, "id = ?", arrayOf(jobId))
-        } catch (_: Exception) {
+            val rows = db.update("download_jobs_table", values, "id = ?", arrayOf(jobId))
+            if (rows == 0) {
+                throw IllegalStateException("No download_jobs_table row found for id: $jobId")
+            }
         } finally {
             db.close()
         }
     }
 
     private fun updateChapterDownloadedInDb(chapterId: String, localPath: String) {
-        val db = openDatabase() ?: return
+        val db = openDatabase() ?: throw IllegalStateException("Failed to open SQLite database for chapter $chapterId")
         try {
             val values = ContentValues().apply {
                 put("local_file_path", localPath)
                 put("download_state", "downloaded")
                 put("updated_at", System.currentTimeMillis() / 1000)
             }
-            db.update("chapters_table", values, "id = ?", arrayOf(chapterId))
-        } catch (_: Exception) {
+            val rows = db.update("chapters_table", values, "id = ?", arrayOf(chapterId))
+            if (rows == 0) {
+                throw IllegalStateException("No chapters_table row found for id: $chapterId")
+            }
         } finally {
             db.close()
         }
@@ -1818,6 +2384,11 @@ class AppSettingsTable extends Table {
   AppSettingsTable,
 ])
 class AppDatabase extends _$AppDatabase {
+  /// When true, allows fallback to NativeDatabase.memory() if storage initialization
+  /// fails (e.g., in headless test environments without path_provider mocks).
+  /// In production, this flag is false by default so persistence failures throw a visible error.
+  static bool allowMemoryFallbackForTesting = false;
+
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
@@ -1829,9 +2400,14 @@ class AppDatabase extends _$AppDatabase {
         final dbFolder = await getApplicationDocumentsDirectory();
         final file = File(p.join(dbFolder.path, 'hon.sqlite'));
         return NativeDatabase.createInBackground(file);
-      } catch (_) {
-        // Fallback for headless tests or environments where path_provider is not mocked
-        return NativeDatabase.memory();
+      } catch (e) {
+        if (allowMemoryFallbackForTesting) {
+          return NativeDatabase.memory();
+        }
+        throw StateError(
+          'Failed to open durable SQLite persistence database at hon.sqlite: $e. '
+          'In-memory fallback is disabled in production to protect against data loss.',
+        );
       }
     });
   }
@@ -7778,7 +8354,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../database/database_service.dart';
+import '../models/chapter.dart';
 import '../models/download_job.dart';
+import '../sources/source_registry.dart';
 
 class HonDownloadManager {
   static HonDownloadManager? _instance;
@@ -7786,6 +8364,27 @@ class HonDownloadManager {
   HonDownloadManager._();
 
   static const MethodChannel _channel = MethodChannel('com.hon.reader/download_worker');
+
+  bool _initialized = false;
+
+  void init() {
+    if (_initialized) return;
+    _initialized = true;
+    _channel.setMethodCallHandler(_handleNativeCall);
+  }
+
+  Future<dynamic> _handleNativeCall(MethodCall call) async {
+    if (call.method == 'onDownloadStateChanged') {
+      final args = call.arguments as Map<dynamic, dynamic>?;
+      final bookId = args?['bookId'] as String?;
+      if (bookId != null && bookId.isNotEmpty) {
+        await DatabaseService.instance.refreshDownloadsAndChapters(bookId);
+      } else {
+        await DatabaseService.instance.refreshAllDownloads();
+      }
+    }
+    return null;
+  }
 
   /// Recovers any downloads that were interrupted (e.g. app terminated while running)
   Future<int> recoverInterruptedDownloads() async {
@@ -7817,25 +8416,27 @@ class HonDownloadManager {
       try {
         await _channel.invokeMethod('scheduleDownloadRecovery');
       } catch (_) {
-        // Ignored if channel is unavailable or in mock test environment
+        // Handled in mock test environment
       }
     }
 
     return recoveredCount;
   }
 
-  /// Enqueues a download job to Android WorkManager or local worker
+  /// Enqueues a download job to Android WorkManager (or local fallback executor)
   Future<void> enqueueDownload(DownloadJob job, {bool wifiOnly = false}) async {
+    init();
+
     // 1. Ensure persisted in database
     await DatabaseService.instance.updateDownloadJob(job);
 
-    // 2. Delegate to Android WorkManager if running on Android
-    if (Platform.isAndroid && !kIsWeb) {
-      final chapters = DatabaseService.instance.getChapters(job.bookId);
-      final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
-      final url = ch?.url ?? '';
-      final targetPath = ch?.localFilePath ?? '';
+    final chapters = DatabaseService.instance.getChapters(job.bookId);
+    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    final url = ch?.url ?? '';
+    final targetPath = ch?.localFilePath ?? '';
 
+    // 2. Delegate to Android WorkManager as the sole executor if running on Android
+    if (Platform.isAndroid && !kIsWeb) {
       if (url.isNotEmpty && targetPath.isNotEmpty) {
         try {
           await _channel.invokeMethod('enqueueDownload', {
@@ -7844,12 +8445,67 @@ class HonDownloadManager {
             'targetPath': targetPath,
             'bookId': job.bookId,
             'chapterId': job.chapterId,
+            'sourceId': job.sourceId,
             'wifiOnly': wifiOnly,
           });
+          return;
         } catch (_) {
           // Handled gracefully in mock / test environment
         }
       }
+    }
+
+    // 3. Fallback executor for non-Android platforms or tests where WorkManager is unavailable
+    if (url.isNotEmpty && targetPath.isNotEmpty) {
+      _executeLocalFallbackDownload(job, ch: ch, url: url, targetPath: targetPath);
+    }
+  }
+
+  /// Local fallback execution for desktop or test environments
+  Future<void> _executeLocalFallbackDownload(
+    DownloadJob job, {
+    required Chapter? ch,
+    required String url,
+    required String targetPath,
+  }) async {
+    try {
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(status: DownloadStatus.running, progress: 0.2, updatedAt: DateTime.now()),
+      );
+
+      final passage = await SourceRegistry.instance.getChapterPassage(job.sourceId, url);
+      final file = File(targetPath);
+      final parent = file.parent;
+      if (!parent.existsSync()) {
+        parent.createSync(recursive: true);
+      }
+      final tempFile = File('$targetPath.tmp_${DateTime.now().millisecondsSinceEpoch}');
+      await tempFile.writeAsString(passage);
+      if (file.existsSync()) {
+        await file.delete();
+      }
+      await tempFile.rename(targetPath);
+
+      if (ch != null) {
+        final completedChapter = ch.copyWith(
+          localFilePath: targetPath,
+          downloadState: ChapterDownloadState.downloaded,
+          updatedAt: DateTime.now(),
+        );
+        await DatabaseService.instance.saveChapters(job.bookId, [completedChapter]);
+      }
+
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(status: DownloadStatus.completed, progress: 1.0, updatedAt: DateTime.now()),
+      );
+    } catch (e) {
+      await DatabaseService.instance.updateDownloadJob(
+        job.copyWith(
+          status: DownloadStatus.failed,
+          errorMessage: e.toString(),
+          updatedAt: DateTime.now(),
+        ),
+      );
     }
   }
 
@@ -11007,6 +11663,29 @@ void main() {
           .getSingleOrNull();
       expect(dbBm, isNull);
     });
+
+    test('Production Persistence Safety: Fallback to in-memory database is blocked without explicit testing flag', () async {
+      AppDatabase.allowMemoryFallbackForTesting = false;
+      final defaultDb = AppDatabase();
+      try {
+        // Without path_provider mock or test flag, initializing the production LazyDatabase throws StateError
+        await defaultDb.customSelect('SELECT 1').get();
+        fail('Should have thrown StateError when attempting unconfigured fallback in production');
+      } on StateError catch (e) {
+        expect(e.message, contains('In-memory fallback is disabled in production'));
+      } finally {
+        try {
+          await defaultDb.close();
+        } catch (_) {}
+      }
+
+      // When explicitly enabled for tests, fallback succeeds
+      AppDatabase.allowMemoryFallbackForTesting = true;
+      final testDb = AppDatabase();
+      final res = await testDb.customSelect('SELECT 1 AS val').get();
+      expect(res.first.data['val'], 1);
+      await testDb.close();
+    });
   });
 }
 </file>
@@ -13919,12 +14598,14 @@ import 'package:hon/app/hon_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/database/database_service.dart';
 
+import 'package:hon/core/database/app_database.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    await DatabaseService.instance.init();
+    await DatabaseService.instance.init(AppDatabase.inMemory());
   });
 
   testWidgets('HonApp loads and displays 5 bottom navigation tabs', (WidgetTester tester) async {
@@ -14295,6 +14976,8 @@ dependencies {
     implementation("org.luaj:luaj-jse:3.0.1")
     implementation("org.jsoup:jsoup:1.18.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
 flutter {
@@ -17624,11 +18307,8 @@ class SourceRegistry {
   }) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.search(script, query, page: page);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.search(script, query, page: page);
     }
     return await ShosetsuLuaEngine.instance.search(script, query, page: page);
   }
@@ -17641,11 +18321,8 @@ class SourceRegistry {
   }) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
     }
     return await ShosetsuLuaEngine.instance.parseNovel(
       script,
@@ -17661,11 +18338,8 @@ class SourceRegistry {
   ) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
     }
     return await ShosetsuLuaEngine.instance.getPassage(script, chapterUrl);
   }
@@ -19916,7 +20590,6 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
 <file path="lib/features/browse/presentation/source_catalog_screen.dart">
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../../../app/theme/hon_colors.dart';
@@ -20257,7 +20930,18 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    DatabaseService.instance.changeNotifier.addListener(_onDbChanged);
     _loadNovelDetails();
+  }
+
+  @override
+  void dispose() {
+    DatabaseService.instance.changeNotifier.removeListener(_onDbChanged);
+    super.dispose();
+  }
+
+  void _onDbChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadNovelDetails() async {
@@ -20355,19 +21039,37 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
       description: _novelDetails?.description ?? widget.novel.description ?? '',
       format: BookFormat.webNovel,
-      sourceId: widget.sourceId, // Real machine source ID
+      sourceId: widget.sourceId,
       totalChapters: chapters.length,
       coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
-    // Save book record
+    // 1. Save book record
     await DatabaseService.instance.saveBook(book);
 
-    // 1. Durably enqueue download job FIRST before any prompt interaction
+    // 2. Compute managed destination path and save Chapter record BEFORE scheduling WorkManager
     final chapterId = '$bookId:${ch.id}';
     final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final storage = StorageService.instance;
+    final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final targetPath = '${storage.chaptersDir.path}/${filePrefix}_ch1.html';
+
+    final dbChapter = Chapter(
+      id: chapterId,
+      bookId: bookId,
+      sourceChapterId: ch.id,
+      title: ch.title,
+      chapterIndex: 0,
+      url: ch.url ?? ch.id,
+      localFilePath: targetPath, // Persisted before scheduling!
+      downloadState: ChapterDownloadState.queued,
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
+    // 3. Durably enqueue download job
     final job = DownloadJob(
       id: jobId,
       bookId: bookId,
@@ -20380,23 +21082,8 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       updatedAt: DateTime.now(),
     );
     await DatabaseService.instance.enqueueDownload(job);
-    await HonDownloadManager.instance.enqueueDownload(job);
 
-    // Initial Chapter record with queued state
-    final dbChapter = Chapter(
-      id: chapterId,
-      bookId: bookId,
-      sourceChapterId: ch.id,
-      title: ch.title,
-      chapterIndex: 0,
-      url: ch.url,
-      downloadState: ChapterDownloadState.queued,
-      updatedAt: DateTime.now(),
-    );
-    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
-
-    // 2. Trigger Add-to-Library prompt without blocking or conditioning download creation
-    // Downloading proceeds independently regardless of prompt answer or dismissal
+    // 4. Trigger Add-to-Library prompt non-blockingly without conditioning download creation
     if (mounted) {
       unawaited(AddToLibraryPrompt.checkAndPrompt(
         context,
@@ -20409,66 +21096,15 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       ));
     }
 
-    try {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(status: DownloadStatus.running, updatedAt: DateTime.now()),
+    // 5. Delegate to HonDownloadManager / Android WorkManager as the sole executor.
+    // Competing foreground downloads are removed; WorkManager executes out-of-process.
+    await HonDownloadManager.instance.enqueueDownload(job);
+
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Downloading "${ch.title}" in background...')),
       );
-
-      final passageHtml = await SourceRegistry.instance.getChapterPassage(
-        widget.sourceId,
-        ch.url ?? ch.id,
-      );
-
-      // Save to managed chapters directory
-      final storage = StorageService.instance;
-      final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
-      final chFile = File('${storage.chaptersDir.path}/${filePrefix}_ch1.html');
-      await chFile.writeAsString(passageHtml);
-
-      // Update chapter record to downloaded
-      final completedChapter = dbChapter.copyWith(
-        localFilePath: chFile.path,
-        downloadState: ChapterDownloadState.downloaded,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [completedChapter]);
-
-      // Update download job to completed
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.completed,
-          progress: 1.0,
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
-        );
-      }
-    } catch (e) {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.failed,
-          errorMessage: e.toString(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      final failedChapter = dbChapter.copyWith(
-        downloadState: ChapterDownloadState.failed,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [failedChapter]);
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to download chapter: $e')),
-        );
-      }
     }
   }
 
@@ -22906,6 +23542,64 @@ class DatabaseService {
     }
   }
 
+  /// Synchronizes cached downloads and chapters from the Drift SQLite database
+  /// (e.g. after out-of-process Android WorkManager completion or recovery)
+  Future<void> refreshDownloadsAndChapters(String bookId) async {
+    final database = _db;
+    if (database == null) return;
+
+    final chapterRows = await (database.select(database.chaptersTable)
+          ..where((t) => t.bookId.equals(bookId)))
+        .get();
+    final updatedChapters = chapterRows.map((row) {
+      return Chapter(
+        id: row.id,
+        bookId: row.bookId,
+        sourceChapterId: row.sourceChapterId,
+        title: row.title,
+        chapterIndex: row.chapterIndex,
+        url: row.url,
+        localFilePath: row.localFilePath,
+        downloadState: ChapterDownloadState.values.firstWhere(
+          (d) => d.name == row.downloadState,
+          orElse: () => ChapterDownloadState.notDownloaded,
+        ),
+        releaseDate: row.releaseDate,
+        updatedAt: row.updatedAt,
+      );
+    }).toList();
+    _chapters[bookId] = updatedChapters;
+
+    await refreshAllDownloads();
+  }
+
+  /// Refreshes all download jobs from Drift SQLite database into in-memory cache
+  Future<void> refreshAllDownloads() async {
+    final database = _db;
+    if (database == null) return;
+
+    final jobs = await database.select(database.downloadJobsTable).get();
+    for (final row in jobs) {
+      _downloadJobs[row.id] = DownloadJob(
+        id: row.id,
+        bookId: row.bookId,
+        chapterId: row.chapterId,
+        chapterTitle: row.chapterTitle,
+        sourceId: row.sourceId,
+        status: DownloadStatus.values.firstWhere(
+          (s) => s.name == row.status,
+          orElse: () => DownloadStatus.queued,
+        ),
+        progress: row.progress,
+        errorMessage: row.errorMessage,
+        retryCount: row.retryCount,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      );
+    }
+    _notify();
+  }
+
   void _cleanLegacySyntheticDemos() {
     // Only remove synthetic books that have no physical file and were mock-seeded
     final demoIds = ['book_good_material', 'book_first_lie_wins', 'book_war_and_peace'];
@@ -23483,9 +24177,9 @@ class DatabaseService {
 | **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
 | **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
 | **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Milestone Implemented**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic: frosted rounded action pills (`✕`, `≡`, `Aa`), centered scrubber pill showing chapter title and percentage, Apple Books typography bottom sheet with "A / A" font size steppers, 3 reference theme cards (Light, Sepia, Dark) with selection borders, and segmented Paged vs Scroll switcher. |
-| **Persistence / Bridge (Drift SQLite)** | Drift Database & Migration (Phase 0D) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Type-safe SQLite persistence via Drift (`app_database.dart`) with `NativeDatabase.createInBackground(hon.sqlite)`. Seamless automatic migration (`_migrateFromSharedPreferencesIfNeeded`) safely imports existing SharedPreferences JSON stores into SQLite on first launch. High-performance in-memory cache preserves synchronous API compatibility. Verified via `drift_persistence_migration_test.dart`. |
+| **Persistence / Bridge (Drift SQLite)** | Drift Database & Migration (Phase 0D) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Type-safe SQLite persistence via Drift (`app_database.dart`) with `NativeDatabase.createInBackground(hon.sqlite)`. Seamless automatic migration (`_migrateFromSharedPreferencesIfNeeded`) safely imports existing SharedPreferences JSON stores into SQLite on first launch. In-memory fallback strictly restricted to explicitly configured tests (`allowMemoryFallbackForTesting`); production persistence failures throw visible error. Verified via `drift_persistence_migration_test.dart` (3/3 passing). |
 | **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
-| **Downloads (WorkManager)** | Background Download Worker & Recovery (Phase 0E) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Android native WorkManager worker (`HonDownloadWorker.kt`) runs out-of-process downloads with exponential backoff and network constraints. `HonDownloadManager.recoverInterruptedDownloads()` scans for downloads interrupted by process termination, resets `running` jobs to `queued`, and enqueues recovery. Verified via `download_recovery_test.dart`. |
+| **Downloads (WorkManager)** | Background Download Worker & Recovery (Phase 0E) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Android native WorkManager worker (`HonDownloadWorker.kt`) runs out-of-process downloads using extension passage extraction, verified file commits, and schema-matched `JOIN chapters_table` recovery queries. Database failures throw rather than being swallowed. Chapter URL and destination path persisted before scheduling; competing foreground downloads eliminated. Synchronizes updates with Flutter cache via `HonDownloadManagerBridge.notifyStateChanged()` and `DatabaseService.refreshDownloadsAndChapters()`. Verified via `download_recovery_test.dart`. |
 | **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
 | **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
 | **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
@@ -23494,58 +24188,73 @@ class DatabaseService {
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Production Kotlin-Side Shosetsu Integration (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Production Architecture Complete**: Android native Kotlin engine (`ShosetsuKotlinEngine.kt` + `ShosetsuBridge.kt`) executing Shosetsu Lua extensions via sandboxed Luaj (`org.luaj:luaj-jse`), Jsoup DOM parser, and OkHttp. Connected to Flutter via MethodChannel (`com.hon.reader/shosetsu_native`) in `SourceRegistry`. Clean fallback to Dart isolate worker on desktop/headless test environments. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter downloads durably enqueued first (`DatabaseService.enqueueDownload`), independent of non-blocking Add-to-Library prompt response; saved to managed storage (`StorageService.instance.chaptersDir`). Durable background worker execution tracked under planned WorkManager phase. |
+| **Browse (Sources)** | Production Kotlin-Side Shosetsu Integration (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Production Architecture Complete**: Android native Kotlin engine (`ShosetsuKotlinEngine.kt` + `ShosetsuBridge.kt`) consumes bundled extension's returned table with real function signatures (`search(data)`, `parseNovel(url, loadChapters)`, `getPassage(url)`) and complete Shosetsu environment (`Require("FilterOptions")`, `Require("url")`, `GETDocument`, `map`, `pageOfElem`, Jsoup DOM bridge). Silent native-to-Dart fallback removed on Android to surface errors directly. Verified via JVM unit test suite `ShosetsuKotlinEngineTest` (4/4 passing). |
+| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter URL and managed destination path persisted in SQLite (`chapters_table`) before scheduling WorkManager. Non-blocking Add-to-Library prompt triggered independently. Background execution handled solely by WorkManager without competing foreground downloads. |
 
 ---
 
 ## Detailed Evidence & Verification Log
 
 ### 1. Phase 0C: Native Kotlin-Side Shosetsu Engine & MethodChannel Integration
-- **Architectural Completion:**
-  - Integrated native Android Kotlin host runtime: `android/app/src/main/kotlin/com/hon/reader/hon/shosetsu/ShosetsuKotlinEngine.kt` and `ShosetsuBridge.kt`.
-  - Sandboxed Luaj (`org.luaj:luaj-jse:3.0.1`) strips host OS, IO, and Java reflection globals.
-  - Implements Shosetsu extension environment:
-    - Global `Require("FilterOptions")` and `Require("url")`.
-    - Real network `GET()` and `POST()` executing via `OkHttpClient`.
-    - Rich DOM querying using `org.jsoup:jsoup:1.18.1`, exposing `.select()`, `.text()`, `.attr()`, `.first()`, `.last()`, and `.html()` on responses and elements.
-  - Flutter integration in `lib/core/sources/native_shosetsu_bridge.dart` and `SourceRegistry`:
-    - On Android, routes catalog search, novel details, and passage retrieval directly to the native Kotlin engine.
-    - On desktop and headless unit test environments, falls back cleanly to the pure-Dart Lua engine.
+- **Extension Table Consumption:**
+  - `ShosetsuKotlinEngine.kt` loads the upstream Lua extension script and receives the returned extension table (`chunk.call().checktable()`).
+  - Calls `extensionTable.get("search")` with Shosetsu standard data table (`data[PAGE]` and `data[QUERY]`).
+  - Calls `extensionTable.get("parseNovel")` with `(novelUrl, loadChapters)` and extracts title, author, description, cover, and chapters list.
+  - Calls `extensionTable.get("getPassage")` with `(chapterUrl)` and returns passage HTML string.
+- **Complete Shosetsu Environment Bindings:**
+  - Implements global `Require("FilterOptions")` (callable returning object with `valueOfOrFirst` and `labels`) and `Require("url")` (with `querystring(params, base)`).
+  - Implements global `GETDocument(url)` returning wrapped Jsoup `Document` with `.select()`, `.selectFirst()`, `.text()`, `.ownText()`, `.attr()`, `.prependElement()`, `.head()`, and `.body()`.
+  - Implements Shosetsu collection helper `map(list, fn)`, `pageOfElem(doc, removeStyles)`, `Novel`, `NovelInfo:setChapters`, `NovelChapter`, `AsList`, `List`, `Listing`, `DropdownFilter`, `SwitchFilter`, `NovelStatus`, and `ChapterType`.
+  - Strips dangerous host globals (`os`, `io`, `luajava`, `debug`, `package.loadlib`) for sandbox security.
+- **Strict Android Native Execution:**
+  - Removed silent `try-catch` fallback to the Dart prototype in `lib/core/sources/source_registry.dart`.
+  - On Android, `searchSource()`, `getNovelDetails()`, and `getChapterPassage()` execute exclusively via `NativeShosetsuBridge` and surface native failures directly.
+- **Automated Verification:**
+  - Dedicated Android JUnit test suite: `android/app/src/test/kotlin/com/hon/reader/hon/ShosetsuKotlinEngineTest.kt` (4/4 tests passed: script consumption & search, novel details & chapters parsing, passage retrieval, and security sandboxing).
 
-### 2. Phase 0D: Drift (SQLite) Persistence & Seamless SharedPreferences Migration
+### 2. Phase 0D: Drift (SQLite) Persistence & Production Fallback Safety
 - **Drift SQLite Architecture:**
   - Implemented `lib/core/database/app_database.dart` with Drift 2.34.4 and `sqlite3_flutter_libs 0.6.0+eol`.
   - Tables: `BooksTable`, `LibraryEntriesTable`, `ChaptersTable`, `DownloadJobsTable`, `ReadingProgressTable`, `BookmarksTable`, `AppSettingsTable`.
-  - Runs in background isolate via `NativeDatabase.createInBackground(hon.sqlite)`, with automatic memory fallback for headless testing.
+  - Background isolate execution via `NativeDatabase.createInBackground(hon.sqlite)`.
+- **Production Persistence Protection:**
+  - Fallback to `NativeDatabase.memory()` is strictly restricted to explicitly configured test environments via `AppDatabase.allowMemoryFallbackForTesting` (enabled via `test/flutter_test_config.dart` during test runs).
+  - In production, unconfigured storage initialization failures throw a visible `StateError`, preventing silent ephemeral execution and data loss.
 - **Seamless Migration:**
-  - `_migrateFromSharedPreferencesIfNeeded()` checks if legacy JSON stores exist in SharedPreferences (`hon_books`, `hon_library`, `hon_chapters`, `hon_progress`, `hon_downloads`, `hon_bookmarks`).
-  - Automatically imports all legacy records into Drift in a single atomic database batch transaction on first run.
-  - Verified via dedicated test suite: `test/unit/drift_persistence_migration_test.dart` (2/2 passing).
+  - `_migrateFromSharedPreferencesIfNeeded()` atomically imports legacy SharedPreferences JSON stores into Drift tables on first launch.
+  - Verified via `test/unit/drift_persistence_migration_test.dart` (3/3 passing, including production safety check).
 
-### 3. Phase 0E: Android WorkManager Download Recovery & Background Worker
+### 3. Phase 0E: Android WorkManager Download Worker, Recovery & State Synchronization
 - **WorkManager Background Execution:**
-  - Implemented `android/app/src/main/kotlin/com/hon/reader/hon/HonDownloadWorker.kt` extending `CoroutineWorker` from `androidx.work:work-runtime-ktx:2.9.1`.
-  - Background downloads run out-of-process with exponential backoff (15s) and network constraints. Downloads write to atomic `.tmp` files and update the SQLite database upon completion.
-  - Interfaced with Flutter via `HonDownloadManagerBridge.kt` and `lib/core/downloads/hon_download_manager.dart`.
-- **Process Termination Recovery:**
-  - `HonDownloadManager.recoverInterruptedDownloads()` executes on app startup.
-  - Detects any job left in `DownloadStatus.running` from an earlier terminated process, resets it to `DownloadStatus.queued` in `DatabaseService` with an honest recovery message, and re-schedules execution with WorkManager.
-  - Verified via dedicated test suite: `test/unit/download_recovery_test.dart` (1/1 passing).
+  - `HonDownloadWorker.kt` extends `CoroutineWorker` from `androidx.work:work-runtime-ktx:2.9.1`.
+  - Executes chapter downloads out-of-process using upstream Shosetsu extension passage extraction (`shosetsuEngine.getPassage(luaScript, url)`).
+  - Validates file commit success: checks temp file length, validates `renameTo()`, falls back to copy-and-delete on cross-filesystem targets, and validates target existence and non-zero length before marking completion.
+  - Database write errors in SQLite (`download_jobs_table` and `chapters_table`) throw `IllegalStateException`, triggering WorkManager retry/failure handling rather than being silently ignored.
+- **Pre-scheduling Record Persistence & Sole Executor:**
+  - In `lib/features/browse/presentation/source_catalog_screen.dart`, the `Chapter` record (with `url` and `localFilePath`) is persisted to `DatabaseService` before scheduling WorkManager.
+  - Competing foreground downloads in the screen have been removed; WorkManager is the sole executor on Android.
+- **Real Drift Schema Recovery Query:**
+  - Corrected `HonDownloadWorker.recoverAllDownloads()` to join `download_jobs_table` and `chapters_table` (`SELECT d.id, c.url, c.local_file_path, d.book_id, d.chapter_id, d.source_id FROM download_jobs_table d JOIN chapters_table c ON d.chapter_id = c.id WHERE d.status IN ('queued', 'running', 'retryWaiting')`).
+  - Recovery loop tracks individual job outcomes and returns `Result.retry()` or `Result.failure()` if any job failed or requested retry.
+- **State Synchronization:**
+  - Native worker invokes `HonDownloadManagerBridge.notifyStateChanged()` on state transitions.
+  - Bridge notifies Flutter over MethodChannel (`com.hon.reader/download_worker`), triggering `DatabaseService.refreshDownloadsAndChapters(bookId)` to reload updated SQLite records and notify UI listeners.
+  - Verified via `test/unit/download_recovery_test.dart` (1/1 passing).
 
 ### 4. Phase 0-ReaderUI: Native Android Reader Classic Apple Books Design Pass
 - **Layout & Controls Redesign:**
-  - `ReadiumReaderActivity.kt` updated to Classic Apple Books aesthetic across top bar, bottom scrubber, appearance dialog, and table of contents.
+  - `ReadiumReaderActivity.kt` styled with Classic Apple Books aesthetic across top bar, bottom scrubber, appearance dialog, and table of contents.
   - Top bar features circular action pills (`✕`, `≡`, `Aa`), refined title, and dynamic theme backgrounds.
-  - Bottom bar features a centered Apple Books progress scrubber pill showing chapter title and percentage (`14% • Chapter 1`), framed by subtle navigation buttons (`❮ Prev`, `Next ❯`).
+  - Bottom bar features centered Apple Books progress scrubber pill showing chapter title and percentage (`14% • Chapter 1`), framed by subtle navigation buttons (`❮ Prev`, `Next ❯`).
   - Appearance dialog (`Aa`) redesigned with Apple Books typography stepping ("A / A" buttons with centered percentage), 3 reference theme cards (Light, Sepia, Dark) with selection indicator borders, and segmented Paged vs Scroll switcher.
   - Table of Contents sheet matches the active theme with rounded card framing, recursive depth indentation, and active chapter highlights.
-  - Preserves all layout framing (weight 1.0f non-overlapping middle container) and adaptive system bar contrast.
+  - Preserves non-overlapping middle container framing (`weight = 1.0f`) and dynamic system-bar contrast with `WindowInsetsControllerCompat`.
 
 ### 5. Quality & Verification Metrics
 - **Static Analysis:** `flutter analyze` — **0 issues found** (clean across all files).
-- **Automated Tests:** `flutter test` — **49 passed, 0 failed** across all unit and integration test suites.
-- **Android Compilation:** `./gradlew assembleDebug` — **BUILD SUCCESSFUL**. Output: `build/app/outputs/flutter-apk/app-debug.apk` (213MB).
+- **Kotlin JVM Unit Tests:** `./gradlew testDebugUnitTest` — **4 passed, 0 failed** (100% success for `ShosetsuKotlinEngineTest`).
+- **Flutter Automated Tests:** `flutter test` — **50 passed, 0 failed** across all unit and integration test suites.
+- **Android Compilation:** Gradle `assembleDebug` — **BUILD SUCCESSFUL**. Output: `build/app/outputs/flutter-apk/app-debug.apk` (213MB, SHA-256: `a9614ac7e1a0b278d877fa4487b164f71ac8faa6d246e68777179c1a6813e0f6`).
 - **Physical Device Acceptance:** Marked **⏳ Pending User Device Testing** per milestone agreement before proceeding to Phase 1.
 </file>
 

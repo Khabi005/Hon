@@ -400,6 +400,64 @@ class DatabaseService {
     }
   }
 
+  /// Synchronizes cached downloads and chapters from the Drift SQLite database
+  /// (e.g. after out-of-process Android WorkManager completion or recovery)
+  Future<void> refreshDownloadsAndChapters(String bookId) async {
+    final database = _db;
+    if (database == null) return;
+
+    final chapterRows = await (database.select(database.chaptersTable)
+          ..where((t) => t.bookId.equals(bookId)))
+        .get();
+    final updatedChapters = chapterRows.map((row) {
+      return Chapter(
+        id: row.id,
+        bookId: row.bookId,
+        sourceChapterId: row.sourceChapterId,
+        title: row.title,
+        chapterIndex: row.chapterIndex,
+        url: row.url,
+        localFilePath: row.localFilePath,
+        downloadState: ChapterDownloadState.values.firstWhere(
+          (d) => d.name == row.downloadState,
+          orElse: () => ChapterDownloadState.notDownloaded,
+        ),
+        releaseDate: row.releaseDate,
+        updatedAt: row.updatedAt,
+      );
+    }).toList();
+    _chapters[bookId] = updatedChapters;
+
+    await refreshAllDownloads();
+  }
+
+  /// Refreshes all download jobs from Drift SQLite database into in-memory cache
+  Future<void> refreshAllDownloads() async {
+    final database = _db;
+    if (database == null) return;
+
+    final jobs = await database.select(database.downloadJobsTable).get();
+    for (final row in jobs) {
+      _downloadJobs[row.id] = DownloadJob(
+        id: row.id,
+        bookId: row.bookId,
+        chapterId: row.chapterId,
+        chapterTitle: row.chapterTitle,
+        sourceId: row.sourceId,
+        status: DownloadStatus.values.firstWhere(
+          (s) => s.name == row.status,
+          orElse: () => DownloadStatus.queued,
+        ),
+        progress: row.progress,
+        errorMessage: row.errorMessage,
+        retryCount: row.retryCount,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      );
+    }
+    _notify();
+  }
+
   void _cleanLegacySyntheticDemos() {
     // Only remove synthetic books that have no physical file and were mock-seeded
     final demoIds = ['book_good_material', 'book_first_lie_wins', 'book_war_and_peace'];

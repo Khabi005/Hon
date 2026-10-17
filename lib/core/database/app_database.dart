@@ -118,6 +118,11 @@ class AppSettingsTable extends Table {
   AppSettingsTable,
 ])
 class AppDatabase extends _$AppDatabase {
+  /// When true, allows fallback to NativeDatabase.memory() if storage initialization
+  /// fails (e.g., in headless test environments without path_provider mocks).
+  /// In production, this flag is false by default so persistence failures throw a visible error.
+  static bool allowMemoryFallbackForTesting = false;
+
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
@@ -129,9 +134,14 @@ class AppDatabase extends _$AppDatabase {
         final dbFolder = await getApplicationDocumentsDirectory();
         final file = File(p.join(dbFolder.path, 'hon.sqlite'));
         return NativeDatabase.createInBackground(file);
-      } catch (_) {
-        // Fallback for headless tests or environments where path_provider is not mocked
-        return NativeDatabase.memory();
+      } catch (e) {
+        if (allowMemoryFallbackForTesting) {
+          return NativeDatabase.memory();
+        }
+        throw StateError(
+          'Failed to open durable SQLite persistence database at hon.sqlite: $e. '
+          'In-memory fallback is disabled in production to protect against data loss.',
+        );
       }
     });
   }

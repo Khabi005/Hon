@@ -4,12 +4,14 @@ import 'package:hon/app/hon_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/database/database_service.dart';
 
+import 'package:hon/core/database/app_database.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    await DatabaseService.instance.init();
+    await DatabaseService.instance.init(AppDatabase.inMemory());
   });
 
   testWidgets('HonApp loads and displays 5 bottom navigation tabs', (WidgetTester tester) async {

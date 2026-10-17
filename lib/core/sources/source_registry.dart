@@ -173,11 +173,8 @@ class SourceRegistry {
   }) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.search(script, query, page: page);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.search(script, query, page: page);
     }
     return await ShosetsuLuaEngine.instance.search(script, query, page: page);
   }
@@ -190,11 +187,8 @@ class SourceRegistry {
   }) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
     }
     return await ShosetsuLuaEngine.instance.parseNovel(
       script,
@@ -210,11 +204,8 @@ class SourceRegistry {
   ) async {
     final script = await getSourceScript(sourceId);
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      try {
-        return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
-      } catch (_) {
-        // Fallback to Dart engine if native error occurs
-      }
+      // Surface native failures directly on Android without silent fallback
+      return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
     }
     return await ShosetsuLuaEngine.instance.getPassage(script, chapterUrl);
   }

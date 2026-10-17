@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../../../app/theme/hon_colors.dart';
@@ -340,7 +339,18 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    DatabaseService.instance.changeNotifier.addListener(_onDbChanged);
     _loadNovelDetails();
+  }
+
+  @override
+  void dispose() {
+    DatabaseService.instance.changeNotifier.removeListener(_onDbChanged);
+    super.dispose();
+  }
+
+  void _onDbChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadNovelDetails() async {
@@ -438,19 +448,37 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
       description: _novelDetails?.description ?? widget.novel.description ?? '',
       format: BookFormat.webNovel,
-      sourceId: widget.sourceId, // Real machine source ID
+      sourceId: widget.sourceId,
       totalChapters: chapters.length,
       coverPath: _novelDetails?.coverUrl ?? widget.novel.coverUrl,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
-    // Save book record
+    // 1. Save book record
     await DatabaseService.instance.saveBook(book);
 
-    // 1. Durably enqueue download job FIRST before any prompt interaction
+    // 2. Compute managed destination path and save Chapter record BEFORE scheduling WorkManager
     final chapterId = '$bookId:${ch.id}';
     final jobId = 'dl_${bookId}_${ch.id}'.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final storage = StorageService.instance;
+    final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
+    final targetPath = '${storage.chaptersDir.path}/${filePrefix}_ch1.html';
+
+    final dbChapter = Chapter(
+      id: chapterId,
+      bookId: bookId,
+      sourceChapterId: ch.id,
+      title: ch.title,
+      chapterIndex: 0,
+      url: ch.url ?? ch.id,
+      localFilePath: targetPath, // Persisted before scheduling!
+      downloadState: ChapterDownloadState.queued,
+      updatedAt: DateTime.now(),
+    );
+    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
+
+    // 3. Durably enqueue download job
     final job = DownloadJob(
       id: jobId,
       bookId: bookId,
@@ -463,23 +491,8 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       updatedAt: DateTime.now(),
     );
     await DatabaseService.instance.enqueueDownload(job);
-    await HonDownloadManager.instance.enqueueDownload(job);
 
-    // Initial Chapter record with queued state
-    final dbChapter = Chapter(
-      id: chapterId,
-      bookId: bookId,
-      sourceChapterId: ch.id,
-      title: ch.title,
-      chapterIndex: 0,
-      url: ch.url,
-      downloadState: ChapterDownloadState.queued,
-      updatedAt: DateTime.now(),
-    );
-    await DatabaseService.instance.saveChapters(bookId, [dbChapter]);
-
-    // 2. Trigger Add-to-Library prompt without blocking or conditioning download creation
-    // Downloading proceeds independently regardless of prompt answer or dismissal
+    // 4. Trigger Add-to-Library prompt non-blockingly without conditioning download creation
     if (mounted) {
       unawaited(AddToLibraryPrompt.checkAndPrompt(
         context,
@@ -492,66 +505,15 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       ));
     }
 
-    try {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(status: DownloadStatus.running, updatedAt: DateTime.now()),
+    // 5. Delegate to HonDownloadManager / Android WorkManager as the sole executor.
+    // Competing foreground downloads are removed; WorkManager executes out-of-process.
+    await HonDownloadManager.instance.enqueueDownload(job);
+
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Downloading "${ch.title}" in background...')),
       );
-
-      final passageHtml = await SourceRegistry.instance.getChapterPassage(
-        widget.sourceId,
-        ch.url ?? ch.id,
-      );
-
-      // Save to managed chapters directory
-      final storage = StorageService.instance;
-      final filePrefix = bookId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_');
-      final chFile = File('${storage.chaptersDir.path}/${filePrefix}_ch1.html');
-      await chFile.writeAsString(passageHtml);
-
-      // Update chapter record to downloaded
-      final completedChapter = dbChapter.copyWith(
-        localFilePath: chFile.path,
-        downloadState: ChapterDownloadState.downloaded,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [completedChapter]);
-
-      // Update download job to completed
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.completed,
-          progress: 1.0,
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Downloaded "${ch.title}" successfully')),
-        );
-      }
-    } catch (e) {
-      await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(
-          status: DownloadStatus.failed,
-          errorMessage: e.toString(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      final failedChapter = dbChapter.copyWith(
-        downloadState: ChapterDownloadState.failed,
-        updatedAt: DateTime.now(),
-      );
-      await DatabaseService.instance.saveChapters(bookId, [failedChapter]);
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to download chapter: $e')),
-        );
-      }
     }
   }
 

@@ -51,6 +51,8 @@ dependencies {
     implementation("org.luaj:luaj-jse:3.0.1")
     implementation("org.jsoup:jsoup:1.18.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
 flutter {

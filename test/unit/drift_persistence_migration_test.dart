@@ -220,5 +220,28 @@ void main() {
           .getSingleOrNull();
       expect(dbBm, isNull);
     });
+
+    test('Production Persistence Safety: Fallback to in-memory database is blocked without explicit testing flag', () async {
+      AppDatabase.allowMemoryFallbackForTesting = false;
+      final defaultDb = AppDatabase();
+      try {
+        // Without path_provider mock or test flag, initializing the production LazyDatabase throws StateError
+        await defaultDb.customSelect('SELECT 1').get();
+        fail('Should have thrown StateError when attempting unconfigured fallback in production');
+      } on StateError catch (e) {
+        expect(e.message, contains('In-memory fallback is disabled in production'));
+      } finally {
+        try {
+          await defaultDb.close();
+        } catch (_) {}
+      }
+
+      // When explicitly enabled for tests, fallback succeeds
+      AppDatabase.allowMemoryFallbackForTesting = true;
+      final testDb = AppDatabase();
+      final res = await testDb.customSelect('SELECT 1 AS val').get();
+      expect(res.first.data['val'], 1);
+      await testDb.close();
+    });
   });
 }

@@ -1,6 +1,8 @@
 package com.hon.reader.hon
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.work.*
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -14,11 +16,37 @@ class HonDownloadManagerBridge(
 
     private val channel = MethodChannel(messenger, "com.hon.reader/download_worker")
 
+    companion object {
+        @Volatile
+        private var instance: HonDownloadManagerBridge? = null
+
+        fun notifyStateChanged(bookId: String?, jobId: String, status: String, progress: Double) {
+            val bridge = instance ?: return
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    bridge.channel.invokeMethod(
+                        "onDownloadStateChanged",
+                        mapOf(
+                            "bookId" to bookId,
+                            "jobId" to jobId,
+                            "status" to status,
+                            "progress" to progress
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     init {
+        instance = this
         channel.setMethodCallHandler(this)
     }
 
     fun cleanup() {
+        if (instance == this) {
+            instance = null
+        }
         channel.setMethodCallHandler(null)
     }
 
@@ -33,6 +61,7 @@ class HonDownloadManagerBridge(
                 val targetPath = call.argument<String>("targetPath")
                 val bookId = call.argument<String>("bookId")
                 val chapterId = call.argument<String>("chapterId")
+                val sourceId = call.argument<String>("sourceId") ?: "gutenberg"
                 val wifiOnly = call.argument<Boolean>("wifiOnly") ?: false
 
                 if (jobId.isNullOrBlank() || url.isNullOrBlank() || targetPath.isNullOrBlank()) {
@@ -49,7 +78,8 @@ class HonDownloadManagerBridge(
                     "url" to url,
                     "targetPath" to targetPath,
                     "bookId" to bookId,
-                    "chapterId" to chapterId
+                    "chapterId" to chapterId,
+                    "sourceId" to sourceId
                 )
 
                 val workRequest = OneTimeWorkRequestBuilder<HonDownloadWorker>()
