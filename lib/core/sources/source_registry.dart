@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/novel_source.dart';
 import 'lua/shosetsu_lua_engine.dart';
+import 'native_shosetsu_bridge.dart';
 
 class ExtensionMeta {
   final String id;
@@ -171,6 +172,13 @@ class SourceRegistry {
     int page = 0,
   }) async {
     final script = await getSourceScript(sourceId);
+    if (await NativeShosetsuBridge.instance.isSupported()) {
+      try {
+        return await NativeShosetsuBridge.instance.search(script, query, page: page);
+      } catch (_) {
+        // Fallback to Dart engine if native error occurs
+      }
+    }
     return await ShosetsuLuaEngine.instance.search(script, query, page: page);
   }
 
@@ -181,6 +189,13 @@ class SourceRegistry {
     bool loadChapters = true,
   }) async {
     final script = await getSourceScript(sourceId);
+    if (await NativeShosetsuBridge.instance.isSupported()) {
+      try {
+        return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
+      } catch (_) {
+        // Fallback to Dart engine if native error occurs
+      }
+    }
     return await ShosetsuLuaEngine.instance.parseNovel(
       script,
       novelUrl,
@@ -194,6 +209,13 @@ class SourceRegistry {
     String chapterUrl,
   ) async {
     final script = await getSourceScript(sourceId);
+    if (await NativeShosetsuBridge.instance.isSupported()) {
+      try {
+        return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
+      } catch (_) {
+        // Fallback to Dart engine if native error occurs
+      }
+    }
     return await ShosetsuLuaEngine.instance.getPassage(script, chapterUrl);
   }
 
