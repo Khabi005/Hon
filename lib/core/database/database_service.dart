@@ -1923,6 +1923,67 @@ class DatabaseService {
     await _persistChapterRows(resolvedToPersist);
   }
 
+  /// Safely deletes offline files for the specified chapters and resets their state to notDownloaded.
+  Future<int> deleteDownloadedChapters(String bookId, Iterable<Chapter> chaptersToDelete) async {
+    await ensureChaptersLoaded(bookId);
+    final currentChapters = getChapters(bookId);
+    final targetIds = chaptersToDelete.map((c) => c.id).toSet();
+    final updatedList = <Chapter>[];
+    int deletedCount = 0;
+
+    for (final chapter in currentChapters) {
+      if (targetIds.contains(chapter.id) &&
+          (chapter.downloadState == ChapterDownloadState.downloaded || chapter.localFilePath != null)) {
+        if (chapter.localFilePath != null) {
+          try {
+            final file = File(chapter.localFilePath!);
+            if (file.existsSync()) {
+              file.deleteSync();
+            }
+          } catch (e) {
+            debugPrint('Failed to delete chapter file: $e');
+          }
+        }
+        updatedList.add(
+          chapter.copyWith(
+            localFilePath: null,
+            downloadState: ChapterDownloadState.notDownloaded,
+            updatedAt: DateTime.now(),
+          ),
+        );
+        deletedCount++;
+      }
+    }
+
+    if (updatedList.isNotEmpty) {
+      await saveChapters(bookId, updatedList);
+      for (final ch in updatedList) {
+        final job = getAllDownloadJobs().where((j) => j.chapterId == ch.id).firstOrNull;
+        if (job != null) {
+          await removeDownloadJob(job.id);
+        }
+      }
+      _notify();
+    }
+    return deletedCount;
+  }
+
+  /// Deletes downloaded chapters prior to the current reading chapter index.
+  Future<int> deleteReadChapters(String bookId, double currentChapterIndex) async {
+    await ensureChaptersLoaded(bookId);
+    final toDelete = getChapters(bookId)
+        .where((c) => c.chapterIndex < currentChapterIndex && c.downloadState == ChapterDownloadState.downloaded);
+    return deleteDownloadedChapters(bookId, toDelete);
+  }
+
+  /// Deletes all downloaded chapters for the given book.
+  Future<int> deleteAllDownloadedChapters(String bookId) async {
+    await ensureChaptersLoaded(bookId);
+    final toDelete = getChapters(bookId)
+        .where((c) => c.downloadState == ChapterDownloadState.downloaded);
+    return deleteDownloadedChapters(bookId, toDelete);
+  }
+
   // --- Bookmarks ---
   List<Bookmark> getBookmarks(String bookId) {
     final list = _bookmarks[bookId] ?? [];

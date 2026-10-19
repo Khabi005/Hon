@@ -341,6 +341,7 @@ class HonDownloadManager {
             'targetPath': targetPath,
             'bookId': job.bookId,
             'chapterId': job.chapterId,
+            'chapterTitle': ch?.title ?? job.chapterTitle,
             'sourceId': job.sourceId,
             'wifiOnly': wifiOnly ?? await this.wifiOnly,
             'replace': replace,
@@ -457,5 +458,13 @@ class HonDownloadManager {
         updatedAt: DateTime.now(),
       ),
     );
+    await db.ensureChaptersLoaded(job.bookId);
+    final chapters = db.getChapters(job.bookId);
+    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
+      await db.saveChapters(job.bookId, [
+        ch.copyWith(downloadState: ChapterDownloadState.notDownloaded, updatedAt: DateTime.now()),
+      ]);
+    }
   }
 }
