@@ -6,7 +6,9 @@ import '../../../app/theme/hon_colors.dart';
 import '../../../core/utils/epub_parser.dart';
 
 import '../../../core/database/database_service.dart';
+import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/models/bookmark.dart';
+import '../../../core/models/chapter.dart';
 import '../../../core/models/highlight.dart';
 
 class ReaderContentsSheet extends StatefulWidget {
@@ -67,6 +69,66 @@ class ReaderContentsSheet extends StatefulWidget {
 
 class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
   int _selectedTabIndex = 0; // Chapters and bookmarks.
+  late final ScrollController _chapterScrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    final estimatedOffset =
+        (widget.currentChapterIndex * 52.0 - 150.0).clamp(0.0, double.infinity);
+    _chapterScrollController = ScrollController(
+      initialScrollOffset: estimatedOffset,
+    );
+  }
+
+  @override
+  void dispose() {
+    _chapterScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _downloadNextInContents(int count) async {
+    if (widget.bookId == null) return;
+    final db = DatabaseService.instance;
+    final book = db.getBookById(widget.bookId!);
+    if (book == null) return;
+    await db.ensureChaptersLoaded(book.id);
+    final chapters = db.getChapters(book.id);
+    final targets = chapters
+        .skip(widget.currentChapterIndex)
+        .where((c) => c.downloadState != ChapterDownloadState.downloaded)
+        .take(count)
+        .toList();
+    if (targets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No new chapters to download.')),
+        );
+      }
+      return;
+    }
+    final queued = await HonDownloadManager.instance.queueChapters(book, targets);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Queued $queued chapters.')),
+      );
+      setState(() {});
+    }
+  }
+
+  Future<void> _deleteReadDownloadsInContents() async {
+    if (widget.bookId == null) return;
+    final deleted = await DatabaseService.instance.deleteReadChapters(
+      widget.bookId!,
+      widget.currentChapterIndex.toDouble(),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted $deleted read chapter files.')),
+      );
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,7 +169,52 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const SizedBox(width: 36), // Balancer
+                if (widget.bookId != null)
+                  PopupMenuButton<String>(
+                    tooltip: 'Chapter options',
+                    icon: Icon(
+                      CupertinoIcons.ellipsis_circle,
+                      size: 22,
+                      color: textColor,
+                    ),
+                    onSelected: (value) async {
+                      switch (value) {
+                        case 'next5':
+                          await _downloadNextInContents(5);
+                          break;
+                        case 'next10':
+                          await _downloadNextInContents(10);
+                          break;
+                        case 'next25':
+                          await _downloadNextInContents(25);
+                          break;
+                        case 'deleteRead':
+                          await _deleteReadDownloadsInContents();
+                          break;
+                      }
+                    },
+                    itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'next5',
+                        child: Text('Download next 5'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'next10',
+                        child: Text('Download next 10'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'next25',
+                        child: Text('Download next 25'),
+                      ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
+                        value: 'deleteRead',
+                        child: Text('Delete read chapters'),
+                      ),
+                    ],
+                  )
+                else
+                  const SizedBox(width: 36), // Balancer
                 Expanded(
                   child: Column(
                     children: [
@@ -240,7 +347,15 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
       );
     }
 
+    final dbChapters = widget.bookId != null
+        ? DatabaseService.instance.getChapters(widget.bookId!)
+        : <Chapter>[];
+    final dbChapterMap = {
+      for (final c in dbChapters) c.chapterIndex.toInt(): c,
+    };
+
     return ListView.separated(
+      controller: _chapterScrollController,
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       itemCount: widget.chapters.length,
@@ -251,6 +366,79 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
       itemBuilder: (context, index) {
         final chapter = widget.chapters[index];
         final isCurrent = index == widget.currentChapterIndex;
+        final dbCh = dbChapterMap[index];
+        final state = dbCh?.downloadState ?? ChapterDownloadState.notDownloaded;
+
+        Widget? trailingStatus;
+        if (widget.bookId != null && dbCh != null) {
+          switch (state) {
+            case ChapterDownloadState.downloaded:
+              trailingStatus = const Icon(
+                CupertinoIcons.checkmark_circle_fill,
+                color: HonColors.accentGreen,
+                size: 18,
+              );
+              break;
+            case ChapterDownloadState.downloading:
+              trailingStatus = const SizedBox(
+                width: 18,
+                height: 18,
+                child: CupertinoActivityIndicator(radius: 8),
+              );
+              break;
+            case ChapterDownloadState.queued:
+              trailingStatus = Icon(
+                CupertinoIcons.clock,
+                color: subtextColor,
+                size: 18,
+              );
+              break;
+            case ChapterDownloadState.paused:
+              trailingStatus = GestureDetector(
+                onTap: () async {
+                  await HonDownloadManager.instance.resumeDownload(dbCh.id);
+                  if (mounted) setState(() {});
+                },
+                child: const Icon(
+                  CupertinoIcons.pause_circle_fill,
+                  color: HonColors.accentOrange,
+                  size: 18,
+                ),
+              );
+              break;
+            case ChapterDownloadState.failed:
+              trailingStatus = GestureDetector(
+                onTap: () async {
+                  await HonDownloadManager.instance.resumeDownload(dbCh.id);
+                  if (mounted) setState(() {});
+                },
+                child: Icon(
+                  CupertinoIcons.exclamationmark_circle_fill,
+                  color: Theme.of(context).colorScheme.error,
+                  size: 18,
+                ),
+              );
+              break;
+            case ChapterDownloadState.notDownloaded:
+              trailingStatus = GestureDetector(
+                onTap: () async {
+                  final book =
+                      DatabaseService.instance.getBookById(widget.bookId!);
+                  if (book != null) {
+                    await HonDownloadManager.instance
+                        .queueChapters(book, [dbCh]);
+                    if (mounted) setState(() {});
+                  }
+                },
+                child: Icon(
+                  CupertinoIcons.arrow_down_circle,
+                  color: subtextColor,
+                  size: 18,
+                ),
+              );
+              break;
+          }
+        }
 
         return InkWell(
           onTap: () {
@@ -273,6 +461,10 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                   ),
                 ),
                 const SizedBox(width: 12),
+                if (trailingStatus != null) ...[
+                  trailingStatus,
+                  const SizedBox(width: 8),
+                ],
                 Text(
                   '${index + 1}',
                   style: TextStyle(

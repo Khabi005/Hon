@@ -283,7 +283,7 @@ class ChapterUpdateService extends ChangeNotifier {
                 updatedAt: now,
               );
               repairedIdMap[matchedOld.id] = chapter.id;
-              if (matchedOld.sourceChapterId != null) {
+              if (matchedOld.sourceChapterId.isNotEmpty) {
                 repairedIdMap['${book.id}:${matchedOld.sourceChapterId}'] = chapter.id;
               }
             } else {

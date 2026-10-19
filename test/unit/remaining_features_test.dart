@@ -406,4 +406,54 @@ void main() {
       expect(await File(resumed.localFilePath!).exists(), true);
     },
   );
+
+  test(
+    'deleteReadChapters and deleteAllDownloadedChapters delete files and reset state',
+    () async {
+      await db.saveBook(book('novel1'));
+      final file0 = File('${folder.path}/chapters/c0.html')
+        ..writeAsStringSync('Chapter 0 content');
+      final file1 = File('${folder.path}/chapters/c1.html')
+        ..writeAsStringSync('Chapter 1 content');
+      final file2 = File('${folder.path}/chapters/c2.html')
+        ..writeAsStringSync('Chapter 2 content');
+
+      final ch0 = chapter('c0', 'novel1', 0, path: file0.path);
+      final ch1 = chapter('c1', 'novel1', 1, path: file1.path);
+      final ch2 = chapter('c2', 'novel1', 2, path: file2.path);
+      await db.saveChapters('novel1', [ch0, ch1, ch2]);
+
+      expect(file0.existsSync(), isTrue);
+      expect(file1.existsSync(), isTrue);
+      expect(file2.existsSync(), isTrue);
+
+      final deletedRead = await db.deleteReadChapters('novel1', 2.0);
+      expect(deletedRead, 2);
+      expect(file0.existsSync(), isFalse);
+      expect(file1.existsSync(), isFalse);
+      expect(file2.existsSync(), isTrue);
+
+      var updatedChapters = db.getChapters('novel1');
+      expect(updatedChapters[0].downloadState, ChapterDownloadState.notDownloaded);
+      expect(updatedChapters[0].localFilePath, isNull);
+      expect(updatedChapters[1].downloadState, ChapterDownloadState.notDownloaded);
+      expect(updatedChapters[1].localFilePath, isNull);
+      expect(updatedChapters[2].downloadState, ChapterDownloadState.downloaded);
+      expect(updatedChapters[2].localFilePath, file2.path);
+
+      final deletedAll = await db.deleteAllDownloadedChapters('novel1');
+      expect(deletedAll, 1);
+      expect(file2.existsSync(), isFalse);
+
+      updatedChapters = db.getChapters('novel1');
+      expect(
+        updatedChapters.every(
+          (c) => c.downloadState == ChapterDownloadState.notDownloaded,
+        ),
+        isTrue,
+      );
+      expect(updatedChapters.every((c) => c.localFilePath == null), isTrue);
+    },
+  );
 }
+

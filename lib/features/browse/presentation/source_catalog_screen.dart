@@ -643,6 +643,39 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   bool _isOpeningChapter = false;
   bool _isDownloading = false;
   bool _reverseChapters = false;
+  final ScrollController _scrollController = ScrollController();
+
+  static String cleanHtmlSynopsis(String raw) {
+    if (raw.isEmpty) return raw;
+    var text = raw;
+    text = text.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
+    text = text.replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n');
+    text = text.replaceAll(RegExp(r'<p[^>]*>', caseSensitive: false), '');
+    text = text.replaceAll(RegExp(r'<[^>]+>'), '');
+    text = text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&hellip;', '…')
+        .replaceAll('&mdash;', '—')
+        .replaceAll('&ndash;', '–');
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    return text.trim();
+  }
+
+  void _scrollToChapter(int index) {
+    if (!_scrollController.hasClients) return;
+    final target = (420.0 + index * 56.0).clamp(0.0, _scrollController.position.maxScrollExtent);
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   void initState() {
@@ -658,6 +691,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   @override
   void dispose() {
     DatabaseService.instance.changeNotifier.removeListener(_onDbChanged);
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -682,6 +716,13 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
           _novelDetails = details;
           _isLoadingDetails = false;
         });
+        final bookId = '${widget.sourceId}:${widget.novel.id}';
+        final progress = DatabaseService.instance.getProgress(bookId);
+        if (progress != null && progress.chapterIndex > 0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _scrollToChapter(progress.chapterIndex.toInt());
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -702,11 +743,12 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     final previous = db.getBookById(id);
     final now = DateTime.now();
     final chapters = _novelDetails?.chapters ?? [];
+    final rawDesc = _novelDetails?.description ?? widget.novel.description ?? '';
     final book = Book(
       id: id,
       title: _novelDetails?.title ?? widget.novel.title,
       author: _novelDetails?.author ?? widget.novel.author ?? widget.sourceName,
-      description: _novelDetails?.description ?? widget.novel.description ?? '',
+      description: cleanHtmlSynopsis(rawDesc),
       format: BookFormat.webNovel,
       sourceId: widget.sourceId,
       sourceNovelId: widget.novel.id,
@@ -847,6 +889,74 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     }
   }
 
+  Future<void> _downloadNext(int count) async {
+    final book = await _saveNovel();
+    await DatabaseService.instance.ensureChaptersLoaded(book.id);
+    final chapters = DatabaseService.instance.getChapters(book.id);
+    final progress = DatabaseService.instance.getProgress(book.id);
+    final start = DatabaseService.instance.isBookFinished(book.id)
+        ? chapters.length
+        : progress == null
+            ? 0
+            : (progress.chapterIndex.toInt() +
+                (progress.completionPercentage >= 1 ? 1 : 0))
+                .clamp(0, chapters.length);
+    final targets = chapters
+        .skip(start)
+        .where((c) => c.downloadState != ChapterDownloadState.downloaded)
+        .take(count)
+        .toList();
+    if (targets.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No new chapters to download.')),
+        );
+      }
+      return;
+    }
+    final queued = await HonDownloadManager.instance.queueChapters(book, targets);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Queued $queued chapters.')),
+      );
+    }
+  }
+
+  Future<void> _deleteReadDownloads() async {
+    final book = await _saveNovel();
+    final progress = DatabaseService.instance.getProgress(book.id);
+    if (progress == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No reading progress found.')),
+        );
+      }
+      return;
+    }
+    final deleted = await DatabaseService.instance.deleteReadChapters(
+      book.id,
+      progress.chapterIndex.toDouble(),
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted $deleted read chapter files.')),
+      );
+      setState(() {});
+    }
+  }
+
+  Future<void> _deleteAllOffline() async {
+    final bookId = '${widget.sourceId}:${widget.novel.id}';
+    final deleted =
+        await DatabaseService.instance.deleteAllDownloadedChapters(bookId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted $deleted offline chapter files.')),
+      );
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -938,6 +1048,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
           : Stack(
               children: [
                 CustomScrollView(
+                  controller: _scrollController,
                   slivers: [
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
@@ -1133,17 +1244,83 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                     color: textPrimary,
                                   ),
                                 ),
-                                IconButton(
-                                  icon: const Icon(
-                                    CupertinoIcons.sort_down,
-                                    size: 18,
-                                  ),
-                                  tooltip: _reverseChapters
-                                      ? 'Oldest chapter first'
-                                      : 'Newest chapter first',
-                                  onPressed: () => setState(
-                                    () => _reverseChapters = !_reverseChapters,
-                                  ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        CupertinoIcons.sort_down,
+                                        size: 18,
+                                      ),
+                                      tooltip: _reverseChapters
+                                          ? 'Oldest chapter first'
+                                          : 'Newest chapter first',
+                                      onPressed: () => setState(
+                                        () =>
+                                            _reverseChapters = !_reverseChapters,
+                                      ),
+                                    ),
+                                    PopupMenuButton<String>(
+                                      tooltip: 'Bulk chapter options',
+                                      icon: const Icon(
+                                        CupertinoIcons.ellipsis_circle,
+                                        size: 20,
+                                      ),
+                                      onSelected: (value) async {
+                                        switch (value) {
+                                          case 'next5':
+                                            await _downloadNext(5);
+                                            break;
+                                          case 'next10':
+                                            await _downloadNext(10);
+                                            break;
+                                          case 'next25':
+                                            await _downloadNext(25);
+                                            break;
+                                          case 'custom':
+                                            await _handleDownloadChapters();
+                                            break;
+                                          case 'deleteRead':
+                                            await _deleteReadDownloads();
+                                            break;
+                                          case 'deleteAll':
+                                            await _deleteAllOffline();
+                                            break;
+                                        }
+                                      },
+                                      itemBuilder: (ctx) => [
+                                        const PopupMenuItem(
+                                          value: 'next5',
+                                          child: Text('Download next 5'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'next10',
+                                          child: Text('Download next 10'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'next25',
+                                          child: Text('Download next 25'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'custom',
+                                          child: Text(
+                                            'Select range / chapters...',
+                                          ),
+                                        ),
+                                        const PopupMenuDivider(),
+                                        const PopupMenuItem(
+                                          value: 'deleteRead',
+                                          child: Text('Delete read chapters'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'deleteAll',
+                                          child: Text(
+                                            'Delete all offline files',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -1162,9 +1339,82 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                               : position;
                           final chapter = chapters[index];
                           final saved = savedChapters[chapter.id];
-                          final downloaded =
-                              saved?.downloadState ==
-                              ChapterDownloadState.downloaded;
+                          final state =
+                              saved?.downloadState ??
+                              ChapterDownloadState.notDownloaded;
+
+                          Widget trailingWidget;
+                          String? subtitleText;
+
+                          switch (state) {
+                            case ChapterDownloadState.downloaded:
+                              subtitleText = 'Saved offline';
+                              trailingWidget = const Icon(
+                                CupertinoIcons.checkmark_circle_fill,
+                                color: HonColors.accentGreen,
+                                size: 20,
+                              );
+                              break;
+                            case ChapterDownloadState.downloading:
+                              subtitleText = 'Downloading...';
+                              trailingWidget = const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CupertinoActivityIndicator(radius: 9),
+                              );
+                              break;
+                            case ChapterDownloadState.queued:
+                              subtitleText = 'Queued';
+                              trailingWidget = Icon(
+                                CupertinoIcons.clock,
+                                color: textSecondary,
+                                size: 20,
+                              );
+                              break;
+                            case ChapterDownloadState.paused:
+                              subtitleText = 'Paused';
+                              trailingWidget = IconButton(
+                                tooltip: 'Resume download',
+                                onPressed: saved == null
+                                    ? null
+                                    : () => HonDownloadManager.instance
+                                        .resumeDownload(saved.id),
+                                icon: const Icon(
+                                  CupertinoIcons.pause_circle_fill,
+                                  color: HonColors.accentOrange,
+                                  size: 20,
+                                ),
+                              );
+                              break;
+                            case ChapterDownloadState.failed:
+                              subtitleText = 'Download failed';
+                              trailingWidget = IconButton(
+                                tooltip: 'Retry download',
+                                onPressed: saved == null
+                                    ? null
+                                    : () => HonDownloadManager.instance
+                                        .resumeDownload(saved.id),
+                                icon: Icon(
+                                  CupertinoIcons.exclamationmark_circle_fill,
+                                  color: Theme.of(context).colorScheme.error,
+                                  size: 20,
+                                ),
+                              );
+                              break;
+                            case ChapterDownloadState.notDownloaded:
+                              trailingWidget = IconButton(
+                                tooltip: 'Download chapter',
+                                onPressed: _isDownloading
+                                    ? null
+                                    : () => _handleDownloadChapters(index),
+                                icon: const Icon(
+                                  CupertinoIcons.arrow_down_circle,
+                                  size: 22,
+                                ),
+                              );
+                              break;
+                          }
+
                           return ListTile(
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 4,
@@ -1174,28 +1424,23 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                               chapter.title,
                               style: const TextStyle(fontSize: 14),
                             ),
-                            subtitle: downloaded
-                                ? const Text(
-                                    'Saved offline',
-                                    style: TextStyle(fontSize: 12),
+                            subtitle: subtitleText != null
+                                ? Text(
+                                    subtitleText,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color:
+                                          state == ChapterDownloadState.failed
+                                          ? Theme.of(context).colorScheme.error
+                                          : state ==
+                                                ChapterDownloadState.downloaded
+                                          ? HonColors.accentGreen
+                                          : textSecondary,
+                                    ),
                                   )
                                 : null,
                             onTap: () => _openChapter(chapter, index),
-                            trailing: downloaded
-                                ? const Icon(
-                                    CupertinoIcons.checkmark_circle,
-                                    size: 20,
-                                  )
-                                : IconButton(
-                                    tooltip: 'Download chapter',
-                                    onPressed: _isDownloading
-                                        ? null
-                                        : () => _handleDownloadChapters(index),
-                                    icon: const Icon(
-                                      CupertinoIcons.arrow_down_circle,
-                                      size: 22,
-                                    ),
-                                  ),
+                            trailing: trailingWidget,
                           );
                         },
                       ),

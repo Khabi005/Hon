@@ -32,6 +32,8 @@ class Chapter {
     required this.updatedAt,
   });
 
+  static const _sentinel = Object();
+
   Chapter copyWith({
     String? id,
     String? bookId,
@@ -39,9 +41,9 @@ class Chapter {
     String? title,
     double? chapterIndex,
     String? url,
-    String? localFilePath,
+    Object? localFilePath = _sentinel,
     ChapterDownloadState? downloadState,
-    DateTime? releaseDate,
+    Object? releaseDate = _sentinel,
     DateTime? updatedAt,
   }) {
     return Chapter(
@@ -51,12 +53,17 @@ class Chapter {
       title: title ?? this.title,
       chapterIndex: chapterIndex ?? this.chapterIndex,
       url: url ?? this.url,
-      localFilePath: localFilePath ?? this.localFilePath,
+      localFilePath: identical(localFilePath, _sentinel)
+          ? this.localFilePath
+          : localFilePath as String?,
       downloadState: downloadState ?? this.downloadState,
-      releaseDate: releaseDate ?? this.releaseDate,
+      releaseDate: identical(releaseDate, _sentinel)
+          ? this.releaseDate
+          : releaseDate as DateTime?,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
+
 
   Map<String, dynamic> toMap() {
     return {

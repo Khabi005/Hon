@@ -85,4 +85,22 @@ void main() {
     expect(service.repositories, isEmpty);
     expect(service.loadError, isNotNull);
   });
+
+  test('RepositoryScript.fromJson resolves relative iconUrl and collects allowedHosts', () {
+    final script = RepositoryScript.fromJson({
+      'id': '100',
+      'name': 'Test Script',
+      'lang': 'en',
+      'fileName': 'test_script',
+      'ver': '1.0.0',
+      'imageURL': 'icons/test_script.png',
+      'allowedHosts': ['api.testscript.com'],
+      'hosts': ['cdn.testscript.com'],
+    }, baseUrl: 'https://repo.shosetsu.app/repo/');
+
+    expect(script.iconUrl, 'https://repo.shosetsu.app/repo/icons/test_script.png');
+    expect(script.allowedHosts, contains('api.testscript.com'));
+    expect(script.allowedHosts, contains('cdn.testscript.com'));
+    expect(script.allowedHosts, contains('repo.shosetsu.app'));
+  });
 }

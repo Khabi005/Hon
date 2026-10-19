@@ -15,6 +15,7 @@ class RepositoryScript {
   final String? checksum;
   final String? iconUrl;
   final List<String> dependencies;
+  final List<String> allowedHosts;
 
   const RepositoryScript({
     required this.id,
@@ -26,6 +27,7 @@ class RepositoryScript {
     this.checksum,
     this.iconUrl,
     this.dependencies = const [],
+    this.allowedHosts = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -38,24 +40,52 @@ class RepositoryScript {
     'md5': checksum,
     if (iconUrl != null) 'imageURL': iconUrl,
     'dependencies': dependencies,
+    if (allowedHosts.isNotEmpty) 'allowedHosts': allowedHosts,
   };
 
-  factory RepositoryScript.fromJson(Map<String, dynamic> json) =>
-      RepositoryScript(
-        id: json['id'].toString(),
-        name: json['name'] as String,
-        language: json['lang'] as String,
-        fileName: json['fileName'] as String,
-        version: json['ver'] as String,
-        libraryVersion: json['libVer'] as String? ?? '',
-        checksum: json['md5'] as String?,
-        iconUrl: (json['imageURL'] ?? json['iconUrl']) as String?,
-        dependencies:
-            (json['dependencies'] as List<dynamic>?)
-                ?.map((e) => e.toString())
-                .toList() ??
-            const [],
+  factory RepositoryScript.fromJson(
+    Map<String, dynamic> json, {
+    String? baseUrl,
+  }) {
+    String? rawIcon = (json['imageURL'] ?? json['iconUrl']) as String?;
+    if (rawIcon != null &&
+        baseUrl != null &&
+        !rawIcon.startsWith('http://') &&
+        !rawIcon.startsWith('https://')) {
+      rawIcon = Uri.tryParse(baseUrl)?.resolve(rawIcon).toString() ?? rawIcon;
+    }
+    final hosts = <String>{};
+    if (json['allowedHosts'] is List) {
+      hosts.addAll(
+        (json['allowedHosts'] as List).map((e) => e.toString().trim()),
       );
+    }
+    if (json['hosts'] is List) {
+      hosts.addAll((json['hosts'] as List).map((e) => e.toString().trim()));
+    }
+    if (rawIcon != null) {
+      final host = Uri.tryParse(rawIcon)?.host;
+      if (host != null && host.isNotEmpty) hosts.add(host);
+    }
+    hosts.remove('');
+
+    return RepositoryScript(
+      id: json['id'].toString(),
+      name: json['name'] as String,
+      language: json['lang'] as String,
+      fileName: json['fileName'] as String,
+      version: json['ver'] as String,
+      libraryVersion: json['libVer'] as String? ?? '',
+      checksum: json['md5'] as String?,
+      iconUrl: rawIcon,
+      dependencies:
+          (json['dependencies'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
+      allowedHosts: hosts.toList()..sort(),
+    );
+  }
 }
 
 class ExtensionRepository {
@@ -96,6 +126,7 @@ class ExtensionRepository {
         .map(
           (entry) => RepositoryScript.fromJson(
             Map<String, dynamic>.from(entry as Map),
+            baseUrl: json['url'] as String?,
           ),
         )
         .toList(),

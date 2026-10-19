@@ -1956,7 +1956,16 @@ class DatabaseService {
     }
 
     if (updatedList.isNotEmpty) {
-      await saveChapters(bookId, updatedList);
+      final updatedMap = {for (final c in updatedList) c.id: c};
+      final newList = currentChapters.map((c) => updatedMap[c.id] ?? c).toList();
+      _chapters[bookId] = newList;
+      _totalCounts[bookId] = newList.length;
+      _downloadedCounts[bookId] = newList
+          .where((c) =>
+              c.downloadState == ChapterDownloadState.downloaded &&
+              c.localFilePath != null)
+          .length;
+      await _persistChapterRows(updatedList);
       for (final ch in updatedList) {
         final job = getAllDownloadJobs().where((j) => j.chapterId == ch.id).firstOrNull;
         if (job != null) {

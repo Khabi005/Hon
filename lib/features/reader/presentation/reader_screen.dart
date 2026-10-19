@@ -930,7 +930,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           loadedChapters.add(
             EpubChapterItem(
               id: 'ch_$requestedIndex',
-              title: widget.book.title,
+              title: 'Chapter ${requestedIndex + 1}',
               contentHref: 'webnovel_ch_$requestedIndex',
               htmlContent: widget.initialChapterContent!,
             ),
@@ -1384,26 +1384,35 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _updateVisibleChapter() {
     if (!mounted || _chapters.isEmpty) return;
-    final viewportTop = MediaQuery.of(context).padding.top + 52.0;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final checkY = screenHeight * 0.35;
     int? visible;
-    double? nearest;
     final sortedKeys = _chapterKeys.keys.toList()..sort();
     for (final chapterIndex in sortedKeys) {
-      final entry = MapEntry(chapterIndex, _chapterKeys[chapterIndex]!);
-      final box = entry.value.currentContext?.findRenderObject();
+      final key = _chapterKeys[chapterIndex];
+      final box = key?.currentContext?.findRenderObject();
       if (box is! RenderBox || !box.hasSize) continue;
       final top = box.localToGlobal(Offset.zero).dy;
       final bottom = top + box.size.height;
-      if (bottom <= viewportTop) continue;
-      final distance = (top - viewportTop).abs();
-      if (top <= viewportTop) {
-        visible = entry.key;
-        nearest = 0;
-        continue;
+      if (top <= checkY && bottom > checkY) {
+        visible = chapterIndex;
+        break;
       }
-      if (nearest == null || distance < nearest) {
-        nearest = distance;
-        visible = entry.key;
+    }
+    if (visible == null) {
+      double? minDistance;
+      for (final chapterIndex in sortedKeys) {
+        final key = _chapterKeys[chapterIndex];
+        final box = key?.currentContext?.findRenderObject();
+        if (box is! RenderBox || !box.hasSize) continue;
+        final top = box.localToGlobal(Offset.zero).dy;
+        final bottom = top + box.size.height;
+        if (bottom <= 0 || top >= screenHeight) continue;
+        final dist = (top - checkY).abs();
+        if (minDistance == null || dist < minDistance) {
+          minDistance = dist;
+          visible = chapterIndex;
+        }
       }
     }
     if (visible != null && visible != _currentChapterIndex) {
@@ -1707,6 +1716,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               );
             }
           },
+          onReloadChapter: _reloadCurrentChapter,
           onShareSelected: _shareSelectedQuote,
           onToggleOrientationLock: _toggleOrientationLock,
           isOrientationLocked: _isOrientationLocked,
@@ -1717,5 +1727,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         );
       },
     );
+  }
+
+  Future<void> _reloadCurrentChapter() async {
+    final idx = _currentChapterIndex;
+    _loadingChapters.add(idx);
+    _chapterErrors.remove(idx);
+    _documents.remove(idx);
+    setState(() {});
+    await _ensureChapterContent(idx);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Chapter reloaded'),
+          duration: Duration(seconds: 1),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 }

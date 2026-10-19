@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/bootstrap/providers.dart';
+import '../../../app/theme/hon_colors.dart';
 import '../../../shared/widgets/hon_screen_header.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/downloads/hon_download_manager.dart';
@@ -70,7 +71,28 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
     final imported = offline
         .where((book) => book.format != BookFormat.webNovel)
         .length;
-    final active = jobs.where((job) => job.isActive).length;
+    final downloading =
+        jobs.where((job) => job.status == DownloadStatus.running).length;
+    final queued = jobs
+        .where(
+          (job) =>
+              job.status == DownloadStatus.queued ||
+              job.status == DownloadStatus.retryWaiting,
+        )
+        .length;
+    final paused =
+        jobs.where((job) => job.status == DownloadStatus.paused).length;
+    String queueLabel;
+    if (downloading > 0) {
+      queueLabel =
+          'Queue · $downloading downloading${queued > 0 ? ', $queued queued' : ''}';
+    } else if (queued > 0) {
+      queueLabel = 'Queue · $queued queued';
+    } else if (paused > 0) {
+      queueLabel = 'Queue · $paused paused';
+    } else {
+      queueLabel = 'Queue';
+    }
     final completed = jobs
         .where((job) => job.status == DownloadStatus.completed)
         .toList();
@@ -146,7 +168,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
               sliver: SliverToBoxAdapter(
                 child: HonSegmentedControl(
                   labels: [
-                    active > 0 ? 'Queue · $active active' : 'Queue',
+                    queueLabel,
                     'Ready Offline',
                   ],
                   selected: _tab,
@@ -297,15 +319,43 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
           padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
           child: Row(
             children: [
-              Icon(
-                job.status == DownloadStatus.completed
-                    ? CupertinoIcons.checkmark_circle_fill
-                    : failed
-                    ? CupertinoIcons.exclamationmark_circle
-                    : CupertinoIcons.arrow_down_circle,
-                color: failed ? colors.error : colors.onSurfaceVariant,
-                size: 24,
-              ),
+              switch (job.status) {
+                DownloadStatus.completed => const Icon(
+                    CupertinoIcons.checkmark_circle_fill,
+                    color: HonColors.accentGreen,
+                    size: 24,
+                  ),
+                DownloadStatus.running => const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CupertinoActivityIndicator(radius: 10),
+                  ),
+                DownloadStatus.queued => Icon(
+                    CupertinoIcons.clock,
+                    color: colors.onSurfaceVariant,
+                    size: 24,
+                  ),
+                DownloadStatus.retryWaiting => const Icon(
+                    CupertinoIcons.clock_fill,
+                    color: HonColors.accentOrange,
+                    size: 24,
+                  ),
+                DownloadStatus.paused => const Icon(
+                    CupertinoIcons.pause_circle_fill,
+                    color: HonColors.accentOrange,
+                    size: 24,
+                  ),
+                DownloadStatus.failed => Icon(
+                    CupertinoIcons.exclamationmark_circle_fill,
+                    color: colors.error,
+                    size: 24,
+                  ),
+                DownloadStatus.cancelled => Icon(
+                    CupertinoIcons.xmark_circle,
+                    color: colors.onSurfaceVariant,
+                    size: 24,
+                  ),
+              },
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

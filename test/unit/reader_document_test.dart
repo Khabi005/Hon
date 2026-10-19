@@ -64,4 +64,30 @@ void main() {
       }
     },
   );
+
+  test('ReaderDocument.parse deduplicates chapter heading when already in HTML', () {
+    const html = '''
+      <div>
+        <h3>Chapter 80 - The Dark Sea</h3>
+        <p>Sunny stood upon the prow of the ship gazing into the dark depths.</p>
+      </div>
+    ''';
+    final doc = ReaderDocument.parse(html, title: 'Chapter 80: The Dark Sea');
+    expect(doc.blocks.first.heading, isTrue);
+    expect(doc.blocks.first.text, contains('Chapter 80 - The Dark Sea'));
+    expect(doc.blocks.where((b) => b.heading).length, 1);
+  });
+
+  test('ReaderDocument.parse prepends chapter title when not in HTML body', () {
+    const html = '''
+      <div>
+        <p>The dawn brought no warmth to the forgotten shore.</p>
+      </div>
+    ''';
+    final doc = ReaderDocument.parse(html, title: 'Chapter 81: The Forgotten Shore');
+    expect(doc.blocks.first.heading, isTrue);
+    expect(doc.blocks.first.text, 'Chapter 81: The Forgotten Shore');
+    expect(doc.blocks[1].text, contains('The dawn brought no warmth'));
+  });
 }
+

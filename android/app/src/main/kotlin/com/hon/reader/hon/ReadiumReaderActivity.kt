@@ -899,7 +899,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
     private fun saveDurablePreferences() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (bookId.isNotEmpty()) {
-            val typoJson = prefs.getString("readium_typography", "{}") ?: "{}"
+            val typoJson = prefs.getString("readium_typography_$bookId", null)
+                ?: prefs.getString("readium_typography", "{}")
+                ?: "{}"
             val settingsMap = mapOf(
                 "fontSize" to currentFontSize,
                 "theme" to currentPreset,
@@ -935,7 +937,13 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun readerPreferences(): EpubPreferences {
-        val stored = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString("readium_typography", null)
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val stored = if (bookId.isNotEmpty()) {
+            prefs.getString("readium_typography_$bookId", null)
+                ?: prefs.getString("readium_typography", null)
+        } else {
+            prefs.getString("readium_typography", null)
+        }
         val typography = try { JSONObject(stored ?: "{}") } catch (_: Exception) { JSONObject() }
         val font = when (typography.optString("font", "georgia")) {
             "sanFrancisco" -> FontFamily.SANS_SERIF
@@ -1356,13 +1364,87 @@ class ReadiumReaderActivity : AppCompatActivity() {
         showBottomSheet(dialog, layout, (resources.displayMetrics.heightPixels * .8).toInt())
     }
 
+    private fun resetToGlobalDefaults() {
+        var defaultPreset = "calm"
+        var defaultFontSize = 1.0
+        var defaultScrollMode = false
+        val defaultTypography = JSONObject()
+
+        try {
+            val flutterPrefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val jsonStr = flutterPrefs.getString("flutter.hon_reader_preferences_v1", null)
+            if (jsonStr != null) {
+                val json = JSONObject(jsonStr)
+                if (json.has("theme")) {
+                    val t = json.optString("theme", "calm").lowercase()
+                    if (t in setOf("original", "quiet", "paper", "bold", "calm", "focus")) {
+                        defaultPreset = t
+                    }
+                }
+                if (json.has("layout")) {
+                    defaultScrollMode = json.optString("layout", "") == "verticalScroll"
+                }
+                if (json.has("size")) {
+                    val sz = json.optDouble("size", 18.0)
+                    defaultFontSize = (sz / 18.0).coerceIn(0.6, 2.5)
+                }
+                if (json.has("font")) {
+                    defaultTypography.put("font", json.optString("font", "georgia"))
+                }
+                if (json.has("lineHeight")) {
+                    defaultTypography.put("lineHeight", json.optDouble("lineHeight", 1.65))
+                }
+                if (json.has("margin")) {
+                    defaultTypography.put("margin", json.optDouble("margin", 24.0))
+                }
+                if (json.has("paragraphSpacing")) {
+                    defaultTypography.put("paragraphSpacing", json.optDouble("paragraphSpacing", 8.0))
+                }
+                if (json.has("indent")) {
+                    defaultTypography.put("indent", json.optDouble("indent", 24.0))
+                }
+                if (json.has("justified")) {
+                    defaultTypography.put("justified", json.optBoolean("justified", true))
+                }
+                if (json.has("publisherStyles")) {
+                    defaultTypography.put("publisherStyles", json.optBoolean("publisherStyles", false))
+                }
+            }
+        } catch (_: Exception) {}
+
+        currentFontSize = defaultFontSize
+        currentPreset = defaultPreset
+        isScrollMode = defaultScrollMode
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (bookId.isNotEmpty()) {
+            prefs.edit().remove("readium_typography_$bookId").apply()
+        } else {
+            prefs.edit().putString("readium_typography", defaultTypography.toString()).apply()
+        }
+    }
+
     private fun showAppearanceDialog() {
         val dialog = Dialog(this)
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        fun typography(): JSONObject = try { JSONObject(prefs.getString("readium_typography", "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+        fun typography(): JSONObject = try {
+            val raw = if (bookId.isNotEmpty()) {
+                prefs.getString("readium_typography_$bookId", null)
+                    ?: prefs.getString("readium_typography", "{}")
+                    ?: "{}"
+            } else {
+                prefs.getString("readium_typography", "{}") ?: "{}"
+            }
+            JSONObject(raw)
+        } catch (_: Exception) { JSONObject() }
+
         fun store(key: String, value: Any) {
             val values = typography().put(key, value)
-            prefs.edit().putString("readium_typography", values.toString()).apply()
+            if (bookId.isNotEmpty()) {
+                prefs.edit().putString("readium_typography_$bookId", values.toString()).apply()
+            } else {
+                prefs.edit().putString("readium_typography", values.toString()).apply()
+            }
             saveDurablePreferences()
             if (key != "brightness") applyPreferences()
         }
@@ -1489,11 +1571,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(16) })
                 layout.addView(button("Reset to defaults", "Reset reader settings to defaults") {
                     HonReaderBridge.instance?.resetBookReaderSettings(bookId) {
-                        val globalPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        currentFontSize = globalPrefs.getFloat("readium_font_size", globalPrefs.getFloat(KEY_FONT_SIZE, 1.0f)).toDouble()
-                        currentPreset = globalPrefs.getString("readium_theme", globalPrefs.getString(KEY_THEME, "calm") ?: "calm") ?: "calm"
-                        isScrollMode = globalPrefs.getBoolean("readium_scroll_mode", globalPrefs.getBoolean(KEY_SCROLL, false))
-                        prefs.edit().remove("readium_typography").apply()
+                        resetToGlobalDefaults()
                         applyPreferences()
                         render()
                         Toast.makeText(this@ReadiumReaderActivity, "Settings reset to defaults", Toast.LENGTH_SHORT).show()
@@ -1505,7 +1583,11 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 val fonts = listOf("georgia" to "Newsreader", "newYork" to "Literata", "sanFrancisco" to "System Sans", "palatino" to "Lora", "baskerville" to "Libre Baskerville")
                 for ((key, name) in fonts) layout.addView(button(name, "Use $name") {
                     val next = typography().put("font", key).put("publisherStyles", false)
-                    prefs.edit().putString("readium_typography", next.toString()).apply()
+                    if (bookId.isNotEmpty()) {
+                        prefs.edit().putString("readium_typography_$bookId", next.toString()).apply()
+                    } else {
+                        prefs.edit().putString("readium_typography", next.toString()).apply()
+                    }
                     saveDurablePreferences(); applyPreferences(); render()
                 }.apply {
                     if (values.optString("font", "georgia") == key && !values.optBoolean("publisherStyles", false)) {
@@ -1526,11 +1608,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 }
                 layout.addView(button("Reset to defaults", "Reset reader settings to defaults") {
                     HonReaderBridge.instance?.resetBookReaderSettings(bookId) {
-                        val globalPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        currentFontSize = globalPrefs.getFloat("readium_font_size", globalPrefs.getFloat(KEY_FONT_SIZE, 1.0f)).toDouble()
-                        currentPreset = globalPrefs.getString("readium_theme", globalPrefs.getString(KEY_THEME, "calm") ?: "calm") ?: "calm"
-                        isScrollMode = globalPrefs.getBoolean("readium_scroll_mode", globalPrefs.getBoolean(KEY_SCROLL, false))
-                        prefs.edit().remove("readium_typography").apply()
+                        resetToGlobalDefaults()
                         applyPreferences()
                         render()
                         Toast.makeText(this@ReadiumReaderActivity, "Settings reset to defaults", Toast.LENGTH_SHORT).show()

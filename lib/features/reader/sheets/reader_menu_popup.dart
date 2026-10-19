@@ -9,6 +9,7 @@ class ReaderMenuPopup extends StatelessWidget {
   final VoidCallback onToggleReadingMode;
   final VoidCallback onToggleBookmark;
   final VoidCallback? onShareSelected;
+  final VoidCallback? onReloadChapter;
   final String searchLabel;
   final ReaderThemeConfig? theme;
   final VoidCallback onToggleOrientationLock;
@@ -24,6 +25,7 @@ class ReaderMenuPopup extends StatelessWidget {
     required this.onToggleReadingMode,
     required this.onToggleBookmark,
     this.onShareSelected,
+    this.onReloadChapter,
     this.searchLabel = 'Search Book',
     this.theme,
     required this.onToggleOrientationLock,
@@ -40,6 +42,7 @@ class ReaderMenuPopup extends StatelessWidget {
     required VoidCallback onToggleReadingMode,
     required VoidCallback onToggleBookmark,
     VoidCallback? onShareSelected,
+    VoidCallback? onReloadChapter,
     String searchLabel = 'Search Book',
     ReaderThemeConfig? theme,
     required VoidCallback onToggleOrientationLock,
@@ -95,6 +98,12 @@ class ReaderMenuPopup extends StatelessWidget {
                     : () {
                         Navigator.of(ctx).pop();
                         onShareSelected();
+                      },
+                onReloadChapter: onReloadChapter == null
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        onReloadChapter();
                       },
                 onToggleOrientationLock: () {
                   Navigator.of(ctx).pop();
@@ -186,6 +195,18 @@ class ReaderMenuPopup extends StatelessWidget {
               onTap: onOpenThemes,
             ),
             _buildDivider(isDark),
+
+            // 4. Reload Chapter (if supported)
+            if (onReloadChapter != null) ...[
+              _buildMenuItem(
+                title: 'Reload Chapter',
+                icon: CupertinoIcons.arrow_clockwise,
+                textColor: textColor,
+                iconColor: iconColor,
+                onTap: onReloadChapter!,
+              ),
+              _buildDivider(isDark),
+            ],
 
             // 4. Quick Action Icons Row
             Padding(

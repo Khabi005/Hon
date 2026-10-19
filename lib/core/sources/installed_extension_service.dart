@@ -286,6 +286,7 @@ class InstalledExtensionService extends ChangeNotifier {
     if (prior != null) {
       initialAllowedHosts.addAll(prior.allowedHosts);
     }
+    initialAllowedHosts.addAll(script.allowedHosts);
     final match = RegExp(r'''baseURL\s*=\s*["']([^"']+)["']''').firstMatch(source);
     final scriptBaseUrl = match?.group(1);
     final scriptBaseHost = scriptBaseUrl != null ? Uri.tryParse(scriptBaseUrl)?.host : null;
@@ -328,6 +329,9 @@ class InstalledExtensionService extends ChangeNotifier {
       if (backup.existsSync()) await backup.delete();
       if (priorFile.existsSync()) await priorFile.rename(backup.path);
       await temporary.rename(target.path);
+      if (prior?.enabled == false) {
+        await target.rename('${target.path}.disabled');
+      }
       final extension = InstalledExtension(
         sourceId: sourceId,
         repositoryId: repo.id,
@@ -338,8 +342,12 @@ class InstalledExtensionService extends ChangeNotifier {
         version: script.version,
         scriptPath: target.path,
         enabled: prior?.enabled ?? true,
-        allowedHosts: initialAllowedHosts.toList()..sort(),
-        iconUrl: script.iconUrl,
+        allowedHosts: {
+          ...initialAllowedHosts,
+          if (prior != null) ...prior.allowedHosts,
+        }.toList()
+          ..sort(),
+        iconUrl: script.iconUrl ?? prior?.iconUrl,
       );
       _installed.removeWhere((item) => item.sourceId == sourceId);
       _installed.add(extension);

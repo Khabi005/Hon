@@ -163,11 +163,6 @@ class ReaderDocument {
   }) {
     final body = html.parse(source).body;
     final blocks = <ReaderBlock>[];
-    if (title != null && title.isNotEmpty) {
-      blocks.add(
-        ReaderBlock(heading: true, runs: [ReaderRun(title, const TextStyle())]),
-      );
-    }
     String resolve(String value) {
       if (baseUrl == null) return value;
       return Uri.tryParse(baseUrl)?.resolve(value).toString() ?? value;
@@ -300,6 +295,32 @@ class ReaderDocument {
     }
 
     if (body != null) visit(body);
+    if (title != null && title.trim().isNotEmpty) {
+      final cleanTitle = title.trim();
+      String norm(String s) =>
+          s.replaceAll(RegExp(r'[^a-zA-Z0-9]+'), '').toLowerCase();
+      final normTitle = norm(cleanTitle);
+      bool hasExistingHeading = false;
+      if (blocks.isNotEmpty) {
+        final firstBlockText = norm(blocks.first.text);
+        if (firstBlockText.isNotEmpty) {
+          if (firstBlockText == normTitle ||
+              firstBlockText.contains(normTitle) ||
+              (normTitle.length > 5 && normTitle.contains(firstBlockText))) {
+            hasExistingHeading = true;
+          }
+        }
+      }
+      if (!hasExistingHeading) {
+        blocks.insert(
+          0,
+          ReaderBlock(
+            heading: true,
+            runs: [ReaderRun(cleanTitle, const TextStyle())],
+          ),
+        );
+      }
+    }
     return ReaderDocument(blocks);
   }
 
@@ -418,13 +439,32 @@ class _ReaderImageState extends State<_ReaderImage> {
       final dir = storage.imagesDir;
       if (!dir.existsSync()) return;
       final hash = sha256.convert(bytes).toString();
-      final ext = source.contains('image/jpeg')
+      final ext = bytes.length >= 2 && bytes[0] == 0xff && bytes[1] == 0xd8
           ? 'jpg'
-          : source.contains('image/webp')
-              ? 'webp'
-              : source.contains('image/gif')
-                  ? 'gif'
-                  : 'png';
+          : bytes.length >= 8 &&
+                  bytes[0] == 0x89 &&
+                  bytes[1] == 0x50 &&
+                  bytes[2] == 0x4e &&
+                  bytes[3] == 0x47
+              ? 'png'
+              : bytes.length >= 4 &&
+                      bytes[0] == 0x52 &&
+                      bytes[1] == 0x49 &&
+                      bytes[2] == 0x46 &&
+                      bytes[3] == 0x46
+                  ? 'webp'
+                  : bytes.length >= 3 &&
+                          bytes[0] == 0x47 &&
+                          bytes[1] == 0x49 &&
+                          bytes[2] == 0x46
+                      ? 'gif'
+                      : source.contains('image/jpeg')
+                          ? 'jpg'
+                          : source.contains('image/webp')
+                              ? 'webp'
+                              : source.contains('image/gif')
+                                  ? 'gif'
+                                  : 'png';
       final file = File(p.join(dir.path, '$hash.$ext'));
       if (!file.existsSync()) {
         final tmp = File(p.join(dir.path, 'tmp_${DateTime.now().microsecondsSinceEpoch}'));
