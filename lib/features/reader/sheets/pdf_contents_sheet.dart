@@ -1,17 +1,20 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/bookmark.dart';
 
 class PdfContentsSheet extends StatefulWidget {
   final String bookId;
   final String bookTitle;
+  final ReaderThemeConfig? theme;
   final int currentPage;
   final int totalPages;
   final ValueChanged<int> onSelectPage;
 
   const PdfContentsSheet({
     super.key,
+    this.theme,
     required this.bookId,
     required this.bookTitle,
     required this.currentPage,
@@ -21,6 +24,7 @@ class PdfContentsSheet extends StatefulWidget {
 
   static Future<void> show(
     BuildContext context, {
+    ReaderThemeConfig? theme,
     required String bookId,
     required String bookTitle,
     required int currentPage,
@@ -30,8 +34,11 @@ class PdfContentsSheet extends StatefulWidget {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: false,
       backgroundColor: Colors.transparent,
       builder: (_) => PdfContentsSheet(
+        theme: theme,
         bookId: bookId,
         bookTitle: bookTitle,
         currentPage: currentPage,
@@ -46,7 +53,7 @@ class PdfContentsSheet extends StatefulWidget {
 }
 
 class _PdfContentsSheetState extends State<PdfContentsSheet> {
-  int _selectedTabIndex = 0; // 0: Bookmarks, 1: Page Grid
+  int _selectedTabIndex = 0; // Pages and bookmarks.
   late List<Bookmark> _bookmarks;
 
   @override
@@ -63,15 +70,22 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
 
   Future<void> _deleteBookmark(Bookmark bm) async {
     await DatabaseService.instance.removeBookmark(bm.bookId, bm.pageIndex);
-    _loadBookmarks();
+    if (mounted) _loadBookmarks();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : Colors.white;
-    final textColor = isDark ? Colors.white : Colors.black;
-    final subtextColor = isDark ? Colors.white60 : Colors.black54;
+    final isDark =
+        widget.theme?.systemBrightness == Brightness.dark ||
+        widget.theme == null && Theme.of(context).brightness == Brightness.dark;
+    final bgColor =
+        widget.theme?.uiControlsBackground ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final textColor =
+        widget.theme?.textColor ?? (isDark ? Colors.white : Colors.black);
+    final subtextColor =
+        widget.theme?.secondaryTextColor ??
+        (isDark ? Colors.white60 : Colors.black54);
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
@@ -116,16 +130,16 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
                       const SizedBox(height: 2),
                       Text(
                         'Page ${widget.currentPage} of ${widget.totalPages}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: subtextColor,
-                        ),
+                        style: TextStyle(fontSize: 12, color: subtextColor),
                       ),
                     ],
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(CupertinoIcons.check_mark_circled_solid, size: 28),
+                  icon: const Icon(
+                    CupertinoIcons.check_mark_circled_solid,
+                    size: 28,
+                  ),
                   color: isDark ? Colors.white70 : Colors.black87,
                   onPressed: () => Navigator.of(context).pop(),
                 ),
@@ -146,23 +160,20 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
             ),
             child: Row(
               children: [
-                _buildSegmentItem('Bookmarks', 0, isDark),
-                _buildSegmentItem('Page Grid', 1, isDark),
+                _buildSegmentItem('Pages', 0, isDark),
+                _buildSegmentItem('Bookmarks', 1, isDark),
               ],
             ),
           ),
 
           const SizedBox(height: 12),
-          Divider(
-            height: 1,
-            color: isDark ? Colors.white12 : Colors.black12,
-          ),
+          Divider(height: 1, color: isDark ? Colors.white12 : Colors.black12),
 
           // Body
           Expanded(
             child: _selectedTabIndex == 0
-                ? _buildBookmarksList(textColor, subtextColor, isDark)
-                : _buildPageGrid(textColor, subtextColor, isDark),
+                ? _buildPageGrid(textColor, subtextColor, isDark)
+                : _buildBookmarksList(textColor, subtextColor, isDark),
           ),
         ],
       ),
@@ -186,7 +197,7 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
                       color: Colors.black.withOpacity(0.08),
                       blurRadius: 4,
                       offset: const Offset(0, 1),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -232,10 +243,7 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
               Text(
                 'Tap the bookmark button in the top bar to save pages for quick reference.',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: subtextColor,
-                ),
+                style: TextStyle(fontSize: 13, color: subtextColor),
               ),
             ],
           ),
@@ -256,7 +264,10 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
         final isCurrent = bm.pageIndex == widget.currentPage;
 
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 4,
+          ),
           leading: Container(
             width: 36,
             height: 36,
@@ -282,10 +293,7 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
           ),
           subtitle: Text(
             'Page ${bm.pageIndex} of ${widget.totalPages}',
-            style: TextStyle(
-              fontSize: 12,
-              color: subtextColor,
-            ),
+            style: TextStyle(fontSize: 12, color: subtextColor),
           ),
           trailing: IconButton(
             icon: Icon(
@@ -338,7 +346,9 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
             decoration: BoxDecoration(
               color: isCurrent
                   ? const Color(0xFF007AFF).withOpacity(0.12)
-                  : (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7)),
+                  : (isDark
+                        ? const Color(0xFF2C2C2E)
+                        : const Color(0xFFF2F2F7)),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: isCurrent
@@ -365,8 +375,9 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
                         '$pageNum',
                         style: TextStyle(
                           fontSize: 14,
-                          fontWeight:
-                              isCurrent ? FontWeight.w700 : FontWeight.w600,
+                          fontWeight: isCurrent
+                              ? FontWeight.w700
+                              : FontWeight.w600,
                           color: isCurrent
                               ? const Color(0xFF007AFF)
                               : textColor,

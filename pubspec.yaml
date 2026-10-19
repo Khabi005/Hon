@@ -1,7 +1,7 @@
 name: hon
 description: "Hon — A quiet, elegant reading app for novels, EPUBs, and PDFs."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.2+4
 
 environment:
   sdk: ^3.11.0
@@ -18,7 +18,6 @@ dependencies:
   xml: ^6.5.0
   html: ^0.15.5
   file_picker: ^8.1.7
-  google_fonts: ^6.2.1
   intl: ^0.20.2
   crypto: ^3.0.6
   uuid: ^4.5.1
@@ -26,7 +25,7 @@ dependencies:
   http: ^1.3.0
   lua_dardo_plus: ^0.3.1
   drift: ^2.34.4
-  sqlite3_flutter_libs: ^0.6.0+eol
+  sqlite3: ^3.3.0
 
 dev_dependencies:
   flutter_test:
@@ -41,3 +40,26 @@ flutter:
     - assets/branding/
     - assets/fixtures/
     - assets/sources/
+    - assets/sources/bundled/
+    - assets/legal/
+  fonts:
+    - family: Newsreader
+      fonts:
+        - asset: assets/fonts/newsreader-Regular.ttf
+        - asset: assets/fonts/newsreader-Italic.ttf
+          style: italic
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/literata-Regular.ttf
+        - asset: assets/fonts/literata-Italic.ttf
+          style: italic
+    - family: Lora
+      fonts:
+        - asset: assets/fonts/lora-Regular.ttf
+        - asset: assets/fonts/lora-Italic.ttf
+          style: italic
+    - family: Libre Baskerville
+      fonts:
+        - asset: assets/fonts/librebaskerville-Regular.ttf
+        - asset: assets/fonts/librebaskerville-Italic.ttf
+          style: italic

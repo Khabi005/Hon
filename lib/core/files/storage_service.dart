@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -17,24 +18,31 @@ class StorageService {
     await coversDir.create(recursive: true);
     await chaptersDir.create(recursive: true);
     await stagingDir.create(recursive: true);
+    await imagesDir.create(recursive: true);
   }
 
   Directory get baseDir => _baseDir!;
-  Directory get publicationsDir => Directory(p.join(_baseDir!.path, 'publications'));
+  Directory get publicationsDir =>
+      Directory(p.join(_baseDir!.path, 'publications'));
   Directory get coversDir => Directory(p.join(_baseDir!.path, 'covers'));
   Directory get chaptersDir => Directory(p.join(_baseDir!.path, 'chapters'));
   Directory get stagingDir => Directory(p.join(_baseDir!.path, 'staging'));
+  Directory get imagesDir => Directory(p.join(_baseDir!.path, 'images'));
 
-  /// Checks whether a given path resides within Hon's managed sandboxed storage.
-  /// Note: Uses path string normalization (via `path.canonicalize()`, resolving '.' and '..' segments)
-  /// and prefix containment check; it does NOT perform filesystem-level symlink resolution.
-  /// Prevents accidental deletion of external files outside Hon's app directory.
+  /// Only publications, covers, chapters, and images owned by Hon may be deleted.
+  /// Resolve actual filesystem links; lexical normalization alone is unsafe.
   bool isPathInsideManagedStorage(String filePath) {
     if (_baseDir == null) return false;
     try {
-      final canonicalBase = p.canonicalize(_baseDir!.path);
-      final canonicalTarget = p.canonicalize(filePath);
-      return p.isWithin(canonicalBase, canonicalTarget) || canonicalBase == canonicalTarget;
+      final file = File(filePath);
+      if (!file.existsSync()) return false;
+      final target = file.resolveSymbolicLinksSync();
+      for (final dir in [publicationsDir, coversDir, chaptersDir, imagesDir]) {
+        if (!dir.existsSync()) continue;
+        final root = dir.resolveSymbolicLinksSync();
+        if (p.isWithin(root, target)) return true;
+      }
+      return false;
     } catch (_) {
       return false;
     }
@@ -51,7 +59,26 @@ class StorageService {
 
   Future<String?> saveCoverImage(String bookId, Uint8List imageBytes) async {
     try {
-      final file = File(p.join(coversDir.path, '$bookId.png'));
+      final extension =
+          imageBytes.length >= 2 &&
+              imageBytes[0] == 0xff &&
+              imageBytes[1] == 0xd8
+          ? 'jpg'
+          : imageBytes.length >= 4 &&
+                String.fromCharCodes(imageBytes.take(4)) == 'RIFF'
+          ? 'webp'
+          : imageBytes.length >= 3 &&
+                String.fromCharCodes(imageBytes.take(3)) == 'GIF'
+          ? 'gif'
+          : 'png';
+      final safeId =
+          p.basename(bookId) == bookId &&
+              !bookId.contains('\\') &&
+              bookId != '.' &&
+              bookId != '..'
+          ? bookId
+          : sha256.convert(utf8.encode(bookId)).toString();
+      final file = File(p.join(coversDir.path, '$safeId.$extension'));
       await file.writeAsBytes(imageBytes);
       return file.path;
     } catch (e) {
@@ -60,10 +87,12 @@ class StorageService {
   }
 
   Future<File> copyToStaging(File sourceFile) async {
-    final stagingFile = File(p.join(
-      stagingDir.path,
-      'stage_${DateTime.now().millisecondsSinceEpoch}_${p.basename(sourceFile.path)}',
-    ));
+    final stagingFile = File(
+      p.join(
+        stagingDir.path,
+        'stage_${DateTime.now().millisecondsSinceEpoch}_${p.basename(sourceFile.path)}',
+      ),
+    );
     return await sourceFile.copy(stagingFile.path);
   }
 
@@ -92,7 +121,7 @@ class StorageService {
 
   Future<int> getStorageUsageBytes() async {
     int total = 0;
-    for (final dir in [publicationsDir, coversDir, chaptersDir]) {
+    for (final dir in [publicationsDir, coversDir, chaptersDir, imagesDir]) {
       if (dir.existsSync()) {
         for (final f in dir.listSync(recursive: true)) {
           if (f is File) {

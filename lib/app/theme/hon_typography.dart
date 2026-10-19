@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class HonTypography {
   HonTypography._();
 
   // Large screen titles (e.g. "Home", "Library", "Browse")
   static TextStyle largeTitle({Color? color}) {
-    return GoogleFonts.newsreader(
+    return TextStyle(
+      fontFamily: 'Newsreader',
       fontSize: 34,
       fontWeight: FontWeight.w700,
       letterSpacing: -0.5,
@@ -16,7 +16,8 @@ class HonTypography {
 
   // Section titles (e.g. "Continue", "Top Picks", "Want to Read")
   static TextStyle sectionHeader({Color? color}) {
-    return GoogleFonts.newsreader(
+    return TextStyle(
+      fontFamily: 'Newsreader',
       fontSize: 22,
       fontWeight: FontWeight.w700,
       letterSpacing: -0.3,
@@ -26,7 +27,8 @@ class HonTypography {
 
   // Book reader chapter titles (e.g. "Chapter 40")
   static TextStyle chapterTitle({Color? color}) {
-    return GoogleFonts.newsreader(
+    return TextStyle(
+      fontFamily: 'Newsreader',
       fontSize: 26,
       fontWeight: FontWeight.w600,
       letterSpacing: -0.2,
@@ -56,11 +58,7 @@ class HonTypography {
 
   // Meta label (e.g. "Book • 6%")
   static TextStyle cardMeta({Color? color}) {
-    return TextStyle(
-      fontSize: 12,
-      fontWeight: FontWeight.w400,
-      color: color,
-    );
+    return TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: color);
   }
 
   // Standard body text
@@ -80,33 +78,13 @@ class HonTypography {
     double lineHeight = 1.65,
     String? fontFamily,
   }) {
-    switch (fontFamily) {
-      case 'New York':
-        return GoogleFonts.cormorantGaramond(
-          fontSize: fontSize,
-          height: lineHeight,
-          fontWeight: FontWeight.w400,
-          color: color,
-        );
-      case 'San Francisco':
-        return TextStyle(
-          fontSize: fontSize,
-          height: lineHeight,
-          fontWeight: FontWeight.w400,
-          color: color,
-          fontFamily: 'sans-serif',
-        );
-      case 'Palatino':
-      case 'Baskerville':
-      case 'Georgia':
-      default:
-        return GoogleFonts.newsreader(
-          fontSize: fontSize,
-          height: lineHeight,
-          fontWeight: FontWeight.w400,
-          color: color,
-        );
-    }
+    return TextStyle(
+      fontFamily: fontFamily ?? 'Newsreader',
+      fontSize: fontSize,
+      height: lineHeight,
+      fontWeight: FontWeight.w400,
+      color: color,
+    );
   }
 
   // Tab bar labels

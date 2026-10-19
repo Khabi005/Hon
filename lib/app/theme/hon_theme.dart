@@ -1,76 +1,164 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'hon_colors.dart';
 
 class HonTheme {
   HonTheme._();
+  static final ThemeData lightTheme = _build(Brightness.light);
+  static final ThemeData darkTheme = _build(Brightness.dark);
 
-  static ThemeData get lightTheme {
-    return ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.light,
-      scaffoldBackgroundColor: HonColors.lightBackground,
-      colorScheme: const ColorScheme.light(
-        primary: HonColors.lightTextPrimary,
-        secondary: HonColors.accentOrange,
-        surface: HonColors.lightSurface,
-        surfaceContainerHighest: HonColors.lightSurfaceElevated,
-        onSurface: HonColors.lightTextPrimary,
-      ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        systemOverlayStyle: SystemUiOverlayStyle.dark,
-        iconTheme: IconThemeData(color: HonColors.lightTextPrimary),
-      ),
-      cardTheme: CardThemeData(
-        color: HonColors.lightSurface,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: HonColors.lightCardBorder, width: 0.5),
-        ),
-      ),
-      dividerTheme: const DividerThemeData(
-        color: HonColors.lightSeparator,
-        thickness: 0.5,
-        space: 1,
-      ),
+  static ThemeData _build(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final ink = dark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
+    final surface = dark ? HonColors.darkSurface : HonColors.lightSurface;
+    final secondary = dark ? const Color(0xFFB0B0B6) : const Color(0xFF68686F);
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: HonColors.brandInk,
+          brightness: brightness,
+        ).copyWith(
+          primary: ink,
+          onPrimary: dark ? Colors.black : Colors.white,
+          secondary: HonColors.accentOrange,
+          surface: surface,
+          onSurface: ink,
+          onSurfaceVariant: secondary,
+          surfaceContainerHighest: dark
+              ? const Color(0xFF2C2C2E)
+              : const Color(0xFFE8E8ED),
+          outline: dark ? const Color(0xFF626269) : const Color(0xFF8B8B93),
+          outlineVariant: dark
+              ? HonColors.darkSeparator
+              : HonColors.lightSeparator,
+        );
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
     );
-  }
-
-  static ThemeData get darkTheme {
     return ThemeData(
       useMaterial3: true,
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: HonColors.darkBackground,
-      colorScheme: const ColorScheme.dark(
-        primary: HonColors.darkTextPrimary,
-        secondary: HonColors.accentOrange,
-        surface: HonColors.darkSurface,
-        surfaceContainerHighest: HonColors.darkSurfaceElevated,
-        onSurface: HonColors.darkTextPrimary,
+      brightness: brightness,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: dark
+          ? HonColors.darkBackground
+          : HonColors.lightBackground,
+      cupertinoOverrideTheme: CupertinoThemeData(
+        brightness: brightness,
+        primaryColor: ink,
+        textTheme: CupertinoTextThemeData(
+          textStyle: TextStyle(color: ink, fontSize: 16),
+        ),
       ),
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        systemOverlayStyle: SystemUiOverlayStyle.light,
-        iconTheme: IconThemeData(color: HonColors.darkTextPrimary),
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          fontFamily: 'Newsreader',
+          fontSize: 24,
+          fontWeight: FontWeight.w600,
+          color: ink,
+        ),
+        systemOverlayStyle: dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        iconTheme: IconThemeData(color: ink),
       ),
       cardTheme: CardThemeData(
-        color: HonColors.darkSurface,
+        color: surface,
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: HonColors.darkCardBorder, width: 0.5),
+        margin: EdgeInsets.zero,
+        shape: shape,
+      ),
+      dividerTheme: DividerThemeData(
+        color: scheme.outlineVariant,
+        thickness: .5,
+        space: 1,
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          minimumSize: const Size(48, 48),
+          shape: const StadiumBorder(),
+          textStyle: const TextStyle(
+            fontFamily: 'Roboto',
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
         ),
       ),
-      dividerTheme: const DividerThemeData(
-        color: HonColors.darkSeparator,
-        thickness: 0.5,
-        space: 1,
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(48, 48),
+          shape: const StadiumBorder(),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          minimumSize: const Size(44, 44),
+          textStyle: const TextStyle(
+            fontFamily: 'Roboto',
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerHighest,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        showDragHandle: true,
+        clipBehavior: Clip.antiAlias,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: shape,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: surface,
+        surfaceTintColor: Colors.transparent,
+        shape: shape,
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        shape: shape,
+        backgroundColor: dark
+            ? const Color(0xFFEAEAEA)
+            : const Color(0xFF252527),
+        contentTextStyle: TextStyle(
+          color: dark ? Colors.black : Colors.white,
+          fontSize: 14,
+        ),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: ink,
+        linearTrackColor: scheme.surfaceContainerHighest,
+      ),
+      listTileTheme: ListTileThemeData(
+        iconColor: secondary,
+        textColor: ink,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      ),
+      tooltipTheme: const TooltipThemeData(
+        waitDuration: Duration(milliseconds: 450),
       ),
     );
   }

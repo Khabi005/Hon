@@ -4,6 +4,7 @@ enum ChapterDownloadState {
   downloading,
   downloaded,
   failed,
+  paused,
 }
 
 class Chapter {
@@ -81,7 +82,10 @@ class Chapter {
       chapterIndex: (map['chapterIndex'] as num).toDouble(),
       url: map['url'] as String?,
       localFilePath: map['localFilePath'] as String?,
-      downloadState: ChapterDownloadState.values.byName(map['downloadState'] as String),
+      downloadState: ChapterDownloadState.values.firstWhere(
+        (s) => s.name == map['downloadState'],
+        orElse: () => ChapterDownloadState.notDownloaded,
+      ),
       releaseDate: map['releaseDate'] != null
           ? DateTime.parse(map['releaseDate'] as String)
           : null,

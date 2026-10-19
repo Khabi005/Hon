@@ -10,10 +10,7 @@ import '../../../reader/presentation/reader_navigator.dart';
 class ReadingGoalsSheet extends StatelessWidget {
   final Book? mostRecentBook;
 
-  const ReadingGoalsSheet({
-    super.key,
-    this.mostRecentBook,
-  });
+  const ReadingGoalsSheet({super.key, this.mostRecentBook});
 
   static Future<void> show(BuildContext context, {Book? mostRecentBook}) {
     return showModalBottomSheet(
@@ -31,10 +28,7 @@ class ReadingGoalsSheet extends StatelessWidget {
     final textColor = isDark ? Colors.white : Colors.black;
     final subtextColor = isDark ? Colors.white60 : Colors.black54;
 
-    final finishedBooks = DatabaseService.instance.getLibraryBooks().where((b) {
-      final prog = DatabaseService.instance.getProgress(b.id);
-      return (prog != null && prog.completionPercentage >= 0.99);
-    }).toList();
+    final finishedBooks = DatabaseService.instance.getFinishedBooks();
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
@@ -61,7 +55,10 @@ class ReadingGoalsSheet extends StatelessWidget {
             child: Align(
               alignment: Alignment.topRight,
               child: IconButton(
-                icon: Icon(CupertinoIcons.xmark_circle_fill, color: isDark ? Colors.white38 : Colors.black38),
+                icon: Icon(
+                  CupertinoIcons.xmark_circle_fill,
+                  color: isDark ? Colors.white38 : Colors.black38,
+                ),
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
@@ -75,31 +72,45 @@ class ReadingGoalsSheet extends StatelessWidget {
                 children: [
                   Text(
                     'Reading Goals',
-                    style: HonTypography.largeTitle(color: textColor).copyWith(fontSize: 26),
+                    style: HonTypography.largeTitle(
+                      color: textColor,
+                    ).copyWith(fontSize: 26),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     'Read every day, see your stats soar and\nfinish more books.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: subtextColor, height: 1.35),
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: subtextColor,
+                      height: 1.35,
+                    ),
                   ),
                   const SizedBox(height: 32),
 
                   // Half-circle arc gauge matching Apple Books screenshot
                   Builder(
                     builder: (context) {
-                      final todayMins = DatabaseService.instance.getTodayReadingMinutes();
-                      final goalMins = DatabaseService.instance.getDailyGoalMinutes();
-                      final fraction = goalMins > 0 ? (todayMins / goalMins).clamp(0.0, 1.0) : 0.0;
+                      final todayMins = DatabaseService.instance
+                          .getTodayReadingMinutes();
+                      final goalMins = DatabaseService.instance
+                          .getDailyGoalMinutes();
+                      final fraction = goalMins > 0
+                          ? (todayMins / goalMins).clamp(0.0, 1.0)
+                          : 0.0;
 
                       return SizedBox(
                         width: 240,
                         height: 125,
                         child: CustomPaint(
                           painter: _ArcGaugePainter(
-                            progress: fraction > 0 ? fraction : 0.02,
-                            color: fraction >= 1.0 ? HonColors.accentGreen : HonColors.accentBlue,
-                            trackColor: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                            progress: fraction,
+                            color: fraction >= 1.0
+                                ? HonColors.accentGreen
+                                : HonColors.accentBlue,
+                            trackColor: isDark
+                                ? const Color(0xFF2C2C2E)
+                                : const Color(0xFFE5E5EA),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.end,
@@ -114,7 +125,7 @@ class ReadingGoalsSheet extends StatelessWidget {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '$todayMins:00',
+                                '$todayMins min',
                                 style: TextStyle(
                                   fontSize: 38,
                                   fontWeight: FontWeight.w800,
@@ -124,7 +135,7 @@ class ReadingGoalsSheet extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                'of your $goalMins-minute goal >',
+                                'of your $goalMins-minute goal',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: subtextColor,
@@ -150,7 +161,9 @@ class ReadingGoalsSheet extends StatelessWidget {
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                          color: isDark
+                              ? const Color(0xFF2C2C2E)
+                              : const Color(0xFFE5E5EA),
                           borderRadius: BorderRadius.circular(24),
                         ),
                         child: Column(
@@ -184,59 +197,73 @@ class ReadingGoalsSheet extends StatelessWidget {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'Books Read This Year',
-                      style: HonTypography.sectionHeader(color: textColor).copyWith(fontSize: 19),
+                      'Finished Books',
+                      style: HonTypography.sectionHeader(
+                        color: textColor,
+                      ).copyWith(fontSize: 19),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  SizedBox(
-                    height: 140,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: max(3, finishedBooks.length + 1),
-                      separatorBuilder: (_, __) => const SizedBox(width: 12),
-                      itemBuilder: (context, index) {
-                        final book = index < finishedBooks.length ? finishedBooks[index] : null;
-                        return Container(
-                          width: 90,
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0xFF242426) : const Color(0xFFF2F2F7),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: isDark ? Colors.white10 : Colors.black12,
-                              width: 0.5,
+                  if (finishedBooks.isEmpty)
+                    Text(
+                      'Books you mark as finished appear here.',
+                      style: TextStyle(color: subtextColor),
+                    )
+                  else
+                    SizedBox(
+                      height: 140,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: finishedBooks.length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) {
+                          final book = index < finishedBooks.length
+                              ? finishedBooks[index]
+                              : null;
+                          return Container(
+                            width: 90,
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF242426)
+                                  : const Color(0xFFF2F2F7),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isDark ? Colors.white10 : Colors.black12,
+                                width: 0.5,
+                              ),
                             ),
-                          ),
-                          alignment: Alignment.center,
-                          child: book != null
-                              ? Padding(
-                                  padding: const EdgeInsets.all(8),
-                                  child: Text(
-                                    book.title,
-                                    textAlign: TextAlign.center,
-                                    maxLines: 4,
-                                    overflow: TextOverflow.ellipsis,
+                            alignment: Alignment.center,
+                            child: book != null
+                                ? Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Text(
+                                      book.title,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 4,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: textColor,
+                                      ),
+                                    ),
+                                  )
+                                : Text(
+                                    '${index + 1}',
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 32,
+                                      fontFamily: 'serif',
                                       fontWeight: FontWeight.w600,
-                                      color: textColor,
+                                      color: isDark
+                                          ? Colors.white24
+                                          : Colors.black26,
                                     ),
                                   ),
-                                )
-                              : Text(
-                                  '${index + 1}',
-                                  style: TextStyle(
-                                    fontSize: 32,
-                                    fontFamily: 'serif',
-                                    fontWeight: FontWeight.w600,
-                                    color: isDark ? Colors.white24 : Colors.black26,
-                                  ),
-                                ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),

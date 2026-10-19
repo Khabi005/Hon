@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/native/readium_reader_service.dart';
@@ -20,10 +22,19 @@ class ReaderNavigator {
   }) async {
     // If not explicitly provided, look up saved progress from DatabaseService
     final savedProgress = DatabaseService.instance.getProgress(book.id);
-    final targetChapterIndex = initialChapterIndex ?? savedProgress?.chapterIndex.toInt() ?? 0;
+    final explicitLocation =
+        initialChapterIndex != null || initialPageIndex != null;
+    final targetChapterIndex =
+        initialChapterIndex ?? savedProgress?.chapterIndex.toInt() ?? 0;
     final targetPageIndex = initialPageIndex ?? savedProgress?.pageIndex ?? 0;
-    final targetScrollOffset = initialScrollOffset ?? savedProgress?.scrollOffset ?? 0.0;
-    final targetLocator = locator ?? savedProgress?.locatorString ?? savedProgress?.lastChapterId;
+    final targetScrollOffset =
+        initialScrollOffset ??
+        (explicitLocation ? 0.0 : savedProgress?.scrollOffset ?? 0.0);
+    final targetLocator =
+        locator ??
+        (explicitLocation
+            ? null
+            : savedProgress?.locatorString ?? savedProgress?.lastChapterId);
 
     if (book.format == BookFormat.pdf) {
       await Navigator.of(context).push(
@@ -38,6 +49,55 @@ class ReaderNavigator {
         Platform.isAndroid &&
         book.filePath != null &&
         !book.filePath!.startsWith('assets/')) {
+      final preferences = await SharedPreferences.getInstance();
+      final stored = preferences.getString('hon_reader_preferences_v1');
+      Map<String, dynamic> readerPrefs = {};
+      if (stored != null) {
+        try {
+          readerPrefs = jsonDecode(stored) as Map<String, dynamic>;
+        } catch (_) {
+          // Keep the last valid native preferences if stored Dart preferences are damaged.
+        }
+      }
+      final bookOverrides =
+          DatabaseService.instance.getBookReaderSettings(book.id);
+      double fontSize =
+          (((readerPrefs['size'] as num?)?.toDouble() ?? 18.0) / 18.0)
+              .clamp(0.5, 2.5);
+      String theme = readerPrefs['theme'] as String? ?? 'calm';
+      bool isScroll = readerPrefs['layout'] == 'verticalScroll';
+      Map<String, dynamic> typography = Map<String, dynamic>.from(readerPrefs);
+
+      if (bookOverrides != null) {
+        if (bookOverrides['fontSize'] is num) {
+          fontSize =
+              (bookOverrides['fontSize'] as num).toDouble().clamp(0.5, 2.5);
+        }
+        if (bookOverrides['theme'] is String) {
+          theme = bookOverrides['theme'] as String;
+        }
+        if (bookOverrides['isScroll'] is bool) {
+          isScroll = bookOverrides['isScroll'] as bool;
+        }
+        if (bookOverrides['typography'] is String) {
+          try {
+            final typo = jsonDecode(bookOverrides['typography'] as String);
+            if (typo is Map) {
+              typography.addAll(Map<String, dynamic>.from(typo));
+            }
+          } catch (_) {}
+        } else if (bookOverrides['typography'] is Map) {
+          typography.addAll(
+              Map<String, dynamic>.from(bookOverrides['typography'] as Map));
+        }
+      }
+
+      await ReadiumReaderService.applySettings(
+        fontSize: fontSize,
+        theme: theme,
+        isScroll: isScroll,
+        typography: typography,
+      );
       final res = await ReadiumReaderService.openEpub(
         filePath: book.filePath!,
         bookId: book.id,
@@ -50,17 +110,26 @@ class ReaderNavigator {
       if (res != null && res.success) {
         return;
       }
+      if (res?.cancelled == true) {
+        return;
+      }
 
       // Native Readium launch failed: show explicit error dialog rather than silently falling back
       if (context.mounted) {
-        final errorMsg = res?.errorMessage ?? res?.errorCode ?? 'Failed to initialize Readium reader engine';
+        final errorMsg =
+            res?.errorMessage ??
+            res?.errorCode ??
+            'Failed to initialize Readium reader engine';
         final shouldFallback = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF1C1C1E),
             title: const Text(
               'Readium Engine Notice',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             content: Text(
               'Could not open this book in the native Readium engine:\n$errorMsg\n\nWould you like to open it in the fallback Dart preview reader?',
@@ -69,7 +138,10 @@ class ReaderNavigator {
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Cancel', style: TextStyle(color: Color(0xFFA0A0A5))),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: Color(0xFFA0A0A5)),
+                ),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(ctx).pop(true),
@@ -84,6 +156,7 @@ class ReaderNavigator {
             MaterialPageRoute(
               builder: (_) => ReaderScreen(
                 book: book,
+                restoreSavedProgress: false,
                 initialChapterIndex: targetChapterIndex,
                 initialPageIndex: targetPageIndex,
                 initialScrollOffset: targetScrollOffset,
@@ -99,6 +172,7 @@ class ReaderNavigator {
         MaterialPageRoute(
           builder: (_) => ReaderScreen(
             book: book,
+            restoreSavedProgress: false,
             initialChapterIndex: targetChapterIndex,
             initialPageIndex: targetPageIndex,
             initialScrollOffset: targetScrollOffset,

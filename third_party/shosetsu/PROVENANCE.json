@@ -1,0 +1,27 @@
+[
+  {
+    "name": "universe",
+    "archiveUrl": "https://gitlab.com/shosetsuorg/extensions/-/archive/dev/extensions-dev.tar.gz",
+    "sha256": "f654a7b9bb61444280298401c857b5e9df2daa2628ab6448ccc507a919caa85b"
+  },
+  {
+    "name": "noaione",
+    "archiveUrl": "https://codeload.github.com/noaione/shosetsu-extensions/tar.gz/refs/heads/repo",
+    "sha256": "0b7267a5ac2d553c1f144920dd07470529005b967a09acd3fbf52e15a6c9b841"
+  },
+  {
+    "name": "jobobby04",
+    "archiveUrl": "https://codeload.github.com/jobobby04/ShosetsuExtensions/tar.gz/refs/heads/master",
+    "sha256": "31440c3d2bde0c52cf13de23bbc66d2a28b0427e9cfcba4418fc5bf73cd98284"
+  },
+  {
+    "name": "suhan",
+    "archiveUrl": "https://codeload.github.com/creepy-pasta101/ShosetsuExtensions/tar.gz/refs/heads/main",
+    "sha256": "a09fdcfb8400840cc95e5c3daab24909f0bbaab609dcad3eeadcd749771b6be6"
+  },
+  {
+    "name": "capthehacker99",
+    "archiveUrl": "https://codeload.github.com/capthehacker99/ShosetLazyExtensions/tar.gz/refs/heads/master",
+    "sha256": "a0579fde747ba9ba7f7f8c70f206ad927d8d0eda2b1504f3f8b3d5f5037e71df"
+  }
+]

@@ -10,8 +10,15 @@ void main() {
   late ShosetsuLuaEngine engine;
   late String gutenbergScript;
   bool isOnline = true;
+  bool isLiveGated = false;
 
   setUpAll(() async {
+    final liveEnv = Platform.environment['HON_LIVE_TESTS'];
+    if (liveEnv != '1' && liveEnv != 'true') {
+      isLiveGated = true;
+      return;
+    }
+
     // Disable Flutter test's default network interception for live integration tests
     HttpOverrides.global = null;
 
@@ -35,6 +42,10 @@ void main() {
 
   group('Live Network Integration — Upstream Project Gutenberg Extension', () {
     test('Live Search: queries live Project Gutenberg catalog for "pride"', () async {
+      if (isLiveGated) {
+        markTestSkipped('Skipping: HON_LIVE_TESTS environment variable is not set to 1 or true');
+        return;
+      }
       if (!isOnline) {
         markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;
@@ -52,6 +63,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 45)));
 
     test('Live Novel Details: parses Pride and Prejudice (/ebooks/1342) live from Gutenberg', () async {
+      if (isLiveGated) {
+        markTestSkipped('Skipping: HON_LIVE_TESTS environment variable is not set to 1 or true');
+        return;
+      }
       if (!isOnline) {
         markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;
@@ -66,6 +81,10 @@ void main() {
     }, timeout: const Timeout(Duration(seconds: 45)));
 
     test('Live Readable Passage: retrieves live Chapter 1 HTML from Gutenberg', () async {
+      if (isLiveGated) {
+        markTestSkipped('Skipping: HON_LIVE_TESTS environment variable is not set to 1 or true');
+        return;
+      }
       if (!isOnline) {
         markTestSkipped('Skipping: No live internet connectivity to www.gutenberg.org');
         return;

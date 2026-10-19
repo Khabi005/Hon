@@ -26,11 +26,14 @@ class ReadingProgress {
   /// True if the locator is serialized in Readium JSON format
   bool get isReadiumLocator =>
       locatorVersion == 'readium-v1' ||
-      (locatorString != null && locatorString!.trim().startsWith('{'));
+      (locatorVersion == null &&
+          locatorString != null &&
+          locatorString!.trim().startsWith('{'));
 
   /// True if the locator is serialized in Dart DOM offset format
   bool get isDartLocator =>
       locatorVersion == 'dart-dom-v1' ||
+      locatorVersion == 'hon-html-v2' ||
       (locatorString != null && locatorString!.contains('#offset='));
 
   String get formattedProgress {
@@ -79,7 +82,13 @@ class ReadingProgress {
       'totalPages': totalPages,
       'scrollOffset': scrollOffset,
       'locatorString': locatorString,
-      'locatorVersion': locatorVersion ?? (isReadiumLocator ? 'readium-v1' : isDartLocator ? 'dart-dom-v1' : null),
+      'locatorVersion':
+          locatorVersion ??
+          (isReadiumLocator
+              ? 'readium-v1'
+              : isDartLocator
+              ? 'dart-dom-v1'
+              : null),
       'completionPercentage': completionPercentage,
       'lastReadAt': lastReadAt.toIso8601String(),
     };
@@ -88,9 +97,11 @@ class ReadingProgress {
   factory ReadingProgress.fromMap(Map<String, dynamic> map) {
     final locStr = map['locatorString'] as String?;
     final explicitVersion = map['locatorVersion'] as String?;
-    final derivedVersion = explicitVersion ?? (locStr != null && locStr.trim().startsWith('{')
-        ? 'readium-v1'
-        : locStr != null && locStr.contains('#offset=')
+    final derivedVersion =
+        explicitVersion ??
+        (locStr != null && locStr.trim().startsWith('{')
+            ? 'readium-v1'
+            : locStr != null && locStr.contains('#offset=')
             ? 'dart-dom-v1'
             : null);
 
@@ -103,7 +114,8 @@ class ReadingProgress {
       scrollOffset: (map['scrollOffset'] as num?)?.toDouble() ?? 0.0,
       locatorString: locStr,
       locatorVersion: derivedVersion,
-      completionPercentage: (map['completionPercentage'] as num?)?.toDouble() ?? 0.0,
+      completionPercentage:
+          (map['completionPercentage'] as num?)?.toDouble() ?? 0.0,
       lastReadAt: DateTime.parse(map['lastReadAt'] as String),
     );
   }

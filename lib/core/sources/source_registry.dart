@@ -1,9 +1,13 @@
+import 'bundled_source_catalog.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/novel_source.dart';
 import 'lua/shosetsu_lua_engine.dart';
 import 'native_shosetsu_bridge.dart';
+import 'extension_repository_service.dart';
+import 'installed_extension_service.dart';
+import 'source_preferences.dart';
 
 class ExtensionMeta {
   final String id;
@@ -12,6 +16,9 @@ class ExtensionMeta {
   final String version;
   final String description;
   final bool isInstalled;
+  final bool isEnabled;
+  final String? repositoryId;
+  final String? iconUrl;
 
   const ExtensionMeta({
     required this.id,
@@ -20,9 +27,12 @@ class ExtensionMeta {
     required this.version,
     required this.description,
     this.isInstalled = false,
+    this.isEnabled = true,
+    this.repositoryId,
+    this.iconUrl,
   });
 
-  ExtensionMeta copyWith({bool? isInstalled}) {
+  ExtensionMeta copyWith({bool? isInstalled, bool? isEnabled, String? iconUrl}) {
     return ExtensionMeta(
       id: id,
       name: name,
@@ -30,6 +40,9 @@ class ExtensionMeta {
       version: version,
       description: description,
       isInstalled: isInstalled ?? this.isInstalled,
+      isEnabled: isEnabled ?? this.isEnabled,
+      repositoryId: repositoryId,
+      iconUrl: iconUrl ?? this.iconUrl,
     );
   }
 }
@@ -39,60 +52,20 @@ class SourceRegistry {
   static SourceRegistry get instance => _instance ??= SourceRegistry._();
   SourceRegistry._();
 
+  bool isPreparing = false;
+  void setPreparing(bool value) {
+    isPreparing = value;
+    _notify();
+  }
   final ValueNotifier<int> changeNotifier = ValueNotifier<int>(0);
   final Set<String> _installedExtensionIds = <String>{};
+  final Set<String> _pinnedSourceIds = <String>{};
+  bool _listeningToRepositories = false;
 
-  // Available extensions catalog (from repository)
-  final List<ExtensionMeta> _availableExtensions = [
-    const ExtensionMeta(
-      id: 'novelfull',
-      name: 'NovelFull (NET)',
-      lang: 'English',
-      version: '1.0.0',
-      description: 'Web novel catalog with fantasy, xianxia, romance and adventure novels.',
-      isInstalled: false,
-    ),
-    const ExtensionMeta(
-      id: 'gutenberg',
-      name: 'Project Gutenberg',
-      lang: 'English',
-      version: '1.2.0',
-      description: 'Free public domain classics and literature.',
-      isInstalled: false,
-    ),
-    const ExtensionMeta(
-      id: 'royalroad',
-      name: 'Royal Road',
-      lang: 'English',
-      version: '1.1.0',
-      description: 'Web fiction and serial stories by independent authors.',
-      isInstalled: false,
-    ),
-    const ExtensionMeta(
-      id: 'scribblehub',
-      name: 'Scribble Hub',
-      lang: 'English',
-      version: '1.0.4',
-      description: 'Original web fiction, progression fantasy and litRPG.',
-      isInstalled: false,
-    ),
-    const ExtensionMeta(
-      id: 'fanfiction',
-      name: 'FanFiction.net',
-      lang: 'all',
-      version: '1.0.0',
-      description: 'The world\'s largest fanfiction archive.',
-      isInstalled: false,
-    ),
-    const ExtensionMeta(
-      id: 'arnovel',
-      name: 'ArNovel',
-      lang: 'Arabic',
-      version: '1.0.1',
-      description: 'Arabic translated light novels and web stories.',
-      isInstalled: false,
-    ),
-  ];
+  // Gutenberg is retained only as a loader for existing saved books. The
+  // first-install source list comes from the complete Shosetsu catalog.
+  final List<ExtensionMeta> _availableExtensions = [];
+  List<ExtensionMeta>? _extensionCache;
 
   final Map<String, String> _testScripts = {};
 
@@ -103,54 +76,179 @@ class SourceRegistry {
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
+    _pinnedSourceIds
+      ..clear()
+      ..addAll(prefs.getStringList('hon_pinned_sources') ?? const []);
     final saved = prefs.getStringList('hon_installed_extensions');
+    _installedExtensionIds.clear();
     if (saved != null) {
-      _installedExtensionIds.clear();
-      _installedExtensionIds.addAll(saved);
+      _installedExtensionIds.addAll(
+        saved.where(_verifiedBundledSources.contains),
+      );
+      if (_installedExtensionIds.length != saved.length) {
+        await prefs.setStringList(
+          'hon_installed_extensions',
+          _installedExtensionIds.toList(),
+        );
+      }
     } else {
-      // Default to Project Gutenberg so the verified upstream extension is active
-      _installedExtensionIds.add('gutenberg');
+      // Shosetsu sources are installed from the offline bundled catalog.
+      await prefs.setStringList(
+        'hon_installed_extensions',
+        _installedExtensionIds.toList(),
+      );
+    }
+    await SourcePreferences.syncNative();
+    _notify();
+    if (!_listeningToRepositories) {
+      ExtensionRepositoryService.instance.addListener(_notify);
+      InstalledExtensionService.instance.addListener(_notify);
+      _listeningToRepositories = true;
     }
   }
 
-  void _notify() => changeNotifier.value++;
+  void _notify() {
+    _extensionCache = null;
+    changeNotifier.value++;
+  }
 
   List<ExtensionMeta> getExtensions() {
-    return _availableExtensions.map((e) {
+    if (_extensionCache != null) return _extensionCache!;
+    final bundled = _availableExtensions.map((e) {
       return e.copyWith(isInstalled: _installedExtensionIds.contains(e.id));
     }).toList();
+    final installedService = InstalledExtensionService.instance;
+    final seen = <String>{};
+    final external = <ExtensionMeta>[];
+    for (final repository in ExtensionRepositoryService.instance.repositories) {
+      for (final script in repository.scripts) {
+        final sourceId = installedService.sourceIdFor(repository, script);
+        seen.add(sourceId);
+        final installed = installedService.find(sourceId);
+        external.add(
+          ExtensionMeta(
+            id: sourceId,
+            name: script.name,
+            lang: script.language,
+            version: script.version,
+            description: 'From ${repository.name} • ${repository.url}',
+            isInstalled: installed != null,
+            isEnabled: installed?.enabled ?? true,
+            repositoryId: repository.id,
+            iconUrl: script.iconUrl ?? installed?.iconUrl,
+          ),
+        );
+      }
+    }
+    for (final installed in installedService.installed) {
+      if (seen.contains(installed.sourceId)) continue;
+      external.add(
+        ExtensionMeta(
+          id: installed.sourceId,
+          name: installed.name,
+          lang: installed.language,
+          version: installed.version,
+          description:
+              'Installed from ${installed.repositoryUrl}; repository removed.',
+          isInstalled: true,
+          isEnabled: installed.enabled,
+          repositoryId: installed.repositoryId,
+          iconUrl: installed.iconUrl,
+        ),
+      );
+    }
+    return _extensionCache = List.unmodifiable(
+      [...bundled, ...external]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())),
+    );
   }
 
   List<ExtensionMeta> getInstalledSources() {
-    return _availableExtensions
-        .where((e) => _installedExtensionIds.contains(e.id))
-        .map((e) => e.copyWith(isInstalled: true))
+    return getExtensions()
+        .where((extension) => extension.isInstalled && extension.isEnabled)
         .toList();
   }
 
-  bool isInstalled(String extensionId) => _installedExtensionIds.contains(extensionId);
+  bool isInstalled(String extensionId) =>
+      _installedExtensionIds.contains(extensionId) ||
+      InstalledExtensionService.instance.find(extensionId) != null;
+  bool isPinned(String sourceId) => _pinnedSourceIds.contains(sourceId);
+
+  static String languageName(String code) =>
+      const {
+        'en': 'English',
+        'eng': 'English',
+        'all': 'Multilingual',
+        'ru': 'Russian',
+        'rus': 'Russian',
+        'es': 'Spanish',
+        'spa': 'Spanish',
+        'pt': 'Portuguese',
+        'por': 'Portuguese',
+        'ja': 'Japanese',
+        'jpn': 'Japanese',
+        'vi': 'Vietnamese',
+        'vie': 'Vietnamese',
+        'ar': 'Arabic',
+        'ara': 'Arabic',
+        'zh': 'Chinese',
+        'zho': 'Chinese',
+        'id': 'Indonesian',
+        'ind': 'Indonesian',
+        'fr': 'French',
+        'fra': 'French',
+        'ko': 'Korean',
+        'kor': 'Korean',
+      }[code.toLowerCase()] ??
+      code;
+
+  Future<void> togglePinned(String sourceId) async {
+    if (!_pinnedSourceIds.add(sourceId)) _pinnedSourceIds.remove(sourceId);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('hon_pinned_sources', _pinnedSourceIds.toList());
+    _notify();
+  }
 
   /// Verified bundled sources supported by Hon's assets
   static const Set<String> _verifiedBundledSources = {'gutenberg'};
 
-  /// External extension installation is strictly gated until the production
-  /// Kotlin-side Shosetsu host runtime with full security restrictions is verified.
   Future<void> installExtension(String extensionId) async {
     if (!_verifiedBundledSources.contains(extensionId)) {
+      final installedService = InstalledExtensionService.instance;
+      for (final repository
+          in ExtensionRepositoryService.instance.repositories) {
+        for (final script in repository.scripts) {
+          if (installedService.sourceIdFor(repository, script) == extensionId) {
+            if (await BundledSourceCatalog.reinstall(extensionId, script.version)) return;
+            await installedService.install(repository, script);
+            return;
+          }
+        }
+      }
       throw const SourceParseException(
-        'External extension installation is gated until production Kotlin-side host restrictions are implemented.',
+        'Extension was not found in any added repository.',
       );
     }
     _installedExtensionIds.add(extensionId);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('hon_installed_extensions', _installedExtensionIds.toList());
+    await prefs.setStringList(
+      'hon_installed_extensions',
+      _installedExtensionIds.toList(),
+    );
     _notify();
   }
 
   Future<void> uninstallExtension(String extensionId) async {
+    if (extensionId.startsWith('ext_')) {
+      await InstalledExtensionService.instance.uninstall(extensionId);
+      return;
+    }
     _installedExtensionIds.remove(extensionId);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('hon_installed_extensions', _installedExtensionIds.toList());
+    await prefs.setStringList(
+      'hon_installed_extensions',
+      _installedExtensionIds.toList(),
+    );
     _notify();
   }
 
@@ -162,7 +260,31 @@ class SourceRegistry {
     if (sourceId == 'gutenberg') {
       return await rootBundle.loadString('assets/sources/gutenberg.lua');
     }
-    throw SourceParseException('Upstream extension script not found for "$sourceId"');
+    if (sourceId.startsWith('ext_')) {
+      return InstalledExtensionService.instance.loadScript(sourceId);
+    }
+    throw SourceParseException(
+      'Upstream extension script not found for "$sourceId"',
+    );
+  }
+
+  Future<SourceCatalogInfo> getCatalogInfo(String sourceId) async {
+    final script = await getSourceScript(sourceId);
+    final isAndroid = NativeShosetsuBridge.instance.isAndroidTarget;
+    if (isAndroid && !kIsWeb) {
+      await NativeShosetsuBridge.instance.isSupported();
+      return NativeShosetsuBridge.instance.describeExtension(
+        script,
+        sourceId: sourceId,
+      );
+    }
+    if (await NativeShosetsuBridge.instance.isSupported()) {
+      return NativeShosetsuBridge.instance.describeExtension(
+        script,
+        sourceId: sourceId,
+      );
+    }
+    return const SourceCatalogInfo();
   }
 
   /// Executes upstream extension search (e.g. Project Gutenberg)
@@ -170,11 +292,29 @@ class SourceRegistry {
     String sourceId,
     String query, {
     int page = 0,
+    int? listing,
   }) async {
     final script = await getSourceScript(sourceId);
+    final isAndroid = NativeShosetsuBridge.instance.isAndroidTarget;
+    if (isAndroid && !kIsWeb) {
+      // Surface native failures directly on Android without silent fallback to Dart Lua
+      await NativeShosetsuBridge.instance.isSupported();
+      return await NativeShosetsuBridge.instance.search(
+        script,
+        query,
+        page: page,
+        listing: listing,
+        sourceId: sourceId,
+      );
+    }
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      // Surface native failures directly on Android without silent fallback
-      return await NativeShosetsuBridge.instance.search(script, query, page: page);
+      return await NativeShosetsuBridge.instance.search(
+        script,
+        query,
+        page: page,
+        listing: listing,
+        sourceId: sourceId,
+      );
     }
     return await ShosetsuLuaEngine.instance.search(script, query, page: page);
   }
@@ -186,9 +326,24 @@ class SourceRegistry {
     bool loadChapters = true,
   }) async {
     final script = await getSourceScript(sourceId);
+    final isAndroid = NativeShosetsuBridge.instance.isAndroidTarget;
+    if (isAndroid && !kIsWeb) {
+      // Surface native failures directly on Android without silent fallback to Dart Lua
+      await NativeShosetsuBridge.instance.isSupported();
+      return await NativeShosetsuBridge.instance.parseNovel(
+        script,
+        novelUrl,
+        loadChapters: loadChapters,
+        sourceId: sourceId,
+      );
+    }
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      // Surface native failures directly on Android without silent fallback
-      return await NativeShosetsuBridge.instance.parseNovel(script, novelUrl, loadChapters: loadChapters);
+      return await NativeShosetsuBridge.instance.parseNovel(
+        script,
+        novelUrl,
+        loadChapters: loadChapters,
+        sourceId: sourceId,
+      );
     }
     return await ShosetsuLuaEngine.instance.parseNovel(
       script,
@@ -198,129 +353,25 @@ class SourceRegistry {
   }
 
   /// Retrieves readable chapter HTML via the upstream extension
-  Future<String> getChapterPassage(
-    String sourceId,
-    String chapterUrl,
-  ) async {
+  Future<String> getChapterPassage(String sourceId, String chapterUrl) async {
     final script = await getSourceScript(sourceId);
+    final isAndroid = NativeShosetsuBridge.instance.isAndroidTarget;
+    if (isAndroid && !kIsWeb) {
+      // Surface native failures directly on Android without silent fallback to Dart Lua
+      await NativeShosetsuBridge.instance.isSupported();
+      return await NativeShosetsuBridge.instance.getPassage(
+        script,
+        chapterUrl,
+        sourceId: sourceId,
+      );
+    }
     if (await NativeShosetsuBridge.instance.isSupported()) {
-      // Surface native failures directly on Android without silent fallback
-      return await NativeShosetsuBridge.instance.getPassage(script, chapterUrl);
+      return await NativeShosetsuBridge.instance.getPassage(
+        script,
+        chapterUrl,
+        sourceId: sourceId,
+      );
     }
     return await ShosetsuLuaEngine.instance.getPassage(script, chapterUrl);
-  }
-
-  /// When true, mock preview catalogues are returned for offline layout prototyping.
-  /// Kept false in normal use so no fabricated novels are shown until Phase 0C connects live upstream Lua extensions.
-  static const bool enableDemoCatalogues = false;
-
-  // Catalog source data provider
-  List<SourceNovelSummary> getNovelsForSource(String sourceId) {
-    if (!enableDemoCatalogues) {
-      return [];
-    }
-    if (sourceId == 'novelfull') {
-      return [
-        const SourceNovelSummary(
-          id: 'nf_lotm',
-          title: 'Lord of the Mysteries',
-          author: 'Cuttlefish That Loves Diving',
-          description: 'With the rising tide of steam power and machinery, who can come close to being a Beyonder? Shrouded in the fog of history and darkness...',
-          genres: ['Mystery', 'Fantasy', 'Steampunk'],
-          rating: 4.9,
-        ),
-        const SourceNovelSummary(
-          id: 'nf_shadow_slave',
-          title: 'Shadow Slave',
-          author: 'Guiltythree',
-          description: 'Growing up in poverty, Sunny never expected anything good from life. However, he did not expect to be chosen by the Nightmare Spell...',
-          genres: ['Action', 'Adventure', 'Fantasy'],
-          rating: 4.8,
-        ),
-        const SourceNovelSummary(
-          id: 'nf_re_awakening',
-          title: 'Re-Awakening: I Ascend with a Legendary class',
-          author: 'Legion20',
-          description: 'When the world ended, classes awakened. But his class was classified as unknown...',
-          genres: ['Action', 'LitRPG'],
-          rating: 4.7,
-        ),
-        const SourceNovelSummary(
-          id: 'nf_supreme_magus',
-          title: 'Supreme Magus',
-          author: 'Legion20',
-          description: 'Derek McCoy was a man who spent his entire life facing adversity and injustice...',
-          genres: ['Fantasy', 'Reincarnation'],
-          rating: 4.6,
-        ),
-        const SourceNovelSummary(
-          id: 'nf_infinite_mana',
-          title: 'Infinite Mana In The Apocalypse',
-          author: 'AweSpec',
-          description: 'Awakened with infinite mana in a collapsing world.',
-          genres: ['Action', 'Fantasy'],
-          rating: 4.5,
-        ),
-      ];
-    } else if (sourceId == 'gutenberg') {
-      // Gutenberg Classics
-      return [
-        const SourceNovelSummary(
-          id: 'gt_pride',
-          title: 'Pride and Prejudice',
-          author: 'Jane Austen',
-          description: 'The romantic clash between Elizabeth Bennet and Mr. Darcy.',
-          genres: ['Classic', 'Romance'],
-          rating: 4.8,
-        ),
-        const SourceNovelSummary(
-          id: 'gt_frankenstein',
-          title: 'Frankenstein',
-          author: 'Mary Shelley',
-          description: 'A scientist creates a sentient creature in an unorthodox scientific experiment.',
-          genres: ['Classic', 'Horror', 'Sci-Fi'],
-          rating: 4.7,
-        ),
-        const SourceNovelSummary(
-          id: 'gt_sherlock',
-          title: 'The Adventures of Sherlock Holmes',
-          author: 'Arthur Conan Doyle',
-          description: 'Twelve classic detective stories featuring Sherlock Holmes and Dr. Watson.',
-          genres: ['Classic', 'Mystery'],
-          rating: 4.9,
-        ),
-        const SourceNovelSummary(
-          id: 'gt_dracula',
-          title: 'Dracula',
-          author: 'Bram Stoker',
-          description: 'Count Dracula attempts to move from Transylvania to England.',
-          genres: ['Classic', 'Horror', 'Gothic'],
-          rating: 4.6,
-        ),
-      ];
-    }
-    // Extensions without a compiled runtime return an empty catalog
-    return [];
-  }
-
-  // Global search across all installed sources
-  Map<String, List<SourceNovelSummary>> globalSearch(String query) {
-    final results = <String, List<SourceNovelSummary>>{};
-    final cleanQuery = query.trim().toLowerCase();
-
-    for (final source in getInstalledSources()) {
-      final novels = getNovelsForSource(source.id);
-      final matched = novels.where((n) {
-        return n.title.toLowerCase().contains(cleanQuery) ||
-            (n.author?.toLowerCase().contains(cleanQuery) ?? false) ||
-            n.genres.any((g) => g.toLowerCase().contains(cleanQuery));
-      }).toList();
-
-      if (matched.isNotEmpty) {
-        results[source.name] = matched;
-      }
-    }
-
-    return results;
   }
 }

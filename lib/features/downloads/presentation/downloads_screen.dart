@@ -2,489 +2,429 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/bootstrap/providers.dart';
-import '../../../app/theme/hon_colors.dart';
-import '../../../app/theme/hon_typography.dart';
+import '../../../shared/widgets/hon_screen_header.dart';
 import '../../../core/database/database_service.dart';
+import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/models/book.dart';
 import '../../../core/models/download_job.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
+import '../../../shared/widgets/hon_empty_state.dart';
+import '../../../shared/widgets/hon_segmented_control.dart';
 import '../../reader/presentation/reader_navigator.dart';
-
-class ChapterUpdateItem {
-  final String novelTitle;
-  final String chapterTitle;
-  final String date;
-  final bool isDownloaded;
-  final Book? book;
-
-  const ChapterUpdateItem({
-    required this.novelTitle,
-    required this.chapterTitle,
-    required this.date,
-    this.isDownloaded = false,
-    this.book,
-  });
-}
+import '../../library/presentation/library_updates_screen.dart';
 
 class DownloadsScreen extends ConsumerStatefulWidget {
   const DownloadsScreen({super.key});
-
   @override
   ConsumerState<DownloadsScreen> createState() => _DownloadsScreenState();
 }
 
 class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
-  int _selectedTabIndex = 0; // 0: Downloads, 1: Updates
+  int _tab = 0;
+  final Set<String> _busy = {};
+
+  Future<void> _act(DownloadJob job, {bool cancel = false}) async {
+    if (!_busy.add(job.id)) return;
+    setState(() {});
+    try {
+      final manager = HonDownloadManager.instance;
+      if (cancel) {
+        await manager.cancelDownload(job.id);
+      } else {
+        await manager.resumeDownload(job.id);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update download: $error')),
+        );
+      }
+    } finally {
+      _busy.remove(job.id);
+      if (mounted) setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final jobs = ref.watch(allDownloadJobsProvider);
-    final libraryBooks = ref.watch(libraryBooksProvider);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textPrimary = isDark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
-    final textSecondary = isDark ? HonColors.darkTextSecondary : HonColors.lightTextSecondary;
-
+    final activeTab = ref.watch(navigationTabProvider) == 4;
+    final jobs =
+        [
+          ...(activeTab
+              ? ref.watch(allDownloadJobsProvider)
+              : ref.read(allDownloadJobsProvider)),
+        ]..sort((a, b) {
+          if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
+          return b.updatedAt.compareTo(a.updatedAt);
+        });
+    final db = DatabaseService.instance;
+    final offline = db
+        .getAllBooks()
+        .where(
+          (book) =>
+              (book.format != BookFormat.webNovel && book.filePath != null) ||
+              db.hasDownloadedChapters(book.id),
+        )
+        .toList();
+    final chapterCount = db.getTotalDownloadedChapters();
+    final imported = offline
+        .where((book) => book.format != BookFormat.webNovel)
+        .length;
+    final active = jobs.where((job) => job.isActive).length;
+    final completed = jobs
+        .where((job) => job.status == DownloadStatus.completed)
+        .toList();
+    final colors = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: isDark ? HonColors.darkBackground : HonColors.lightBackground,
       body: SafeArea(
         bottom: false,
         child: CustomScrollView(
-          physics: const BouncingScrollPhysics(),
+          key: const PageStorageKey('downloads-scroll'),
           slivers: [
-            // Header Bar
             SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _selectedTabIndex == 0 ? 'Downloads' : 'Updates',
-                      style: HonTypography.largeTitle(color: textPrimary),
-                    ),
-                    if (_selectedTabIndex == 0 && jobs.isNotEmpty)
-                      TextButton(
-                        onPressed: () {
-                          final db = DatabaseService.instance;
-                          for (final j in jobs) {
-                            if (j.status == DownloadStatus.completed) {
-                              db.removeDownloadJob(j.id);
-                            }
-                          }
-                        },
-                        child: const Text('Clear Completed'),
-                      )
-                    else if (_selectedTabIndex == 1)
-                      IconButton(
-                        icon: const Icon(CupertinoIcons.arrow_clockwise, size: 20),
-                        color: textPrimary,
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Checking library novels for new chapters...')),
-                          );
-                        },
+              child: HonScreenHeader(
+                title: 'Downloads',
+                actions: [
+                  IconButton(
+                    tooltip: 'Library updates',
+                    icon: const Icon(Icons.update),
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const LibraryUpdatesScreen(),
                       ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Mini Tabs: Downloads | Updates
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Container(
-                  height: 36,
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-                    borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
-                  child: Row(
-                    children: [
-                      _buildTabButton('Downloads', 0, jobs.isNotEmpty ? '${jobs.length}' : null, isDark),
-                      _buildTabButton('Updates', 1, null, isDark),
+                  PopupMenuButton<String>(
+                    tooltip: 'Queue controls',
+                    onSelected: (value) async {
+                      try {
+                        if (value == 'pause') {
+                          await HonDownloadManager.instance.pauseAll();
+                        } else {
+                          await HonDownloadManager.instance.resumeAll();
+                        }
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(SnackBar(content: Text('$error')));
+                        }
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'pause',
+                        child: Text('Pause all downloads'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'resume',
+                        child: Text('Resume paused downloads'),
+                      ),
                     ],
                   ),
+                  if (_tab == 0 && completed.isNotEmpty)
+                    PopupMenuButton<String>(
+                      tooltip: 'Download queue options',
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'clear',
+                          child: Text('Clear completed history'),
+                        ),
+                      ],
+                      onSelected: (_) async {
+                        for (final job in completed) {
+                          await db.removeDownloadJob(job.id);
+                        }
+                      },
+                    ),
+                ],
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              sliver: SliverToBoxAdapter(
+                child: HonSegmentedControl(
+                  labels: [
+                    active > 0 ? 'Queue · $active active' : 'Queue',
+                    'Ready Offline',
+                  ],
+                  selected: _tab,
+                  onChanged: (value) => setState(() => _tab = value),
                 ),
               ),
             ),
-
-            // Content Body based on selected tab
-            if (_selectedTabIndex == 0)
-              ..._buildDownloadsTab(jobs, textPrimary, textSecondary, isDark)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+              sliver: SliverToBoxAdapter(
+                child: Text(
+                  '$chapterCount saved chapters · $imported imported ${imported == 1 ? 'book' : 'books'}',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+            if (_tab == 0 && jobs.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: HonEmptyState(
+                  icon: CupertinoIcons.arrow_down_circle,
+                  title: 'Take your next chapter offline',
+                  message:
+                      'Downloads appear here as you save chapters. Clearing queue history keeps your saved files.',
+                  actionLabel: 'Browse Sources',
+                  onAction: () =>
+                      ref.read(navigationTabProvider.notifier).state = 2,
+                ),
+              )
+            else if (_tab == 1 && offline.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: HonEmptyState(
+                  icon: CupertinoIcons.book,
+                  title: 'A shelf for wherever you go',
+                  message:
+                      'Imported books and downloaded novels will be collected here.',
+                  actionLabel: 'Open Library',
+                  onAction: () =>
+                      ref.read(navigationTabProvider.notifier).state = 1,
+                ),
+              )
             else
-              ..._buildUpdatesTab(libraryBooks, textPrimary, textSecondary, isDark),
-
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                sliver: SliverList.builder(
+                  itemCount: _tab == 0 ? jobs.length : offline.length,
+                  itemBuilder: (context, index) => _tab == 0
+                      ? _job(context, jobs[index])
+                      : _offlineBook(context, offline[index]),
+                ),
+              ),
+            const SliverToBoxAdapter(child: SizedBox(height: 128)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildTabButton(String title, int index, String? badge, bool isDark) {
-    final isSelected = _selectedTabIndex == index;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _selectedTabIndex = index),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isSelected
-                ? (isDark ? const Color(0xFF3A3A3C) : Colors.white)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(7),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    )
-                  ]
-                : null,
-          ),
-          alignment: Alignment.center,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: isSelected
-                      ? (isDark ? Colors.white : Colors.black)
-                      : (isDark ? Colors.white60 : Colors.black54),
+  Widget _offlineBook(BuildContext context, Book book) {
+    final colors = Theme.of(context).colorScheme;
+    final count = DatabaseService.instance.getDownloadedChapterCount(book.id);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => ReaderNavigator.openBook(context, book),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                BookCoverWidget(
+                  title: book.title,
+                  author: book.author,
+                  coverPath: book.coverPath,
+                  width: 48,
+                  height: 72,
                 ),
-              ),
-              if (badge != null) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: HonColors.accentOrange,
-                    borderRadius: BorderRadius.circular(10),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        book.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        book.format == BookFormat.webNovel
+                            ? '$count saved chapters'
+                            : '${book.format.name.toUpperCase()} · On this device',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
-                  child: Text(
-                    badge,
-                    style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  CupertinoIcons.chevron_right,
+                  size: 15,
+                  color: colors.onSurfaceVariant,
                 ),
               ],
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  List<Widget> _buildDownloadsTab(
-    List<DownloadJob> jobs,
-    Color textPrimary,
-    Color textSecondary,
-    bool isDark,
-  ) {
-    return [
-      // Storage Overview Card
-      SliverToBoxAdapter(
+  Widget _job(BuildContext context, DownloadJob job) {
+    final colors = Theme.of(context).colorScheme;
+    final db = DatabaseService.instance;
+    final book = db.getBookById(job.bookId);
+    final label = switch (job.status) {
+      DownloadStatus.queued => 'Queued',
+      DownloadStatus.running =>
+        'Downloading · ${(job.progress.clamp(0, 1) * 100).round()}%',
+      DownloadStatus.completed => 'Saved for offline reading',
+      DownloadStatus.retryWaiting => 'Waiting to retry',
+      DownloadStatus.paused => 'Paused',
+      DownloadStatus.cancelled => 'Cancelled',
+      DownloadStatus.failed => 'Download failed',
+    };
+    final failed =
+        job.status == DownloadStatus.failed ||
+        job.status == DownloadStatus.retryWaiting;
+    final canRetry = !job.isActive && job.status != DownloadStatus.completed;
+    return Padding(
+      key: ValueKey(job.id),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(18),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isDark ? HonColors.darkSurface : HonColors.lightSurface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? HonColors.darkCardBorder : HonColors.lightCardBorder,
-                width: 0.5,
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+          child: Row(
+            children: [
+              Icon(
+                job.status == DownloadStatus.completed
+                    ? CupertinoIcons.checkmark_circle_fill
+                    : failed
+                    ? CupertinoIcons.exclamationmark_circle
+                    : CupertinoIcons.arrow_down_circle,
+                color: failed ? colors.error : colors.onSurfaceVariant,
+                size: 24,
               ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: HonColors.accentGreen.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    CupertinoIcons.device_phone_portrait,
-                    color: HonColors.accentGreen,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (book != null)
                       Text(
-                        'Offline Reading Storage',
+                        book.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: textPrimary,
+                          fontSize: 12,
+                          color: colors.onSurfaceVariant,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${jobs.where((j) => j.status == DownloadStatus.completed).length} chapters ready offline in airplane mode.',
-                        style: TextStyle(fontSize: 12, color: textSecondary),
+                    const SizedBox(height: 3),
+                    Text(
+                      job.chapterTitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: failed ? colors.error : colors.onSurfaceVariant,
+                      ),
+                    ),
+                    if (job.status == DownloadStatus.running) ...[
+                      const SizedBox(height: 10),
+                      LinearProgressIndicator(
+                        value: job.progress > 0
+                            ? job.progress.clamp(0, 1)
+                            : null,
+                        minHeight: 3,
                       ),
                     ],
-                  ),
+                    if (failed && job.errorMessage?.isNotEmpty == true)
+                      Text(
+                        job.errorMessage!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.5,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              if (_busy.contains(job.id))
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CupertinoActivityIndicator(),
+                )
+              else if (job.isActive)
+                PopupMenuButton<String>(
+                  tooltip: 'Download actions',
+                  onSelected: (action) async {
+                    if (action == 'cancel') {
+                      await _act(job, cancel: true);
+                    } else {
+                      try {
+                        await HonDownloadManager.instance.pauseDownload(job.id);
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(SnackBar(content: Text('$error')));
+                        }
+                      }
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'pause', child: Text('Pause')),
+                    const PopupMenuItem(
+                      value: 'cancel',
+                      child: Text('Cancel download'),
+                    ),
+                  ],
+                )
+              else if (canRetry)
+                IconButton(
+                  tooltip: job.status == DownloadStatus.paused
+                      ? 'Resume download'
+                      : 'Retry download',
+                  icon: const Icon(CupertinoIcons.arrow_clockwise, size: 20),
+                  onPressed: () => _act(job),
+                )
+              else if (book != null)
+                IconButton(
+                  tooltip: 'Read chapter',
+                  icon: const Icon(CupertinoIcons.book, size: 20),
+                  onPressed: () async {
+                    await db.ensureChaptersLoaded(book.id);
+                    if (context.mounted) {
+                      await ReaderNavigator.openBook(
+                        context,
+                        book,
+                        initialChapterIndex: db
+                            .getChapters(book.id)
+                            .where((c) => c.id == job.chapterId)
+                            .firstOrNull
+                            ?.chapterIndex
+                            .toInt(),
+                      );
+                    }
+                  },
+                ),
+            ],
           ),
         ),
       ),
-
-      // Jobs List
-      if (jobs.isEmpty)
-        SliverFillRemaining(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  CupertinoIcons.arrow_down_circle,
-                  size: 56,
-                  color: isDark ? Colors.white24 : Colors.black26,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'No Active Downloads',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: textPrimary),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Novel chapters queued for offline reading appear here.',
-                  style: TextStyle(fontSize: 13, color: textSecondary),
-                ),
-              ],
-            ),
-          ),
-        )
-      else
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final job = jobs[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF1E1E20) : const Color(0xFFF2F2F7),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          job.status == DownloadStatus.completed
-                              ? CupertinoIcons.check_mark_circled_solid
-                              : CupertinoIcons.arrow_down_circle,
-                          color: job.status == DownloadStatus.completed
-                              ? HonColors.accentGreen
-                              : HonColors.accentOrange,
-                          size: 24,
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                job.chapterTitle,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: textPrimary,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                job.status == DownloadStatus.completed
-                                    ? 'Downloaded & ready offline'
-                                    : 'Downloading... ${(job.progress * 100).toInt()}%',
-                                style: TextStyle(fontSize: 12, color: textSecondary),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (job.status == DownloadStatus.completed)
-                          TextButton(
-                            child: const Text('Read'),
-                            onPressed: () {
-                              final book = DatabaseService.instance.getBookById(job.bookId);
-                              if (book != null) {
-                                ReaderNavigator.openBook(context, book);
-                              }
-                            },
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              childCount: jobs.length,
-            ),
-          ),
-        ),
-    ];
-  }
-
-  List<Widget> _buildUpdatesTab(
-    List<Book> libraryBooks,
-    Color textPrimary,
-    Color textSecondary,
-    bool isDark,
-  ) {
-    // Note: Live upstream chapter updates will be populated when Phase 0C Lua extensions are integrated.
-    // We intentionally do not fabricate mock updates.
-    final updates = <ChapterUpdateItem>[];
-
-    return [
-      if (updates.isEmpty)
-        SliverFillRemaining(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(CupertinoIcons.clock, size: 48, color: textSecondary.withOpacity(0.4)),
-                const SizedBox(height: 12),
-                Text(
-                  'No Chapter Updates',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: textPrimary),
-                ),
-                const SizedBox(height: 6),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    'Chapter update tracking will be activated once novel extensions are connected in Phase 0C.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: textSecondary),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        )
-      else
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final item = updates[index];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: InkWell(
-                    onTap: () {
-                      if (item.book != null) {
-                        ReaderNavigator.openBook(context, item.book!);
-                      }
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF1E1E20) : const Color(0xFFF2F2F7),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
-                          width: 0.5,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          if (item.book != null)
-                            BookCoverWidget(
-                              title: item.book!.title,
-                              author: item.book!.author,
-                              coverPath: item.book!.coverPath,
-                              width: 44,
-                              height: 62,
-                              borderRadius: 4,
-                            )
-                          else
-                            Container(
-                              width: 44,
-                              height: 62,
-                              decoration: BoxDecoration(
-                                color: HonColors.accentOrange.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Icon(CupertinoIcons.book, size: 20),
-                            ),
-                          const SizedBox(width: 14),
-
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item.novelTitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: textPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Row(
-                                  children: [
-                                    Container(
-                                      width: 6,
-                                      height: 6,
-                                      decoration: const BoxDecoration(
-                                        color: HonColors.accentBlue,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      item.chapterTitle,
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: textSecondary,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          Icon(
-                            item.isDownloaded
-                                ? CupertinoIcons.check_mark_circled_solid
-                                : CupertinoIcons.arrow_down_circle,
-                            color: item.isDownloaded ? HonColors.accentGreen : textSecondary,
-                            size: 22,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-              childCount: updates.length,
-            ),
-          ),
-        ),
-    ];
+    );
   }
 }

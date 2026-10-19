@@ -1,0 +1,248 @@
+[
+  {
+    "source": "capthehacker99/Sousetsuka.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "0407ab037473b1799318b75d789851ba",
+    "actualHash": "abb9ec80e81046a9486f8c937219bd9e"
+  },
+  {
+    "source": "capthehacker99/ZkyTranslates.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "06aea98fcbc703c6d9f85126e42bbed3",
+    "actualHash": "7572ea53399b0ea7ec872d15f9980c32"
+  },
+  {
+    "source": "capthehacker99/KariMTL.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "206fbd09c513537869b0be7c7f2e5fdd",
+    "actualHash": "75e85ad66c6c696ba6b46677f1872ffd"
+  },
+  {
+    "source": "capthehacker99/ArcaneTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "1eb0380f16b9d7522af37ae9ff9de9ff",
+    "actualHash": "e195eb6d687e56d9d500e2c5f51c3f6e"
+  },
+  {
+    "source": "capthehacker99/LoreNovels.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "2471bd0fbf4f659540aa453bf9c8fa35",
+    "actualHash": "2e62d3e3e7c78441c66e974d90e553aa"
+  },
+  {
+    "source": "capthehacker99/inoveltranslation.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "0dca3abe98440d1b6a2e695efbd9ea5c",
+    "actualHash": "c2ff0d0bfe8cfaa092b350ca1fa27bbd"
+  },
+  {
+    "source": "capthehacker99/f-w-o.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "ac3b6b278412645586b0c1e63b4fe58f",
+    "actualHash": "1d2d3eabe235ca51269a5a6fec8a7eae"
+  },
+  {
+    "source": "capthehacker99/OayoTL.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "eafacb66841998e42bbd7651122de01d",
+    "actualHash": "c40a45f8cf66768ed82c1d045bb08e05"
+  },
+  {
+    "source": "capthehacker99/KaysTLs.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "05b0c6e788053a0289e95d20ff1d12bc",
+    "actualHash": "29de84dd01eb60fd450a48a2b7109b06"
+  },
+  {
+    "source": "capthehacker99/MachineSlicedBreadEx.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "4fb779d418e93f1275cfb4728af6125a",
+    "actualHash": "c37a3e8a72999e33cb30fbb84d9dd299"
+  },
+  {
+    "source": "capthehacker99/Toasteful.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "96a385077f0bf1818ced7ddee198869e",
+    "actualHash": "159367a52c014277117de64b4103b510"
+  },
+  {
+    "source": "capthehacker99/ElloTL.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "37ee5a842a69e5a93d23f6ae67697577",
+    "actualHash": "b46fcaece21a72e3be42d4fdbf94a283"
+  },
+  {
+    "source": "capthehacker99/DumahsTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "da99948c5178a0d3226da0fcf7b981dd",
+    "actualHash": "258304e2320c3ca2cdf5a19fc0dbcb6e"
+  },
+  {
+    "source": "capthehacker99/novelonomicon.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "2bd033653112910e4f9bc10cd1a440c4",
+    "actualHash": "b5366811d8a2d4875b79bced2dd51399"
+  },
+  {
+    "source": "capthehacker99/JPTL4Fun.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "0fc31ea351de87434c7dd8a4e86ff6f0",
+    "actualHash": "7fb1392b694487c326e58d131e56f5a4"
+  },
+  {
+    "source": "capthehacker99/FenrirTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "4214c4170202346407fe895e2597a732",
+    "actualHash": "a9fd60cd03863e8bff0770e638e45313"
+  },
+  {
+    "source": "capthehacker99/Dragonholic.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "b427efd75dd453f55896a19059b24f9e",
+    "actualHash": "a6daed5daf365aa4451ed777eb7fbb01"
+  },
+  {
+    "source": "capthehacker99/wordrain69.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "1b72b9898b9a0881c0f1029e957e91c6",
+    "actualHash": "396fddb2e1590602cd1134a0db6aa790"
+  },
+  {
+    "source": "capthehacker99/wuxiabox.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "644e71ca8759e7547d42b971c157e43d",
+    "actualHash": "e1ace6404a6a3668fb61e5b6a1c6fc39"
+  },
+  {
+    "source": "capthehacker99/DarkStarTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "ac8daf73c97fc0f7afc210e83dad2a9c",
+    "actualHash": "192330214218c95d11a58b7f6a3a65fa"
+  },
+  {
+    "source": "capthehacker99/TinyTranslation.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "d72f19140f51bfe191a1482b4d66bc37",
+    "actualHash": "d0ed154056b816db32cd6bb8025ec7de"
+  },
+  {
+    "source": "capthehacker99/ClicheNovel.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "7cb3c62dbd4c6a3593c82ccff2a49686",
+    "actualHash": "03f4336305c5ecda9150ca517c6134ee"
+  },
+  {
+    "source": "capthehacker99/EasternWordSmith.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "c5abeb3a0e71250c0d13374e0664e2da",
+    "actualHash": "6a92a2e186793a7fe9b9c1cb01be2707"
+  },
+  {
+    "source": "capthehacker99/nhvnovels.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "9f17008e9c3544ccc4f1b5031104fb70",
+    "actualHash": "63c2012f7a48a0a284b0e2512f8132d1"
+  },
+  {
+    "source": "capthehacker99/AriesTranslation.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "4ee6eac6b28169ba5f6a1bafe9edf74c",
+    "actualHash": "f271dcdec452b7a785d4daafd46b6cf4"
+  },
+  {
+    "source": "capthehacker99/MysticTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "843ea34e03df22047deac8cd242d7cb9",
+    "actualHash": "745d209bc6cf468dfb025e9b6460a237"
+  },
+  {
+    "source": "capthehacker99/RaisingTheDead.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "3c5f0439402b668ab3bd557072aa32ec",
+    "actualHash": "fa3ca97148835913c8fbe8fc7bfc8e02"
+  },
+  {
+    "source": "capthehacker99/Ranobes.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "864b0b904c20b694091c6d415f70381c",
+    "actualHash": "c438a78d3ee398ce0d1804393373bee3"
+  },
+  {
+    "source": "capthehacker99/mvlempyr.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "d1cbcb428eeed332953370d5bfc65279",
+    "actualHash": "817551d9379e3adbe7e69bb64c4b2a0f"
+  },
+  {
+    "source": "capthehacker99/LazyTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "13dfb3ae80cefa9535b5454d685c5c50",
+    "actualHash": "a69377a242258dce40b62258fd1b1e14"
+  },
+  {
+    "source": "capthehacker99/MaviScans.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "21b28703bfcef3aa95460b37efa0584f",
+    "actualHash": "0f6efd817e78b051b658e9daa1f605ac"
+  },
+  {
+    "source": "capthehacker99/GravityTales.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "3a089f98afa64247984eab715e7a0cb6",
+    "actualHash": "3a9a18f0d2df56e781a727bded8ab072"
+  },
+  {
+    "source": "capthehacker99/ReadFanfic.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "118117990cee8d1e64b18dd696b92421",
+    "actualHash": "07e237da4d8a370d15c7b64c6e4ec6db"
+  },
+  {
+    "source": "capthehacker99/EroLightNovelTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "9282075e2c4eac22daa1d0f1a2273c5d",
+    "actualHash": "bc84f3b58714129772e7067ba3aae201"
+  },
+  {
+    "source": "capthehacker99/InfiniteNovelTranslations.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "3a51a3be4d68af19801ac7f812ec2df3",
+    "actualHash": "5839b4c5f0e2c163e0a3723b57997329"
+  },
+  {
+    "source": "capthehacker99/FanFiction.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "8b5c5cc4b41fc2b81d7adae1d33c478a",
+    "actualHash": "7f4b3c008284354f258973f9aa35a34c"
+  },
+  {
+    "source": "capthehacker99/ArchiveOfOurOwn.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "cbe07fc2e8f10370a8a97e6430d3a6d9",
+    "actualHash": "4ab9f8555d0d1c7babef0dc6d0ccc17d"
+  },
+  {
+    "source": "capthehacker99/ZirusMusings.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "447c544858faafbc5e03b64e5aa79304",
+    "actualHash": "590909216cbaec4325f6417e88e4f1c8"
+  },
+  {
+    "source": "capthehacker99/GadgetizedPanda.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "aa3d163a4bdb893584533e909ad56c3b",
+    "actualHash": "335cac50c491c3ffccc367872175be3b"
+  },
+  {
+    "source": "capthehacker99/melreads.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "305163c5772349befd10ecc210960619",
+    "actualHash": "b67a991ab73e8d9f05a65862c644ab95"
+  },
+  {
+    "source": "capthehacker99/ElysianReads.lua",
+    "issue": "upstream index checksum is stale",
+    "indexHash": "3bdf4b7f2e43bdab49efb97b28d42271",
+    "actualHash": "3c3ff9f9ccd405f11dc87d3810a16ac7"
+  }
+]

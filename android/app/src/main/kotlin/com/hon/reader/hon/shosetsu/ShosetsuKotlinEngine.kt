@@ -3,453 +3,305 @@ package com.hon.reader.hon.shosetsu
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import org.luaj.vm2.*
-import org.luaj.vm2.lib.OneArgFunction
-import org.luaj.vm2.lib.ThreeArgFunction
-import org.luaj.vm2.lib.TwoArgFunction
-import org.luaj.vm2.lib.VarArgFunction
-import org.luaj.vm2.lib.jse.JsePlatform
-import java.net.URLEncoder
+import org.luaj.vm2.compiler.LuaC
+import org.luaj.vm2.lib.BaseLib
+import org.luaj.vm2.lib.Bit32Lib
+import org.luaj.vm2.lib.DebugLib
+import org.luaj.vm2.lib.PackageLib
+import org.luaj.vm2.lib.StringLib
+import org.luaj.vm2.lib.TableLib
+import org.luaj.vm2.lib.jse.JseMathLib
 import java.util.concurrent.TimeUnit
 
 class ShosetsuKotlinEngine(
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(35, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(15, TimeUnit.SECONDS)
         .build()
 ) {
 
-    suspend fun search(luaScript: String, query: String, page: Int): List<Map<String, Any?>> = withContext(Dispatchers.IO) {
-        val (globals, extensionTable) = loadExtension(luaScript)
-        val searchFn = extensionTable.get("search")
-        if (searchFn.isnil() || !searchFn.isfunction()) {
-            throw IllegalArgumentException("Script does not export 'search' function in returned extension table")
+    private class BudgetDebugLib(private val budget: SourceOperationBudget) : DebugLib() {
+        private var instructions = 0
+        override fun onInstruction(pc: Int, v: Varargs?, top: Int) {
+            instructions++
+            if (instructions > budget.instructionLimit || Thread.currentThread().isInterrupted) {
+                throw LuaError("Extension exceeded its execution budget")
+            }
+            if (instructions % 4096 == 0) budget.remainingMillis()
         }
-
-        val data = LuaTable()
-        data.set(globals.get("QUERY"), LuaValue.valueOf(query))
-        data.set(globals.get("PAGE"), LuaValue.valueOf(page))
-        data.set(LuaValue.valueOf("query"), LuaValue.valueOf(query))
-        data.set(LuaValue.valueOf("page"), LuaValue.valueOf(page))
-
-        val result = searchFn.call(data)
-        return@withContext parseNovelList(result)
     }
 
-    suspend fun parseNovel(luaScript: String, novelUrl: String, loadChapters: Boolean): Map<String, Any?> = withContext(Dispatchers.IO) {
-        val (_, extensionTable) = loadExtension(luaScript)
+    suspend fun search(
+        luaScript: String,
+        query: String,
+        page: Int,
+        listingIndex: Int? = null,
+        userSettings: Map<String, Any?> = emptyMap(),
+        userFilters: Map<String, Any?> = emptyMap(),
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): List<Map<String, Any?>> = runScript {
+        val (globals, extensionTable) = loadExtension(luaScript, userSettings, allowedHosts = allowedHosts, initialBaseUrl = initialBaseUrl)
+        val sourcePage = page.coerceAtLeast(0) + extensionTable.get("startIndex").optint(1)
+        val data = filterValues(extensionTable.get("searchFilters"), userFilters).apply {
+            set(globals.get("QUERY"), LuaValue.valueOf(query))
+            set(globals.get("PAGE"), LuaValue.valueOf(sourcePage))
+            set("query", LuaValue.valueOf(query)); set("page", LuaValue.valueOf(sourcePage))
+        }
+        val listings = extensionTable.get("listings")
+        val entry = if (listings.istable()) listings.get((listingIndex ?: 0).coerceAtLeast(0) + 1) else LuaValue.NIL
+        val listing = if (entry.istable()) entry.get("fn") else LuaValue.NIL
+        if (query.isBlank() && listing.isfunction()) return@runScript parseNovelList(listing.call(data))
+        val searchFn = extensionTable.get("search")
+        if (!searchFn.isfunction() || extensionTable.get("hasSearch") == LuaValue.FALSE) {
+            if (query.isNotBlank()) throw IllegalArgumentException("This source does not support text search")
+            if (!listing.isfunction()) throw IllegalArgumentException("Source has no searchable catalog or listing")
+            return@runScript parseNovelList(listing.call(data))
+        }
+
+        val result = searchFn.call(data)
+        return@runScript parseNovelList(result)
+    }
+
+    suspend fun describeExtension(
+        luaScript: String,
+        userSettings: Map<String, Any?> = emptyMap(),
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): Map<String, Any?> = runScript {
+        val (_, extension) = loadExtension(luaScript, userSettings, allowedHosts = allowedHosts, initialBaseUrl = initialBaseUrl)
+        val listings = extension.get("listings")
+        mapOf(
+            "baseUrl" to extension.get("baseURL").optjstring(extension.get("baseUrl").optjstring("")),
+            "settings" to describeFilters(extension.get("settings")),
+            "filters" to describeFilters(extension.get("searchFilters")),
+            "hasSearch" to (extension.get("search").isfunction() && extension.get("hasSearch") != LuaValue.FALSE),
+            "searchIncrementing" to extension.get("isSearchIncrementing").optboolean(true),
+            "listings" to (1..(if (listings.istable()) listings.length().coerceAtMost(128) else 0)).map { index ->
+                val listing = listings.get(index)
+                mapOf("index" to index - 1, "name" to listing.get("name").optjstring("Browse"),
+                    "incrementing" to listing.get("increments").optboolean(false))
+            },
+        )
+    }
+
+    suspend fun parseNovel(
+        luaScript: String,
+        novelUrl: String,
+        loadChapters: Boolean,
+        userSettings: Map<String, Any?> = emptyMap(),
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): Map<String, Any?> = runScript {
+        val (_, extensionTable) = loadExtension(luaScript, userSettings, SourceOperationBudget(chapters = loadChapters), allowedHosts = allowedHosts, initialBaseUrl = initialBaseUrl)
         val parseFn = extensionTable.get("parseNovel")
         if (parseFn.isnil() || !parseFn.isfunction()) {
             throw IllegalArgumentException("Script does not export 'parseNovel' function in returned extension table")
         }
 
         val result = parseFn.call(LuaValue.valueOf(novelUrl), LuaValue.valueOf(loadChapters))
-        return@withContext parseNovelDetails(result)
+        return@runScript parseNovelDetails(result)
     }
 
-    suspend fun getPassage(luaScript: String, chapterUrl: String): String = withContext(Dispatchers.IO) {
-        val (_, extensionTable) = loadExtension(luaScript)
+    suspend fun getPassage(
+        luaScript: String,
+        chapterUrl: String,
+        userSettings: Map<String, Any?> = emptyMap(),
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): String = runScript {
+        val (_, extensionTable) = loadExtension(luaScript, userSettings, allowedHosts = allowedHosts, initialBaseUrl = initialBaseUrl)
         val passageFn = extensionTable.get("getPassage")
         if (passageFn.isnil() || !passageFn.isfunction()) {
             throw IllegalArgumentException("Script does not export 'getPassage' function in returned extension table")
         }
 
         val result = passageFn.call(LuaValue.valueOf(chapterUrl))
-        return@withContext result.tojstring()
+        if (!result.isstring()) throw IllegalArgumentException("Extension did not return chapter text")
+        if (extensionTable.get("chapterType").optint(1) == 0) {
+            return@runScript "<p>" + org.jsoup.nodes.Entities.escape(result.tojstring()).replace("\n", "<br>") + "</p>"
+        }
+        return@runScript result.tojstring()
     }
 
-    private fun loadExtension(luaScript: String): Pair<Globals, LuaTable> {
-        val globals = createSandboxedGlobals()
-        val chunk = globals.load(luaScript)
+    private fun extractDeclaredBaseUrl(luaScript: String): String? {
+        val match = Regex("""(?:local\s+)?base(?:URL|Url)\s*=\s*["']([^"']+)["']""").find(luaScript)
+            ?: Regex("""["']?base(?:URL|Url)["']?\s*[:=]\s*["']([^"']+)["']""").find(luaScript)
+        return match?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun loadExtension(
+        luaScript: String,
+        userSettings: Map<String, Any?> = emptyMap(),
+        budget: SourceOperationBudget = SourceOperationBudget(),
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): Pair<Globals, LuaTable> {
+        val resolvedBaseUrl = initialBaseUrl?.trim()?.takeIf { it.isNotEmpty() } ?: extractDeclaredBaseUrl(luaScript)
+        val policy = SourceNetworkPolicy(baseHost = resolvedBaseUrl, extraAllowedHosts = allowedHosts.toMutableSet())
+        val globals = createSandboxedGlobals(budget, policy)
+        val chunk = LuaPrototypeCache.load(globals, luaScript, "extension")
         val extensionTable = chunk.call()
         if (!extensionTable.istable()) {
             throw IllegalArgumentException("Upstream Shosetsu extension script must return an extension table")
         }
+        val rawBaseUrl = extensionTable.get("baseURL").optjstring(extensionTable.get("baseUrl").optjstring(""))
+        if (rawBaseUrl.isNotBlank()) {
+            policy.baseHost = rawBaseUrl
+        }
+        val settings = filterValues(extensionTable.get("settings"), userSettings)
+        extensionTable.get("setSettings").takeIf { it.isfunction() }?.call(settings)
+        extensionTable.get("updateSetting").takeIf { it.isfunction() }?.let { update ->
+            for (id in settings.keys()) update.call(id, settings.get(id))
+        }
         return Pair(globals, extensionTable.checktable())
     }
 
-    fun createSandboxedGlobals(): Globals {
-        val globals = JsePlatform.standardGlobals()
-
-        // Strip dangerous host libraries for security
-        globals.set("os", LuaValue.NIL)
-        globals.set("io", LuaValue.NIL)
-        globals.set("luajava", LuaValue.NIL)
-        globals.set("debug", LuaValue.NIL)
-        val packageTable = globals.get("package")
-        if (packageTable.istable()) {
-            packageTable.set("loadlib", LuaValue.NIL)
+    private fun describeFilters(filters: LuaValue): List<Map<String, Any?>> {
+        val result = mutableListOf<Map<String, Any?>>()
+        fun walk(items: LuaValue, group: String, depth: Int) {
+            if (!items.istable() || depth > 16 || result.size >= 2048) return
+            for (i in 1..items.length().coerceAtMost(512)) {
+                if (result.size >= 2048) return
+                val item = items.get(i)
+                if (!item.istable()) continue
+                val name = item.get("name").optjstring("").take(500)
+                if (item.get("filters").istable()) { walk(item.get("filters"), if (group.isBlank()) name else "$group / $name", depth + 1); continue }
+                val id = item.get("id")
+                if (!id.isint() || id.toint() < 0) continue
+                val state = item.get("state")
+                val options = item.get("options")
+                result.add(mapOf("id" to id.toint(), "label" to name, "group" to group,
+                    "kind" to item.get("kind").optjstring("TextFilter"),
+                    "value" to when { state.isboolean() -> state.toboolean(); state.isnumber() -> state.todouble(); else -> state.optjstring("") },
+                    "options" to (1..(if(options.istable()) options.length().coerceAtMost(512) else 0)).map { options.get(it).tojstring().take(500) }))
+            }
         }
+        walk(filters, "", 0)
+        return result
+    }
 
-        // Shosetsu standard constants
-        globals.set("QUERY", LuaValue.valueOf(0))
-        globals.set("PAGE", LuaValue.valueOf(1))
-
-        val novelStatus = LuaTable()
-        novelStatus.set("UNKNOWN", LuaValue.valueOf(0))
-        novelStatus.set("PUBLISHING", LuaValue.valueOf(1))
-        novelStatus.set("COMPLETED", LuaValue.valueOf(2))
-        novelStatus.set("PAUSED", LuaValue.valueOf(3))
-        novelStatus.set("DROPPED", LuaValue.valueOf(4))
-        globals.set("NovelStatus", novelStatus)
-
-        val chapterType = LuaTable()
-        chapterType.set("HTML", LuaValue.valueOf(1))
-        chapterType.set("TEXT", LuaValue.valueOf(2))
-        globals.set("ChapterType", chapterType)
-
-        // Shosetsu standard types / constructors
-        globals.set("Novel", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue = if (arg.istable()) arg else LuaTable()
-        })
-
-        globals.set("NovelInfo", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val table = if (arg.istable()) arg.checktable() else LuaTable()
-                table.set("setChapters", object : TwoArgFunction() {
-                    override fun call(self: LuaValue, chapters: LuaValue): LuaValue {
-                        self.set("chapters", chapters)
-                        return self
-                    }
-                })
-                return table
+    private fun filterValues(filters: LuaValue, overrides: Map<String, Any?>): LuaTable {
+        val result = filterDefaults(filters)
+        for (control in describeFilters(filters)) {
+            val id = control["id"] as Int
+            if (!overrides.containsKey(id.toString())) continue
+            val value = overrides[id.toString()]
+            val kind = control["kind"] as String
+            val options = control["options"] as List<*>
+            val lua = when (kind) {
+                "CheckboxFilter", "SwitchFilter" -> if (value is Boolean) LuaValue.valueOf(value) else throw IllegalArgumentException("Invalid switch value")
+                "TriStateFilter" -> if (value is Number && value.toDouble() == value.toInt().toDouble() && value.toInt() in 0..2) LuaValue.valueOf(value.toInt()) else throw IllegalArgumentException("Invalid tri-state value")
+                "DropdownFilter", "RadioGroupFilter" -> if (value is Number && value.toDouble() == value.toInt().toDouble() && value.toInt() in 0 until options.size) LuaValue.valueOf(value.toInt()) else throw IllegalArgumentException("Invalid option index")
+                "TextFilter", "PasswordFilter" -> if (value is String && value.length <= 4096) LuaValue.valueOf(value) else throw IllegalArgumentException("Invalid text setting")
+                else -> continue
             }
-        })
+            result.set(id, lua)
+        }
+        return result
+    }
 
-        globals.set("NovelChapter", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue = if (arg.istable()) arg else LuaTable()
-        })
-
-        globals.set("AsList", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue = arg
-        })
-
-        globals.set("List", object : VarArgFunction() {
-            override fun invoke(args: Varargs): Varargs = LuaTable()
-        })
-
-        globals.set("Listing", object : ThreeArgFunction() {
-            override fun call(name: LuaValue, inc: LuaValue, fn: LuaValue): LuaValue {
-                val t = LuaTable()
-                t.set("name", name)
-                t.set("increments", inc)
-                t.set("fn", fn)
-                return t
-            }
-        })
-
-        globals.set("DropdownFilter", object : ThreeArgFunction() {
-            override fun call(id: LuaValue, name: LuaValue, options: LuaValue): LuaValue {
-                val t = LuaTable()
-                t.set("id", id)
-                t.set("name", name)
-                t.set("options", options)
-                return t
-            }
-        })
-
-        globals.set("SwitchFilter", object : TwoArgFunction() {
-            override fun call(id: LuaValue, name: LuaValue): LuaValue {
-                val t = LuaTable()
-                t.set("id", id)
-                t.set("name", name)
-                return t
-            }
-        })
-
-        // Standard Shosetsu collection helper: map(list, fn)
-        globals.set("map", object : TwoArgFunction() {
-            override fun call(list: LuaValue, fn: LuaValue): LuaValue {
-                val res = LuaTable()
-                var outIdx = 1
-                if (list.istable()) {
-                    val tbl = list.checktable()
-                    val sizeFn = tbl.get("size")
-                    if (sizeFn.isfunction()) {
-                        val size = sizeFn.call(tbl).toint()
-                        val getFn = tbl.get("get")
-                        for (i in 0 until size) {
-                            val item = getFn.call(tbl, LuaValue.valueOf(i))
-                            val mapped = fn.call(item, LuaValue.valueOf(i))
-                            if (!mapped.isnil()) {
-                                res.set(outIdx++, mapped)
-                            }
-                        }
-                    } else {
-                        val len = tbl.length()
-                        for (i in 1..len) {
-                            val item = tbl.get(i)
-                            val mapped = fn.call(item, LuaValue.valueOf(i - 1))
-                            if (!mapped.isnil()) {
-                                res.set(outIdx++, mapped)
-                            }
-                        }
-                    }
-                }
-                return res
-            }
-        })
-
-        // Shosetsu standard: pageOfElem(doc, removeStyles)
-        globals.set("pageOfElem", object : TwoArgFunction() {
-            override fun call(docOrElem: LuaValue, removeStyles: LuaValue): LuaValue {
-                if (docOrElem.istable()) {
-                    val bodyFn = docOrElem.get("body")
-                    if (bodyFn.isfunction()) {
-                        val body = bodyFn.call(docOrElem)
-                        val htmlFn = body.get("html")
-                        if (htmlFn.isfunction()) {
-                            return htmlFn.call(body)
-                        }
-                    }
-                    val htmlFn = docOrElem.get("html")
-                    if (htmlFn.isfunction()) {
-                        return htmlFn.call(docOrElem)
-                    }
-                }
-                return LuaValue.valueOf(docOrElem.tojstring())
-            }
-        })
-
-        // Shosetsu Require("FilterOptions") and Require("url")
-        globals.set("Require", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val mod = arg.tojstring()
-                return when (mod) {
-                    "FilterOptions" -> createFilterOptionsModule()
-                    "url" -> createUrlModule()
-                    else -> LuaTable()
+    private fun filterDefaults(filters: LuaValue): LuaTable {
+        val result = LuaTable()
+        var visited = 0
+        fun collect(items: LuaValue, depth: Int) {
+            if (!items.istable() || depth > 16) return
+            for (i in 1..items.length().coerceAtMost(512)) {
+                if (++visited > 2048) return
+                val filter = items.get(i)
+                if (!filter.istable()) continue
+                val nested = filter.get("filters")
+                if (nested.istable()) collect(nested, depth + 1)
+                else {
+                    val id = filter.get("id")
+                    val state = filter.get("state")
+                    if (id.isint() && id.toint() >= 0 && !state.isnil()) result.set(id, state)
                 }
             }
-        })
+        }
+        collect(filters, 0)
+        return result
+    }
 
-        // Shosetsu GETDocument(url)
-        globals.set("GETDocument", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val url = arg.tojstring()
-                return executeHttpDocument(url)
+    suspend fun validateExtension(
+        luaScript: String,
+        allowedHosts: Set<String> = emptySet(),
+        initialBaseUrl: String? = null
+    ): Boolean = runScript {
+        val (_, extension) = loadExtension(luaScript, allowedHosts = allowedHosts, initialBaseUrl = initialBaseUrl)
+        for (method in listOf("parseNovel", "getPassage")) {
+            if (!extension.get(method).isfunction()) {
+                throw IllegalArgumentException("Extension does not implement $method")
             }
-        })
+        }
+        if (!extension.get("search").isfunction() &&
+            (!extension.get("listings").istable() || !extension.get("listings").get(1).get("fn").isfunction())) {
+            throw IllegalArgumentException("Extension has no search function or listing")
+        }
+        true
+    }
 
-        // Shosetsu raw GET(url)
-        globals.set("GET", object : VarArgFunction() {
-            override fun invoke(args: Varargs): Varargs {
-                val url = args.arg(1).tojstring()
-                return executeHttpRequest(url, "GET")
-            }
-        })
+    private suspend fun <T> runScript(block: () -> T): T = withContext(Dispatchers.IO) {
+        try { block() } finally { SandboxStringMethods.leave() }
+    }
 
-        // Shosetsu raw POST(url)
-        globals.set("POST", object : VarArgFunction() {
-            override fun invoke(args: Varargs): Varargs {
-                val url = args.arg(1).tojstring()
-                return executeHttpRequest(url, "POST")
-            }
-        })
+    fun selfCheck() {
+        val globals = createSandboxedGlobals(SourceOperationBudget())
+        val chunk = globals.load("return 42", "selfCheck")
+        val result = chunk.call()
+        if (result.toint() != 42) {
+            throw IllegalStateException("Source engine self-check failed")
+        }
+    }
 
+    fun createSandboxedGlobals(): Globals = createSandboxedGlobals(SourceOperationBudget(), SourceNetworkPolicy())
+
+    internal fun createSandboxedGlobals(budget: SourceOperationBudget): Globals = createSandboxedGlobals(budget, SourceNetworkPolicy())
+
+    internal fun createSandboxedGlobals(budget: SourceOperationBudget, policy: SourceNetworkPolicy): Globals {
+        val globals = Globals()
+        globals.load(BaseLib())
+        globals.load(PackageLib())
+        globals.load(Bit32Lib())
+        globals.load(TableLib())
+        globals.load(StringLib())
+        globals.load(JseMathLib())
+        LoadState.install(globals)
+        LuaC.install(globals)
+        globals.load(BudgetDebugLib(budget))
+        for (name in listOf("os", "io", "luajava", "debug", "package", "require", "dofile", "loadfile", "load", "loadstring", "collectgarbage")) {
+            globals.set(name, LuaValue.NIL)
+        }
+        ShosetsuLuaHost(globals, httpClient, budget, policy).install()
+        installAllocationLimits(globals)
+        SandboxStringMethods.enter(globals)
         return globals
     }
 
-    private fun executeHttpDocument(url: String): LuaValue {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .build()
-
-        val response = httpClient.newCall(request).execute()
-        if (!response.isSuccessful) {
-            throw IllegalStateException("HTTP GET failed with code ${response.code} for $url")
-        }
-        val html = response.body?.string() ?: ""
-        val doc = Jsoup.parse(html, url)
-        val docTable = LuaTable()
-        wrapDocumentMethods(docTable, doc)
-        return docTable
-    }
-
-    private fun executeHttpRequest(url: String, method: String): Varargs {
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-
-        val response = httpClient.newCall(requestBuilder.build()).execute()
-        val htmlContent = response.body?.string() ?: ""
-
-        val responseTable = LuaTable()
-        responseTable.set("code", LuaValue.valueOf(response.code))
-        responseTable.set("body", LuaValue.valueOf(htmlContent))
-
-        val doc = Jsoup.parse(htmlContent, url)
-        wrapDocumentMethods(responseTable, doc)
-
-        return responseTable
-    }
-
-    private fun wrapDocumentMethods(table: LuaTable, doc: Document) {
-        wrapElementMethods(table, doc)
-
-        table.set("head", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                val headEl = doc.head() ?: doc
-                val elTable = LuaTable()
-                wrapElementMethods(elTable, headEl)
-                return elTable
-            }
-        })
-
-        table.set("body", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue {
-                val bodyEl = doc.body() ?: doc
-                val elTable = LuaTable()
-                wrapElementMethods(elTable, bodyEl)
-                return elTable
-            }
-        })
-    }
-
-    private fun wrapElementMethods(table: LuaTable, element: Element) {
-        table.set("select", object : TwoArgFunction() {
-            override fun call(self: LuaValue, cssSelector: LuaValue): LuaValue {
-                val query = cssSelector.tojstring()
-                val elements = element.select(query)
-                val listTable = LuaTable()
-                for (i in 0 until elements.size) {
-                    val el = elements[i]
-                    val elTable = LuaTable()
-                    wrapElementMethods(elTable, el)
-                    listTable.set(i + 1, elTable)
-                }
-                listTable.set("size", object : OneArgFunction() {
-                    override fun call(s: LuaValue): LuaValue = LuaValue.valueOf(elements.size)
-                })
-                listTable.set("get", object : TwoArgFunction() {
-                    override fun call(s: LuaValue, idx: LuaValue): LuaValue {
-                        val i = idx.toint()
-                        if (i in 0 until elements.size) {
-                            return listTable.get(i + 1)
-                        }
-                        return LuaValue.NIL
-                    }
-                })
-                listTable.set("text", object : OneArgFunction() {
-                    override fun call(s: LuaValue): LuaValue = LuaValue.valueOf(elements.text().trim())
-                })
-                listTable.set("attr", object : TwoArgFunction() {
-                    override fun call(s: LuaValue, attrName: LuaValue): LuaValue =
-                        LuaValue.valueOf(elements.attr(attrName.tojstring()))
-                })
-                return listTable
-            }
-        })
-
-        table.set("selectFirst", object : TwoArgFunction() {
-            override fun call(self: LuaValue, cssSelector: LuaValue): LuaValue {
-                val query = cssSelector.tojstring()
-                val el = element.selectFirst(query) ?: return LuaValue.NIL
-                val elTable = LuaTable()
-                wrapElementMethods(elTable, el)
-                return elTable
-            }
-        })
-
-        table.set("text", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.text().trim())
-        })
-
-        table.set("ownText", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.ownText().trim())
-        })
-
-        table.set("attr", object : VarArgFunction() {
+    private fun installAllocationLimits(globals: Globals) {
+        val strings = globals.get("string")
+        val repeat = strings.get("rep")
+        strings.set("rep", object : org.luaj.vm2.lib.VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
-                val self = args.arg(1)
-                val attrName = args.arg(2).tojstring()
-                val attrVal = args.arg(3)
-                return if (!attrVal.isnil()) {
-                    element.attr(attrName, attrVal.tojstring())
-                    self
-                } else {
-                    LuaValue.valueOf(element.attr(attrName))
-                }
+                val size = args.arg1().checkstring().length().toLong()
+                val count = args.arg(2).checklong().coerceAtLeast(0)
+                val separator = args.arg(3).optjstring("").length.toLong()
+                if (count > 1_000_000 || (size + separator) * count > 8 * 1024 * 1024) throw LuaError("Extension string exceeds its allocation budget")
+                return repeat.invoke(args)
             }
         })
-
-        table.set("prependElement", object : TwoArgFunction() {
-            override fun call(self: LuaValue, tag: LuaValue): LuaValue {
-                val created = element.prependElement(tag.tojstring())
-                val elTable = LuaTable()
-                wrapElementMethods(elTable, created)
-                return elTable
-            }
-        })
-
-        table.set("html", object : OneArgFunction() {
-            override fun call(self: LuaValue): LuaValue = LuaValue.valueOf(element.html())
-        })
-    }
-
-    private fun createFilterOptionsModule(): LuaValue {
-        // Require("FilterOptions") returns a callable factory function: FilterOptions(options, default)
-        return object : VarArgFunction() {
+        val format = strings.get("format")
+        strings.set("format", object : org.luaj.vm2.lib.VarArgFunction() {
             override fun invoke(args: Varargs): Varargs {
-                val options = args.arg(1)
-                val defaultVal = args.arg(2)
-
-                val fo = LuaTable()
-                fo.set("valueOfOrFirst", object : TwoArgFunction() {
-                    override fun call(self: LuaValue, v: LuaValue): LuaValue {
-                        if (!v.isnil()) return v
-                        return if (!defaultVal.isnil()) defaultVal else LuaValue.NIL
-                    }
-                })
-                fo.set("labels", object : OneArgFunction() {
-                    override fun call(self: LuaValue): LuaValue = LuaTable()
-                })
-                return fo
-            }
-        }
-    }
-
-    private fun createUrlModule(): LuaTable {
-        val module = LuaTable()
-        // Require("url").querystring(params, base)
-        module.set("querystring", object : TwoArgFunction() {
-            override fun call(params: LuaValue, base: LuaValue): LuaValue {
-                val basePath = if (base.isnil()) "" else base.tojstring()
-                val sb = StringBuilder()
-                if (params.istable()) {
-                    val tbl = params.checktable()
-                    var k = LuaValue.NIL
-                    while (true) {
-                        val next = tbl.next(k)
-                        k = next.arg1()
-                        if (k.isnil()) break
-                        val v = next.arg(2)
-                        if (sb.isNotEmpty()) sb.append("&")
-                        try {
-                            sb.append(URLEncoder.encode(k.tojstring(), "UTF-8"))
-                                .append("=")
-                                .append(URLEncoder.encode(v.tojstring(), "UTF-8"))
-                        } catch (_: Exception) {
-                            sb.append(k.tojstring()).append("=").append(v.tojstring())
-                        }
-                    }
+                val pattern = args.arg1().checkjstring()
+                if (Regex("%[-+ #0]*(\\d+)").findAll(pattern).any { (it.groupValues[1].toLongOrNull() ?: Long.MAX_VALUE) > 1_000_000 }) {
+                    throw LuaError("Extension format exceeds its allocation budget")
                 }
-                val query = sb.toString()
-                return when {
-                    query.isEmpty() -> LuaValue.valueOf(basePath)
-                    basePath.contains("?") -> LuaValue.valueOf("$basePath&$query")
-                    else -> LuaValue.valueOf("$basePath?$query")
-                }
+                return format.invoke(args)
             }
         })
-        return module
     }
 
     private fun parseNovelList(result: LuaValue): List<Map<String, Any?>> {
@@ -521,12 +373,13 @@ class ShosetsuKotlinEngine(
                         "id" to link,
                         "title" to chTitle,
                         "url" to link,
-                        "release" to release
+                        "release" to release,
+                        "order" to chItem.get("order").optdouble(i.toDouble())
                     ))
                 }
             }
         }
-        map["chapters"] = chaptersList
+        map["chapters"] = chaptersList.sortedBy { (it["order"] as? Number)?.toDouble() ?: 0.0 }
         return map
     }
 

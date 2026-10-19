@@ -1,0 +1,5 @@
+# Copy to key.properties and keep the real file private.
+storeFile=keystore/hon-release.jks
+storePassword=YOUR_PRIVATE_PASSWORD
+keyAlias=hon-release
+keyPassword=YOUR_PRIVATE_PASSWORD

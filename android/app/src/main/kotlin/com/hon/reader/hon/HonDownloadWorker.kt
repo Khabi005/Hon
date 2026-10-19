@@ -6,10 +6,20 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.hon.reader.hon.shosetsu.ShosetsuKotlinEngine
+import com.hon.reader.hon.shosetsu.SourceHttpClient
+import com.hon.reader.hon.shosetsu.SourceHttpException
+import kotlinx.coroutines.CancellationException
+import com.hon.reader.hon.shosetsu.SourcePreferenceStore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.runBlocking
+import okhttp3.Call
+import okhttp3.EventListener
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
@@ -19,12 +29,34 @@ class HonDownloadWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(context, workerParams) {
 
-    private val httpClient = OkHttpClient.Builder()
+    companion object {
+        private val locks = ConcurrentHashMap<String, Mutex>()
+        private val activeCalls = ConcurrentHashMap<String, MutableSet<Call>>()
+        fun stopAndAwait(jobId:String) {
+            activeCalls[jobId]?.toList()?.forEach { it.cancel() }
+            // File replacement and rollback finish before pause/export is acknowledged.
+            runBlocking { locks[jobId]?.withLock { } }
+        }
+    }
+    private val trackedCalls = ConcurrentHashMap.newKeySet<Call>()
+    private fun isCurrentAttempt(jobId: String): Boolean = !isStopped &&
+        context.getSharedPreferences("hon_download_tokens", Context.MODE_PRIVATE).getString(jobId, null) == id.toString()
+
+    private val httpClient = SourceHttpClient.create(context, inputData.getString("sourceId") ?: "gutenberg").newBuilder()
+        .eventListener(object : EventListener() {
+            override fun callStart(call:Call) {
+                trackedCalls.add(call)
+                if (!isCurrentAttempt(inputData.getString("jobId") ?: "")) call.cancel()
+            }
+            override fun callEnd(call:Call) { trackedCalls.remove(call) }
+            override fun callFailed(call:Call, error:IOException) { trackedCalls.remove(call) }
+        })
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val shosetsuEngine = ShosetsuKotlinEngine(httpClient)
+
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val jobId = inputData.getString("jobId")
@@ -34,15 +66,25 @@ class HonDownloadWorker(
         val chapterId = inputData.getString("chapterId")
         val sourceId = inputData.getString("sourceId") ?: "gutenberg"
 
-        if (jobId == "RECOVER_ALL") {
-            return@withContext recoverAllDownloads()
-        }
+        if (jobId == "RECOVER_ALL") return@withContext Result.success()
 
         if (jobId.isNullOrBlank() || url.isNullOrBlank() || targetPath.isNullOrBlank()) {
             return@withContext Result.failure()
         }
 
-        return@withContext executeDownload(jobId, url, targetPath, bookId, chapterId, sourceId)
+        try {
+            setForeground(DownloadNotifications.foreground(context, jobId, inputData.getString("chapterTitle") ?: "Downloading chapter"))
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            // Background foreground service restrictions on Android 12+/14+ should not fail download execution
+        }
+        return@withContext locks.getOrPut(jobId) { Mutex() }.withLock {
+            if (!isCurrentAttempt(jobId)) Result.failure()
+            else DownloadRequestGate.run(sourceId) {
+                if (!isCurrentAttempt(jobId)) Result.failure()
+                else executeDownload(jobId, url, targetPath, bookId, chapterId, sourceId)
+            }
+        }
     }
 
     private suspend fun executeDownload(
@@ -53,78 +95,124 @@ class HonDownloadWorker(
         chapterId: String?,
         sourceId: String
     ): Result {
-        updateJobStatusInDb(jobId, "running", 0.1)
-        HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "running", 0.1)
-
         val targetFile = File(targetPath)
-        val parentDir = targetFile.parentFile
-        if (parentDir != null && !parentDir.exists()) {
-            parentDir.mkdirs()
-        }
+        var tempFile: File? = null
+        var backupFile: File? = null
+        var replacingTarget = false
 
-        val tempFile = File("$targetPath.tmp_${System.currentTimeMillis()}")
-
+        activeCalls[jobId] = trackedCalls
         return try {
-            // 1. Passage Extraction via Extension Runtime (or direct HTTP fallback)
-            val luaScript = getSourceScript(sourceId)
-            val passageContent: String = if (luaScript != null) {
-                shosetsuEngine.getPassage(luaScript, url)
-            } else {
-                fetchDirectHttp(url)
+            val retryPrefs = context.getSharedPreferences("hon_download_retry_after", Context.MODE_PRIVATE)
+            val retryAt = retryPrefs.getLong(sourceId, 0)
+            if (retryAt > System.currentTimeMillis()) {
+                val waitSeconds = ((retryAt - System.currentTimeMillis()) / 1000).coerceAtLeast(1)
+                updateJobStatusInDb(jobId, "retryWaiting", 0.0, "Source is rate-limited. Waiting ${waitSeconds}s to retry.")
+                HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "retryWaiting", 0.0)
+                return Result.retry()
             }
+            retryPrefs.edit().remove(sourceId).apply()
+            updateJobStatusInDb(jobId, "running", 0.1)
+            HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "running", 0.1)
+            val managedRoot = File(context.filesDir.parentFile, "app_flutter/chapters").canonicalFile
+            val parentDir = targetFile.parentFile?.canonicalFile
+                ?: throw IllegalStateException("Download destination has no parent")
+            if (parentDir != managedRoot && !parentDir.path.startsWith(managedRoot.path + File.separator)) {
+                throw IllegalStateException("Download destination is outside managed chapter storage")
+            }
+            if (targetFile.exists() && targetFile.canonicalFile.parentFile != parentDir) {
+                throw IllegalStateException("Download destination resolves outside managed chapter storage")
+            }
+            if (!parentDir.exists() && !parentDir.mkdirs()) {
+                throw IllegalStateException("Cannot create managed chapter storage")
+            }
+            // Recover a file replacement interrupted before its database commit.
+            val interruptedBackup = File(parentDir, "${targetFile.name}.backup")
+            if (interruptedBackup.exists()) {
+                if (targetFile.exists() && !targetFile.delete()) error("Cannot recover interrupted chapter replacement")
+                if (!interruptedBackup.renameTo(targetFile)) error("Cannot restore interrupted chapter replacement")
+            }
+            tempFile = File.createTempFile(targetFile.name, ".tmp", parentDir)
+            // Unsupported sources must fail visibly; raw HTML is not a passage.
+            val luaScript = getSourceScript(sourceId)
+                ?: throw IllegalStateException("No installed extension script for source $sourceId")
+            val client = httpClient.newBuilder().cookieJar(SourceHttpClient.cookies(context, sourceId)).build()
+            val settingsJson = SourcePreferenceStore.read(context, sourceId)
+            val settings = settingsJson.keys().asSequence().associateWith { settingsJson.get(it) }
+            val passage = try {
+                ShosetsuKotlinEngine(client).getPassage(luaScript, url, settings, getAllowedHosts(sourceId))
+            } catch (error: LinkageError) {
+                throw IllegalStateException("The source engine could not load. Please update Hon. ${error.message}", error)
+            }
+            val imagesDir = File(context.filesDir.parentFile, "app_flutter/images")
+            val passageContent = OfflineChapterImages.embed(passage, url, client, imagesDir) { isStopped }
 
             if (passageContent.isBlank()) {
                 throw IllegalStateException("Extracted chapter passage was empty for $url")
             }
 
+            if (!isCurrentAttempt(jobId)) throw IllegalStateException("Download was paused, cancelled or replaced")
+
             // Write atomically to temp file
             FileOutputStream(tempFile).use { output ->
                 output.write(passageContent.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
             }
 
             if (!tempFile.exists() || tempFile.length() == 0L) {
-                tempFile.delete()
                 throw IllegalStateException("Temporary chapter file was empty after write")
             }
 
-            // 2. Commit file with verified rename/copy
-            val renameSucceeded = if (targetFile.exists()) {
-                targetFile.delete()
-                tempFile.renameTo(targetFile)
-            } else {
-                tempFile.renameTo(targetFile)
-            }
-
-            if (!renameSucceeded) {
-                try {
-                    tempFile.copyTo(targetFile, overwrite = true)
-                    tempFile.delete()
-                } catch (e: Exception) {
-                    tempFile.delete()
-                    throw IllegalStateException("Failed to commit chapter file to target: ${targetFile.absolutePath}", e)
+            // Retain any prior valid chapter until both file and DB commit succeed.
+            if (targetFile.exists()) {
+                backupFile = File(parentDir, "${targetFile.name}.backup")
+                if (!targetFile.renameTo(backupFile)) {
+                    throw IllegalStateException("Could not preserve previous chapter file")
                 }
             }
+            replacingTarget = true
+            if (!tempFile.renameTo(targetFile)) {
+                throw IllegalStateException("Could not atomically commit downloaded chapter")
+            }
 
-            if (!targetFile.exists() || targetFile.length() == 0L) {
+            if (isStopped || !targetFile.exists() || targetFile.length() == 0L) {
                 throw IllegalStateException("Target chapter file missing or empty after commit: ${targetFile.absolutePath}")
             }
 
-            // 3. Update SQLite database (throws on failure)
-            updateJobStatusInDb(jobId, "completed", 1.0)
-            if (!bookId.isNullOrBlank() && !chapterId.isNullOrBlank()) {
-                updateChapterDownloadedInDb(chapterId, targetPath)
-            }
+            // The job and chapter are one durable state transition.
+            markCompletedInDb(jobId, chapterId, targetPath)
+            backupFile?.delete()
 
             // Notify Flutter runtime
             HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "completed", 1.0)
             Result.success()
         } catch (e: Exception) {
-            if (tempFile.exists()) {
-                tempFile.delete()
+            tempFile?.delete()
+            if (replacingTarget) targetFile.delete()
+            if (backupFile?.exists() == true) {
+                if (!backupFile!!.renameTo(targetFile)) {
+                    try {
+                        updateJobStatusInDb(jobId, "failed", 0.0,
+                            "Could not restore the previous chapter file after download failure: ${backupFile!!.absolutePath}")
+                    } catch (_: Exception) {}
+                    return Result.failure()
+                }
             }
 
+            if (!isCurrentAttempt(jobId)) return Result.failure()
             val errorMsg = e.message ?: e.toString()
-            if (runAttemptCount < 3) {
+            if (e is CancellationException) throw e
+            val causes = generateSequence(e as Throwable) { it.cause }.take(12).toList()
+            val httpError = causes.filterIsInstance<SourceHttpException>().firstOrNull()
+            val retryable = httpError?.transient ?: causes.any { it is IOException && it !is java.io.FileNotFoundException }
+            if (httpError != null && httpError.retryAfterMillis > 0) {
+                context.getSharedPreferences("hon_download_retry_after", Context.MODE_PRIVATE).edit()
+                    .putLong(sourceId, System.currentTimeMillis() + httpError.retryAfterMillis).apply()
+            }
+            val failures = openDatabase()?.use { database ->
+                database.execSQL("UPDATE download_jobs_table SET retry_count=retry_count+1 WHERE id=?", arrayOf(jobId))
+                database.rawQuery("SELECT retry_count FROM download_jobs_table WHERE id=?", arrayOf(jobId)).use { rows -> if (rows.moveToFirst()) rows.getInt(0) else 4 }
+            } ?: 4
+            if (retryable && failures <= 3) {
                 try {
                     updateJobStatusInDb(jobId, "retryWaiting", 0.0, errorMsg)
                     HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "retryWaiting", 0.0)
@@ -137,68 +225,17 @@ class HonDownloadWorker(
                 } catch (_: Exception) {}
                 Result.failure()
             }
-        }
+        } finally { activeCalls.remove(jobId, trackedCalls) }
     }
-
-    private suspend fun recoverAllDownloads(): Result {
-        val db = openDatabase() ?: return Result.failure()
-        val pendingJobs = mutableListOf<PendingJobData>()
-        try {
-            // Join download_jobs_table with chapters_table according to real Drift schema
-            val cursor = db.rawQuery(
-                """
-                SELECT d.id, c.url, c.local_file_path, d.book_id, d.chapter_id, d.source_id 
-                FROM download_jobs_table d 
-                JOIN chapters_table c ON d.chapter_id = c.id 
-                WHERE d.status IN ('queued', 'running', 'retryWaiting')
-                """.trimIndent(),
-                null
-            )
-            while (cursor.moveToNext()) {
-                val jId = cursor.getString(0)
-                val u = cursor.getString(1)
-                val path = cursor.getString(2)
-                val bId = cursor.getString(3)
-                val chId = cursor.getString(4)
-                val sId = cursor.getString(5) ?: "gutenberg"
-                if (!u.isNullOrBlank() && !path.isNullOrBlank()) {
-                    pendingJobs.add(PendingJobData(jId, u, path, bId, chId, sId))
-                }
-            }
-            cursor.close()
-        } finally {
-            db.close()
-        }
-
-        var hasRetry = false
-        var hasFailure = false
-
-        for (job in pendingJobs) {
-            val res = executeDownload(job.jobId, job.url, job.targetPath, job.bookId, job.chapterId, job.sourceId)
-            if (res is Result.Retry) {
-                hasRetry = true
-            } else if (res is Result.Failure) {
-                hasFailure = true
-            }
-        }
-
-        return when {
-            hasRetry -> Result.retry()
-            hasFailure -> Result.failure()
-            else -> Result.success()
-        }
-    }
-
-    private data class PendingJobData(
-        val jobId: String,
-        val url: String,
-        val targetPath: String,
-        val bookId: String,
-        val chapterId: String,
-        val sourceId: String
-    )
 
     private fun getSourceScript(sourceId: String): String? {
+        if (Regex("^ext_[0-9a-f]{64}$").matches(sourceId)) {
+            val root = File(context.filesDir.parentFile, "app_flutter/extensions").canonicalFile
+            val script = File(root, "$sourceId.lua")
+            if (script.canonicalFile.parentFile != root || !script.isFile || script.length() > 2 * 1024 * 1024) return null
+            return script.readText(Charsets.UTF_8)
+        }
+        if (sourceId != "gutenberg") return null
         val candidatePaths = listOf(
             "flutter_assets/assets/sources/$sourceId.lua",
             "assets/sources/$sourceId.lua"
@@ -213,38 +250,43 @@ class HonDownloadWorker(
         return null
     }
 
-    private fun fetchDirectHttp(url: String): String {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile; Hon/1.0)")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .build()
-
-        val response = httpClient.newCall(request).execute()
-        if (!response.isSuccessful) {
-            throw IllegalStateException("HTTP GET failed with code ${response.code} for $url")
-        }
-        return response.body?.string() ?: throw IllegalStateException("Empty HTTP body for $url")
+    private fun getAllowedHosts(sourceId: String): Set<String> {
+        try {
+            val flutterPrefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val raw = flutterPrefs.getString("flutter.hon_installed_repository_extensions_v1", null)
+            if (raw != null) {
+                val array = org.json.JSONArray(raw)
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    if (obj.optString("sourceId") == sourceId) {
+                        val hostsArray = obj.optJSONArray("allowedHosts") ?: continue
+                        val set = mutableSetOf<String>()
+                        for (j in 0 until hostsArray.length()) {
+                            val host = hostsArray.getString(j).trim()
+                            if (host.isNotEmpty()) set.add(host)
+                        }
+                        return set
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return emptySet()
     }
 
     private fun openDatabase(): SQLiteDatabase? {
-        val candidates = listOf(
-            File(context.filesDir, "hon.sqlite"),
-            File(context.filesDir.parentFile, "app_flutter/hon.sqlite"),
-            File(context.filesDir.parentFile, "databases/hon.sqlite")
-        )
-        for (f in candidates) {
-            if (f.exists()) {
-                try {
-                    return SQLiteDatabase.openDatabase(f.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                } catch (_: Exception) {}
-            }
+        // path_provider's Android documents directory is app_flutter, which
+        // is also the sole Drift SQLite location in AppDatabase.
+        val file = File(context.filesDir.parentFile, "app_flutter/hon.sqlite")
+        if (!file.exists()) return null
+        return SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING).apply {
+            rawQuery("PRAGMA busy_timeout = 5000", null).use { it.moveToFirst() }
+            setForeignKeyConstraintsEnabled(true)
         }
-        return null
     }
 
     private fun updateJobStatusInDb(jobId: String, status: String, progress: Double, error: String? = null) {
-        val db = openDatabase() ?: throw IllegalStateException("Failed to open SQLite database for job $jobId")
+        if (!isCurrentAttempt(jobId)) return
+        val db = openDatabase() ?: return
         try {
             val values = ContentValues().apply {
                 put("status", status)
@@ -254,28 +296,70 @@ class HonDownloadWorker(
                     put("error_message", error)
                 }
             }
-            val rows = db.update("download_jobs_table", values, "id = ?", arrayOf(jobId))
-            if (rows == 0) {
-                throw IllegalStateException("No download_jobs_table row found for id: $jobId")
+            val allowedStatuses = when (status) {
+                "running" -> "status IN ('queued', 'retryWaiting', 'running', 'paused')"
+                "retryWaiting" -> "status IN ('queued', 'running', 'retryWaiting')"
+                "failed" -> "status IN ('queued', 'running', 'retryWaiting', 'paused')"
+                "paused" -> "status IN ('queued', 'running', 'retryWaiting', 'paused')"
+                "queued" -> "status IN ('queued', 'retryWaiting', 'paused', 'failed')"
+                else -> "status != 'completed'"
+            }
+            val rows = db.update("download_jobs_table", values,
+                "id = ? AND $allowedStatuses", arrayOf(jobId))
+            if (rows > 0) {
+                val chapterState = when (status) {
+                    "running" -> "downloading"
+                    "retryWaiting", "queued" -> "queued"
+                    "paused" -> "paused"
+                    "failed" -> "failed"
+                    "completed" -> "downloaded"
+                    else -> null
+                }
+                if (chapterState != null) {
+                    val chapterId = inputData.getString("chapterId")
+                    if (!chapterId.isNullOrBlank()) {
+                        val chVals = ContentValues().apply {
+                            put("download_state", chapterState)
+                            put("updated_at", System.currentTimeMillis() / 1000)
+                        }
+                        db.update("chapters_table", chVals, "id = ?", arrayOf(chapterId))
+                    }
+                }
             }
         } finally {
             db.close()
         }
     }
 
-    private fun updateChapterDownloadedInDb(chapterId: String, localPath: String) {
-        val db = openDatabase() ?: throw IllegalStateException("Failed to open SQLite database for chapter $chapterId")
+    private fun markCompletedInDb(jobId: String, chapterId: String?, localPath: String) {
+        if (chapterId.isNullOrBlank()) throw IllegalStateException("Missing chapter ID for job $jobId")
+        if (!isCurrentAttempt(jobId)) throw IllegalStateException("Stale download attempt")
+        val db = openDatabase() ?: throw IllegalStateException("Failed to open SQLite database for job $jobId")
         try {
-            val values = ContentValues().apply {
+            db.beginTransaction()
+            val chapterValues = ContentValues().apply {
                 put("local_file_path", localPath)
                 put("download_state", "downloaded")
                 put("updated_at", System.currentTimeMillis() / 1000)
             }
-            val rows = db.update("chapters_table", values, "id = ?", arrayOf(chapterId))
-            if (rows == 0) {
+            val chapterRows = db.update("chapters_table", chapterValues, "id = ?", arrayOf(chapterId))
+            if (chapterRows != 1) {
                 throw IllegalStateException("No chapters_table row found for id: $chapterId")
             }
+            val jobValues = ContentValues().apply {
+                put("status", "completed")
+                put("progress", 1.0)
+                put("error_message", null as String?)
+                put("updated_at", System.currentTimeMillis() / 1000)
+            }
+            val jobRows = db.update("download_jobs_table", jobValues,
+                "id = ? AND status = 'running'", arrayOf(jobId))
+            if (jobRows != 1 || isStopped) {
+                throw IllegalStateException("Job $jobId was cancelled or removed before completion")
+            }
+            db.setTransactionSuccessful()
         } finally {
+            if (db.inTransaction()) db.endTransaction()
             db.close()
         }
     }

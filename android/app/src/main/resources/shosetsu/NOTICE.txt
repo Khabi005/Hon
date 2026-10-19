@@ -1,0 +1,5 @@
+Shosetsu kotlin-lib 1.4.0 standard Lua helpers.
+Source: https://gitlab.com/shosetsuorg/kotlin-lib/-/tree/main/src/main/resources/lua
+Snapshot archive SHA-256: 1b583d43c78b6516f398dfa67c625ed32db2371f271d43e69b8bde6cc5fb4bbc
+License: GPL-3.0-or-later; see LICENSE. Original sources are retained.
+The Hon Kotlin host uses explicit capabilities rather than the upstream Java bridge.

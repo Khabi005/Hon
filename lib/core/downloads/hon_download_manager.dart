@@ -1,4 +1,10 @@
 import 'dart:io';
+import 'dart:async';
+import 'package:crypto/crypto.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../files/storage_service.dart';
+import '../models/book.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../database/database_service.dart';
@@ -8,12 +14,194 @@ import '../sources/source_registry.dart';
 
 class HonDownloadManager {
   static HonDownloadManager? _instance;
-  static HonDownloadManager get instance => _instance ??= HonDownloadManager._();
+  static HonDownloadManager get instance =>
+      _instance ??= HonDownloadManager._();
   HonDownloadManager._();
 
-  static const MethodChannel _channel = MethodChannel('com.hon.reader/download_worker');
+  static const MethodChannel _channel = MethodChannel(
+    'com.hon.reader/download_worker',
+  );
 
   bool _initialized = false;
+  final Map<String, int> _localTokens = {};
+  final Set<String> _queuingChapters = {};
+  final Set<String> _scheduling = {};
+  Future<bool> get wifiOnly async =>
+      (await SharedPreferences.getInstance()).getBool(
+        'hon_download_wifi_only',
+      ) ??
+      false;
+
+  Future<void> setWifiOnly(bool value) async {
+    await (await SharedPreferences.getInstance()).setBool(
+      'hon_download_wifi_only',
+      value,
+    );
+    final active = DatabaseService.instance
+        .getAllDownloadJobs()
+        .where((job) => job.isActive)
+        .toList();
+    for (final job in active) {
+      await pauseDownload(job.id);
+    }
+    for (final job in active) {
+      await resumeDownload(job.id);
+    }
+  }
+
+  Future<int> queueChapters(Book book, Iterable<Chapter> chapters) async {
+    final db = DatabaseService.instance;
+    final knownJobs = {
+      for (final job in db.getAllDownloadJobs()) job.chapterId: job,
+    };
+    final updates = <Chapter>[];
+    final jobs = <DownloadJob>[];
+    final held = <String>{};
+    String hash(String value) => sha256.convert(utf8.encode(value)).toString();
+    try {
+      for (final chapter in chapters) {
+        if (chapter.url == null ||
+            book.sourceId == null ||
+            !_queuingChapters.add(chapter.id)) {
+          continue;
+        }
+        held.add(chapter.id);
+        final old = knownJobs[chapter.id];
+        if (old?.isActive == true || old?.status == DownloadStatus.paused) {
+          continue;
+        }
+        if (chapter.downloadState == ChapterDownloadState.downloaded &&
+            chapter.localFilePath != null &&
+            await File(chapter.localFilePath!).exists()) {
+          continue;
+        }
+        final destination =
+            chapter.localFilePath ??
+            '${StorageService.instance.chaptersDir.path}/${hash(book.id)}_${hash(chapter.sourceChapterId)}.html';
+        updates.add(
+          chapter.copyWith(
+            localFilePath: destination,
+            downloadState: ChapterDownloadState.queued,
+            updatedAt: DateTime.now(),
+          ),
+        );
+        jobs.add(
+          DownloadJob(
+            id:
+                old?.id ??
+                'dl_${hash('${book.id}:${chapter.sourceChapterId}')}',
+            bookId: book.id,
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            sourceId: book.sourceId!,
+            createdAt: old?.createdAt ?? DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+      }
+      if (jobs.isEmpty) return 0;
+      await db.enqueueChapterBatch(book.id, updates, jobs);
+      unawaited(
+        _scheduleJobs(jobs).catchError(
+          (Object error) =>
+              debugPrint('Could not schedule queued downloads: $error'),
+        ),
+      );
+      return jobs.length;
+    } finally {
+      _queuingChapters.removeAll(held);
+    }
+  }
+
+  Future<void> _scheduleJobs(List<DownloadJob> jobs) async {
+    final db = DatabaseService.instance;
+    for (final job in jobs) {
+      if (!_scheduling.add(job.id)) continue;
+      try {
+        final latest = db.getDownloadJob(job.id);
+        if (latest == null || !latest.isActive) continue;
+        await enqueueDownload(latest, persist: false);
+      } catch (error) {
+        final latest = db.getDownloadJob(job.id);
+        if (latest?.isActive == true) {
+          await db.updateDownloadJob(
+            latest!.copyWith(
+              status: DownloadStatus.failed,
+              errorMessage: 'Could not schedule: $error',
+              updatedAt: DateTime.now(),
+            ),
+          );
+        }
+      } finally {
+        _scheduling.remove(job.id);
+      }
+    }
+  }
+
+  Future<void> pauseDownload(String jobId) async {
+    final db = DatabaseService.instance;
+    final job = db.getDownloadJob(jobId);
+    if (job == null || !job.isActive) return;
+    _localTokens[jobId] = (_localTokens[jobId] ?? 0) + 1;
+    if (Platform.isAndroid && !kIsWeb) {
+      await _channel.invokeMethod('cancelDownload', {
+        'jobId': jobId,
+        'status': 'paused',
+      });
+      await db.refreshDownloadsAndChapters(job.bookId);
+      return;
+    }
+    final latest = db.getDownloadJob(jobId);
+    if (latest == null || latest.status == DownloadStatus.completed) return;
+    await db.updateDownloadJob(
+      latest.copyWith(status: DownloadStatus.paused, updatedAt: DateTime.now()),
+    );
+  }
+
+  Future<void> resumeDownload(String jobId) async {
+    final db = DatabaseService.instance;
+    final job = db.getDownloadJob(jobId);
+    if (job == null || job.status == DownloadStatus.completed || job.isActive) {
+      return;
+    }
+    final next = job.copyWith(
+      status: DownloadStatus.queued,
+      progress: 0,
+      updatedAt: DateTime.now(),
+    );
+    try {
+      await enqueueDownload(next, replace: true);
+    } catch (error) {
+      await db.updateDownloadJob(
+        next.copyWith(
+          status: DownloadStatus.failed,
+          errorMessage: 'Could not resume: $error',
+          updatedAt: DateTime.now(),
+        ),
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> pauseAll() async {
+    for (final job
+        in DatabaseService.instance
+            .getAllDownloadJobs()
+            .where((job) => job.isActive)
+            .toList()) {
+      await pauseDownload(job.id);
+    }
+  }
+
+  Future<void> resumeAll() async {
+    for (final job
+        in DatabaseService.instance
+            .getAllDownloadJobs()
+            .where((job) => job.status == DownloadStatus.paused)
+            .toList()) {
+      await resumeDownload(job.id);
+    }
+  }
 
   void init() {
     if (_initialized) return;
@@ -24,8 +212,11 @@ class HonDownloadManager {
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     if (call.method == 'onDownloadStateChanged') {
       final args = call.arguments as Map<dynamic, dynamic>?;
+      final jobId = args?['jobId'] as String?;
       final bookId = args?['bookId'] as String?;
-      if (bookId != null && bookId.isNotEmpty) {
+      if (jobId != null && jobId.isNotEmpty) {
+        await DatabaseService.instance.refreshDownloadJob(jobId);
+      } else if (bookId != null && bookId.isNotEmpty) {
         await DatabaseService.instance.refreshDownloadsAndChapters(bookId);
       } else {
         await DatabaseService.instance.refreshAllDownloads();
@@ -37,34 +228,26 @@ class HonDownloadManager {
   /// Recovers any downloads that were interrupted (e.g. app terminated while running)
   Future<int> recoverInterruptedDownloads() async {
     final db = DatabaseService.instance;
-    final allJobs = db.getAllDownloadJobs();
     int recoveredCount = 0;
 
-    for (final job in allJobs) {
-      if (job.status == DownloadStatus.running) {
-        // App process was killed while this job was active; reset to queued for recovery
-        final recoveredJob = job.copyWith(
-          status: DownloadStatus.queued,
-          progress: 0.0,
-          errorMessage: 'Interrupted by process termination; queued for recovery',
-          updatedAt: DateTime.now(),
-        );
-        await db.updateDownloadJob(recoveredJob);
-        recoveredCount++;
-
-        // Enqueue with background manager
-        await enqueueDownload(recoveredJob);
-      } else if (job.status == DownloadStatus.queued || job.status == DownloadStatus.retryWaiting) {
-        await enqueueDownload(job);
-        recoveredCount++;
-      }
+    if (Platform.isAndroid && !kIsWeb) {
+      // Older versions also scheduled a RECOVER_ALL worker which could race with
+      // these per-job WorkManager requests. Retire that legacy work first.
+      await _channel.invokeMethod('cancelLegacyRecovery');
+      await db.refreshAllDownloads();
     }
 
-    if (Platform.isAndroid && !kIsWeb) {
-      try {
-        await _channel.invokeMethod('scheduleDownloadRecovery');
-      } catch (_) {
-        // Handled in mock test environment
+    final allJobs = db.getAllDownloadJobs();
+    for (final job in allJobs) {
+      if (job.status == DownloadStatus.running ||
+          job.status == DownloadStatus.queued ||
+          job.status == DownloadStatus.retryWaiting) {
+        try {
+          await enqueueDownload(job, persist: false);
+          recoveredCount++;
+        } catch (error) {
+          debugPrint('Could not recover download ${job.id}: $error');
+        }
       }
     }
 
@@ -72,16 +255,36 @@ class HonDownloadManager {
   }
 
   /// Enqueues a download job to Android WorkManager (or local fallback executor)
-  Future<void> enqueueDownload(DownloadJob job, {bool wifiOnly = false}) async {
+  Future<void> enqueueDownload(
+    DownloadJob job, {
+    bool? wifiOnly,
+    bool persist = true,
+    bool replace = false,
+  }) async {
     init();
 
     // 1. Ensure persisted in database
-    await DatabaseService.instance.updateDownloadJob(job);
+    if (persist) await DatabaseService.instance.updateDownloadJob(job);
 
+    await DatabaseService.instance.ensureChaptersLoaded(job.bookId);
     final chapters = DatabaseService.instance.getChapters(job.bookId);
-    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    var ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
     final url = ch?.url ?? '';
-    final targetPath = ch?.localFilePath ?? '';
+    var targetPath = ch?.localFilePath ?? '';
+    // A metadata-only restore deliberately drops paths from the old device.
+    // Recreate and persist a managed destination before resuming its job.
+    if (ch != null && url.isNotEmpty && targetPath.isEmpty) {
+      String hash(String value) =>
+          sha256.convert(utf8.encode(value)).toString();
+      targetPath =
+          '${StorageService.instance.chaptersDir.path}/${hash(job.bookId)}_${hash(ch.sourceChapterId)}.html';
+      ch = ch.copyWith(
+        localFilePath: targetPath,
+        downloadState: ChapterDownloadState.queued,
+        updatedAt: DateTime.now(),
+      );
+      await DatabaseService.instance.saveChapters(job.bookId, [ch]);
+    }
 
     // 2. Delegate to Android WorkManager as the sole executor if running on Android
     if (Platform.isAndroid && !kIsWeb) {
@@ -94,40 +297,63 @@ class HonDownloadManager {
             'bookId': job.bookId,
             'chapterId': job.chapterId,
             'sourceId': job.sourceId,
-            'wifiOnly': wifiOnly,
+            'wifiOnly': wifiOnly ?? await this.wifiOnly,
+            'replace': replace,
           });
           return;
-        } catch (_) {
-          // Handled gracefully in mock / test environment
+        } catch (e) {
+          throw StateError('Could not schedule Android download ${job.id}: $e');
         }
       }
+      throw StateError('Download ${job.id} has no saved URL or destination');
     }
 
     // 3. Fallback executor for non-Android platforms or tests where WorkManager is unavailable
     if (url.isNotEmpty && targetPath.isNotEmpty) {
-      _executeLocalFallbackDownload(job, ch: ch, url: url, targetPath: targetPath);
+      final token = (_localTokens[job.id] ?? 0) + 1;
+      _localTokens[job.id] = token;
+      unawaited(
+        _executeLocalFallbackDownload(
+          job,
+          token: token,
+          ch: ch,
+          url: url,
+          targetPath: targetPath,
+        ),
+      );
     }
   }
 
   /// Local fallback execution for desktop or test environments
   Future<void> _executeLocalFallbackDownload(
     DownloadJob job, {
+    required int token,
     required Chapter? ch,
     required String url,
     required String targetPath,
   }) async {
     try {
       await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(status: DownloadStatus.running, progress: 0.2, updatedAt: DateTime.now()),
+        job.copyWith(
+          status: DownloadStatus.running,
+          progress: 0.2,
+          updatedAt: DateTime.now(),
+        ),
       );
 
-      final passage = await SourceRegistry.instance.getChapterPassage(job.sourceId, url);
+      final passage = await SourceRegistry.instance.getChapterPassage(
+        job.sourceId,
+        url,
+      );
+      if (_localTokens[job.id] != token) return;
       final file = File(targetPath);
       final parent = file.parent;
       if (!parent.existsSync()) {
         parent.createSync(recursive: true);
       }
-      final tempFile = File('$targetPath.tmp_${DateTime.now().millisecondsSinceEpoch}');
+      final tempFile = File(
+        '$targetPath.tmp_${DateTime.now().millisecondsSinceEpoch}',
+      );
       await tempFile.writeAsString(passage);
       if (file.existsSync()) {
         await file.delete();
@@ -140,13 +366,20 @@ class HonDownloadManager {
           downloadState: ChapterDownloadState.downloaded,
           updatedAt: DateTime.now(),
         );
-        await DatabaseService.instance.saveChapters(job.bookId, [completedChapter]);
+        await DatabaseService.instance.saveChapters(job.bookId, [
+          completedChapter,
+        ]);
       }
 
       await DatabaseService.instance.updateDownloadJob(
-        job.copyWith(status: DownloadStatus.completed, progress: 1.0, updatedAt: DateTime.now()),
+        job.copyWith(
+          status: DownloadStatus.completed,
+          progress: 1.0,
+          updatedAt: DateTime.now(),
+        ),
       );
     } catch (e) {
+      if (_localTokens[job.id] != token) return;
       await DatabaseService.instance.updateDownloadJob(
         job.copyWith(
           status: DownloadStatus.failed,
@@ -159,19 +392,25 @@ class HonDownloadManager {
 
   /// Cancels an active or queued download job
   Future<void> cancelDownload(String jobId) async {
+    _localTokens[jobId] = (_localTokens[jobId] ?? 0) + 1;
     final db = DatabaseService.instance;
-    final job = db.getAllDownloadJobs().where((j) => j.id == jobId).firstOrNull;
-    if (job != null) {
-      await db.updateDownloadJob(job.copyWith(
+    final job = db.getDownloadJob(jobId);
+    if (job == null) return;
+    if (Platform.isAndroid && !kIsWeb) {
+      await _channel.invokeMethod('cancelDownload', {
+        'jobId': jobId,
+        'status': 'cancelled',
+      });
+      await db.refreshDownloadsAndChapters(job.bookId);
+      return;
+    }
+    final latest = db.getDownloadJob(jobId);
+    if (latest == null || latest.status == DownloadStatus.completed) return;
+    await db.updateDownloadJob(
+      latest.copyWith(
         status: DownloadStatus.cancelled,
         updatedAt: DateTime.now(),
-      ));
-    }
-
-    if (Platform.isAndroid && !kIsWeb) {
-      try {
-        await _channel.invokeMethod('cancelDownload', {'jobId': jobId});
-      } catch (_) {}
-    }
+      ),
+    );
   }
 }

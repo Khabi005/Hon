@@ -1,5 +1,24 @@
 # Hon — Project Implementation Progress & Requirements Matrix
 
+> **Current release: Hon 1.1.1.** Reading History, themed launcher icon and the fuller Home pass are complete. See [current handover and APK](APP_CURRENT_2026-10-19.md). Known implementation gaps are closed; user phone acceptance is pending.
+
+> **19 October current handover:** remaining feature implementation is complete. See [Hon 1.1.0 completion](APP_COMPLETION_2026-10-19.md) for the current APK, delivered functionality, evidence and short phone check. Earlier release links and matrices below are historical.
+
+> Current milestone: Phase 1 UI implementation complete. See [Phase 1 completion and current release](PHASE1_COMPLETION_2026-10-18.md); phone acceptance is pending. Older phase matrices below are historical.
+
+> **Latest:** the reported follow-up repairs, bundled Shosetsu catalog, and initial reader/Home/settings visual pass are implemented. See [REPAIR_AND_DESIGN_HANDOVER_2026-10-18.md](REPAIR_AND_DESIGN_HANDOVER_2026-10-18.md) for the current release artifact and manual acceptance boundary. Earlier milestone descriptions below are historical.
+
+> **18 October follow-up:** functional code and APK handover have been updated.
+> The user is handling manual acceptance. See the current status document and
+> PHASE0_MANUAL_CHECKLIST.md. Historical checkmarks below are not a current
+> Phase 0 sign-off. The final implementation adds adjacent-resource EPUB
+> scrolling and a broader bounded Shosetsu core host; device acceptance is pending.
+
+> This matrix records earlier implementation claims and has not been fully
+> revalidated on the current APK. For the latest tested changes, limits, and
+> pending Android acceptance, see
+> [PHASE0_IMPLEMENTATION_STATUS_2026-10-18.md](PHASE0_IMPLEMENTATION_STATUS_2026-10-18.md).
+
 ## Truthful Requirements & Status Matrix
 
 | Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
@@ -24,8 +43,23 @@
 | **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
 | **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
 | **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Browse (Sources)** | Production Kotlin-Side Shosetsu Integration (Phase 0C) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Production Architecture Complete**: Android native Kotlin engine (`ShosetsuKotlinEngine.kt` + `ShosetsuBridge.kt`) consumes bundled extension's returned table with real function signatures (`search(data)`, `parseNovel(url, loadChapters)`, `getPassage(url)`) and complete Shosetsu environment (`Require("FilterOptions")`, `Require("url")`, `GETDocument`, `map`, `pageOfElem`, Jsoup DOM bridge). Silent native-to-Dart fallback removed on Android to surface errors directly. Verified via JVM unit test suite `ShosetsuKotlinEngineTest` (4/4 passing). |
 | **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter URL and managed destination path persisted in SQLite (`chapters_table`) before scheduling WorkManager. Non-blocking Add-to-Library prompt triggered independently. Background execution handled solely by WorkManager without competing foreground downloads. |
+| **Native Engine / Stability** | ProGuard R8 Rules & Startup Self-Check (Phase A) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | R8 keep rules preserve LuaJ, Jsoup, Readium, Drift/SQLite, OkHttp, and WorkManager reflection. Startup self-check runs on launch to verify VM compatibility. |
+| **Native Sandbox / Security** | String Metatable Ordering & CPU Budget (Phase A) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | StringLib loads prior to `SandboxStringMethods.enter` preventing protection regression; instruction counter budgeting prevents thread stalls. |
+| **Network Security** | Source Host Allowlist & Redirect Validation (Phase B1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | OkHttp interceptor enforces declared source baseURL and user-whitelisted domains; unauthorized redirect chains blocked; UI controls for allowed hosts. |
+| **Persistence (Drift SQLite)** | Schema v2 -> v3 Migration (Phase B2) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Zero-loss schema migration adding `CollectionsTable`, `CollectionMembershipsTable`, `ChapterUpdateHistoryTable`, `HighlightsTable`, and `BookReaderSettingsTable`. |
+| **Database Performance** | Lazy Chapter Loading & SQL Aggregates (Phase B3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Lazy `loadChapters` replaces whole-database chapter caching in memory; SQL aggregates compute downloaded chapter counts efficiently. |
+| **Updates & Concurrency** | Source-Serial Concurrency Pool (Phase B4) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Max 2 concurrent novel checks globally, strictly serialized per `sourceId` to protect upstream source servers. |
+| **Chapter Identity & Healing** | Multi-Pass Reconciliation (Phase B5) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | 3-pass chapter identity reconciliation (sourceId -> title -> index) healing reading progress and preserving downloaded chapter state across upstream renames. |
+| **Download Storage Hygiene** | Content-Addressed SHA-256 Illustrations (Phase B6) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Downscaled image cache with content-addressed SHA-256 filenames inside `imagesDir`, validating MIME magic bytes. |
+| **Reader Features** | Highlights & Annotations (Phase C1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Text selection highlights with notes, persisted in SQLite `highlights_table`, managed via Reader Contents sheet "Highlights" tab. |
+| **Reader Features** | Per-Book Reader Overrides (Phase C2) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Per-book typography, theme, and layout overrides persisted in `book_reader_settings_table` with "Reset to Defaults" option. |
+| **Reader Features** | Locator-Based Bookmarks (Phase C3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Precise locator-based bookmarking anchored to chapter and block offsets. |
+| **Readium EPUB Guard** | Fixed-Layout Warning & Reflow Guard (Phase C4) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Detects fixed-layout EPUBs, suppresses continuous scroll toggle, and presents a non-intrusive warning dialog. |
+| **Reader Features** | Publisher Typography Switch (Phase C5) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Toggle publisher-specified styling vs Hon custom typography with confirmation dialog. |
+| **Build & Packaging** | ABI Splits & 16KB Page Size Compliance (Phase D1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | ABI splits for `armeabi-v7a`, `arm64-v8a`, `x86_64` + universal APK; removed `google_fonts` and EOL `sqlite3_flutter_libs`; migrated to modern `sqlite3: ^3.3.0` compliant with Android 15 16KB page sizes. |
+| **Licensing & Compliance** | Open Source Licensing Audit (Phase D2) | ✅ | ✅ | ✅ | ✅ **Verified** | Created `docs/LICENSING.md` documenting GPL-3.0 Shosetsu bundled Lua scripts, SIL OFL 1.1 typefaces, and permissive native libraries. |
+| **UI & Design System** | Liquid Glass Appearance & Accessibility (Phase D3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Subtle vs Full glass styling modes with high-contrast fallback across navigation bars, sheets, and headers. |
 
 ---
 
@@ -86,9 +120,82 @@
   - Table of Contents sheet matches the active theme with rounded card framing, recursive depth indentation, and active chapter highlights.
   - Preserves non-overlapping middle container framing (`weight = 1.0f`) and dynamic system-bar contrast with `WindowInsetsControllerCompat`.
 
-### 5. Quality & Verification Metrics
+### 5. Phase A: Release Crash Fixes & Engine Stability
+- **ProGuard R8 Protection Rules:**
+  - Configured `android/app/proguard-rules.pro` with explicit `-keep` directives for LuaJ reflection (`org.luaj.vm2.**`), Jsoup DOM models (`org.jsoup.**`), Readium toolkit (`org.readium.r2.**`), Drift SQLite runtime (`org.sqlite.**`), OkHttp interceptors, and WorkManager reflection.
+- **Engine Startup Self-Check:**
+  - Implemented `ShosetsuKotlinEngine.runStartupCheck()` executed at native bootstrap, verifying Lua bytecode execution, table returns, and string metatable hooks before accepting user queries.
+- **Lua Metatable Protection Ordering:**
+  - Resolved `SandboxStringMethods.enter(globals)` ordering regression: ensures `StringLib()` loads strictly *before* sandbox string metatables are patched so string sandboxing cannot be overridden by standard library initialization.
+- **Instruction-Count Budgeting:**
+  - Replaced time-polling loops with instruction counter budgets in `BudgetDebugLib`, neutralizing infinite loops without thread starvation or premature timeouts.
+- **Catalog Reinstallation:**
+  - Automated asset cache resynchronization to reinstall bundled source catalogs seamlessly on upgrade.
+
+### 6. Phase B: Functional Hardening & Integrity
+- **Host Allowlisting & Redirect Policy (B1):**
+  - Implemented `SourceNetworkPolicy.kt` OkHttp network interceptor restricting outbound requests to declared source `baseUrl` and user-configured hostnames in `source_controls_screen.dart` (ADR-010). Blocks unauthorized cross-domain redirect chains.
+- **Drift Schema v2 -> v3 Migration (B2):**
+  - Seamless migration adding `CollectionsTable`, `CollectionMembershipsTable`, `ChapterUpdateHistoryTable`, `HighlightsTable`, and `BookReaderSettingsTable` with dual-persistence read/write synchronization and zero user data loss.
+- **Lazy Chapter Loading & SQL Aggregates (B3):**
+  - Replaced in-memory global chapter lists with on-demand `loadChapters()` and SQL aggregate queries (`ensureChaptersLoaded`, `_downloadedCounts`), drastically reducing memory footprint for large library collections.
+- **Serial Concurrency Pool (B4):**
+  - Implemented global semaphore pool: max 2 concurrent novel checks globally, strictly serialized per `sourceId` to avoid overwhelming upstream servers.
+- **Chapter Identity & Reading Progress Healing (B5):**
+  - 3-pass reconciliation algorithm (Pass 1: exact `sourceChapterId`, Pass 2: normalized title, Pass 3: index fallback), preserving downloaded states, file paths, and reading progress `lastChapterId` across upstream novel updates.
+- **Downscaled Image Hygiene (B6):**
+  - Content-addressed SHA-256 filenames inside `imagesDir`, validating image MIME magic bytes and downscaling large chapter illustrations to prevent OOMs.
+- **Offline Test Gating (B7):**
+  - Gated live upstream tests with explicit `skip` logic when offline, ensuring test suites fail on real network errors when enabled without masking regressions.
+
+### 7. Phase C: Reader Experience & Missing Features
+- **Highlights & Annotations (C1):**
+  - Text selection "Highlight" and "Add Note" actions in `ReaderScreen`, persisted in Drift `HighlightsTable`, surfaced in `ReaderContentsSheet` under a dedicated "Highlights" tab with navigation and deletion support.
+- **Per-Book Reader Overrides (C2):**
+  - Independent typography, theme, and layout settings persisted per book in `BookReaderSettingsTable`. Accessible via `ThemesSettingsSheet` with a "Reset to Defaults" option to revert to global preferences.
+- **Locator-Based Bookmarks (C3):**
+  - Enhanced bookmark model supporting `locatorString` and `locatorVersion: '1'`, anchoring bookmarks to specific chapter resources and text block offsets.
+- **Fixed-Layout EPUB Safety Guard (C4):**
+  - `ReadiumReaderActivity.kt` detects fixed-layout publications, suppresses unsupported continuous scroll toggles, and presents an informative warning dialog.
+- **Publisher Typography Mode (C5):**
+  - Toggle between publisher-specified CSS typography and Hon custom reader typography with user confirmation.
+
+### 8. Phase D: Packaging Hygiene & Design System
+- **ABI Splits & 16KB Page Size Compliance (D1):**
+  - Configured ABI splits (`armeabi-v7a`, `arm64-v8a`, `x86_64`) plus universal APK in `android/app/build.gradle.kts`.
+  - Removed unused `google_fonts: ^6.2.1` and EOL `sqlite3_flutter_libs: ^0.6.0+eol`.
+  - Upgraded to modern `sqlite3: ^3.3.0` utilizing Dart Native Assets, fully compliant with Android 15 16KB memory page sizes.
+- **Open Source Licensing Audit (D2):**
+  - Authored `docs/LICENSING.md` documenting upstream GPL-3.0 Shosetsu bundled Lua scripts, SIL OFL 1.1 typography, and permissive MIT/Apache-2.0 dependencies.
+- **Liquid Glass UI System (D3):**
+  - Refined Liquid Glass UI in `GlassSurface`, `AppAppearanceSection`, and `tab_scaffold.dart`, supporting Subtle (default) and Full glass styling with automatic high-contrast accessibility fallback.
+
+### 9. Recent Source Fixes, Data Integrity & UI Refinements (October 2026)
+- **1stKissNovel SSL Trust Anchor & Host Policy:**
+  - Diagnosed `CertPathValidatorException: Trust anchor for certification path not found` caused by missing intermediate cross-cert `ISRG Root YR` in server handshake. Added genuine self-signed `root-yr.pem` (`ISRG Root YR`) into `android/app/src/main/res/raw/isrg_root_yr.crt` and app trust anchors in `network_security_config.xml`. Verified with OpenSSL: `Verify return code: 0 (ok)`.
+  - Added dynamic catalog permission upgrade: existing installs receive catalog host permission updates (`1stkissnovel.love`, `gregariousfrog.com` for MCStories) without reinstalling or resurrecting deleted sources.
+  - Upgraded source error screen with categorized friendly messages, a prominent Retry button, and an expandable copyable Technical Details container.
+- **Data Integrity & Reconciliation:**
+  - Chapter reconciliation: strictly rejects ambiguous non-unique title matches and position-only file transfers; preserves unresolved downloads safely.
+  - Backup restoration: rewrites local image URLs in restored chapter HTML to point to relocated image storage directories.
+  - Collections SQL export/import: transactional SQLite collection snapshot export and import with backward-compatible legacy preference migration.
+  - Offline image processing guard (`OfflineChapterImages.kt`): implemented `processImage` returning `ProcessedImage` with validated dimensions (`outWidth > 0 && outHeight > 0`). When scaled, encodes PNG for non-JPEG formats and updates MIME (`image/png`) and extension (`.png`). Catches decode errors and treats missing images gracefully. Bitmaps safely recycled.
+- **Source Icons & Browsing:**
+  - Added `iconUrl` support to `RepositoryScript`, `InstalledExtension`, and `ExtensionMeta`.
+  - Updated `BundledSourceCatalog.seed` to enrich bundled sources with repository script icon URLs.
+  - Added `_buildSourceAvatar` in `browse_screen.dart` with network image and letter fallback for both installed sources and repository extensions.
+- **Liquid Glass Navigation & UI Refinements:**
+  - Bottom navigation: single moving glass capsule indicator with spring animation (`Curves.easeOutBack`) and tactile press feedback (`scale: 0.92`), replacing separate in-place pill animations.
+  - Restored solid `#000000` pure black dark background (eliminated gradient wash) and `#F2F2F7` light background.
+  - Grouped Continue Reading section on Home with `GlassSurface` framing, Newsreader serif typography, and bounded responsive card height.
+  - Refined Calm theme palette across Flutter (`reader_theme.dart`) and native Readium (`ReadiumReaderActivity.kt`) to match the user's Apple Books reference screenshot: `#F1E5CD` warm background, `#2C2211` text, `#70624E` secondary text, `#E8DCBF` controls.
+  - Clean "Reset to defaults" in Readium reader resetting settings to global defaults without immediately re-saving a book override in SQLite.
+- **Direct Physical Device Deployment & Packaging:**
+  - Built `app-arm64-v8a-release.apk` (30 MB) and copied to `./hon-arm64-v8a-release.apk`, signed with local keystore (`-PhonLocalSigning=true`) for direct installation over existing installs.
+
+### 10. Quality & Verification Metrics
 - **Static Analysis:** `flutter analyze` — **0 issues found** (clean across all files).
-- **Kotlin JVM Unit Tests:** `./gradlew testDebugUnitTest` — **4 passed, 0 failed** (100% success for `ShosetsuKotlinEngineTest`).
-- **Flutter Automated Tests:** `flutter test` — **50 passed, 0 failed** across all unit and integration test suites.
-- **Android Compilation:** Gradle `assembleDebug` — **BUILD SUCCESSFUL**. Output: `build/app/outputs/flutter-apk/app-debug.apk` (213MB, SHA-256: `a9614ac7e1a0b278d877fa4487b164f71ac8faa6d246e68777179c1a6813e0f6`).
-- **Physical Device Acceptance:** Marked **⏳ Pending User Device Testing** per milestone agreement before proceeding to Phase 1.
+- **Kotlin JVM Unit Tests:** `./gradlew :app:testDebugUnitTest` — **passed** (100% pass rate across engine, sources, network policy, and image tests).
+- **Flutter Automated Unit Tests:** `flutter test test/unit/` — **86 passed, 0 failed** (100% pass rate across drift migration, chapter reconciliation, source catalog, download recovery, reader document, and font suites).
+- **Release APK:** `hon-arm64-v8a-release.apk` (30 MB, arm64-v8a) assembled and ready for device testing.
+

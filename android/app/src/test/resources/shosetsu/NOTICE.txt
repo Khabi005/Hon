@@ -1,0 +1,5 @@
+Unmodified N4O Shosetsu extension fixtures, GPL-3.0-or-later.
+Source: https://github.com/noaione/shosetsu-extensions/tree/repo
+Snapshot archive SHA-256: 0b7267a5ac2d553c1f144920dd07470529005b967a09acd3fbf52e15a6c9b841
+Original version/author metadata is retained in each script.
+These fixtures are used with deterministic HTML responses; no source is installed automatically.

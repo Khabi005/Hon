@@ -31,6 +31,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/android/.kotlin/
 /coverage/
 
 # Symbolication related
@@ -43,3 +44,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Private release signing material
+/android/key.properties
+/android/keystore/
+
+# Build binaries and temporary review dumps
+*.apk
+*.aab
+hon_review*.xml

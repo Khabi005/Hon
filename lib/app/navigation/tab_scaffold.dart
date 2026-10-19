@@ -1,9 +1,8 @@
-import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../bootstrap/providers.dart';
-import '../theme/hon_colors.dart';
+import '../theme/glass_surface.dart';
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
 import '../../features/browse/presentation/browse_screen.dart';
@@ -12,176 +11,207 @@ import '../../features/downloads/presentation/downloads_screen.dart';
 
 class TabScaffold extends ConsumerStatefulWidget {
   const TabScaffold({super.key});
-
   @override
   ConsumerState<TabScaffold> createState() => _TabScaffoldState();
 }
 
 class _TabScaffoldState extends ConsumerState<TabScaffold> {
-  int _currentIndex = 0;
-
-  final List<Widget> _tabs = const [
+  final Set<int> _visited = {0};
+  int? _pressedIndex;
+  static const _tabs = [
     HomeScreen(),
     LibraryScreen(),
     BrowseScreen(),
     SearchScreen(),
     DownloadsScreen(),
   ];
+  static const _labels = ['Home', 'Library', 'Browse', 'Search', 'Downloads'];
+  static const _icons = [
+    CupertinoIcons.house_fill,
+    CupertinoIcons.book_fill,
+    CupertinoIcons.compass_fill,
+    CupertinoIcons.search,
+    CupertinoIcons.arrow_down_circle_fill,
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final selected = ref.watch(navigationTabProvider);
     final activeDownloads = ref.watch(activeDownloadsCountProvider);
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-
-    return Scaffold(
-      extendBody: true,
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _tabs,
-      ),
-      bottomNavigationBar: Padding(
-        padding: EdgeInsets.fromLTRB(16, 0, 16, bottomInset > 0 ? bottomInset + 4 : 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(32),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-            child: Container(
-              height: 60,
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xDD1C1C1E) : const Color(0xEEFFFFFF),
-                borderRadius: BorderRadius.circular(32),
-                border: Border.all(
-                  color: isDark ? const Color(0x33FFFFFF) : const Color(0x1F000000),
-                  width: 0.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  _buildTabItem(
-                    index: 0,
-                    label: 'Home',
-                    icon: CupertinoIcons.house_fill,
-                    isDark: isDark,
-                  ),
-                  _buildTabItem(
-                    index: 1,
-                    label: 'Library',
-                    icon: CupertinoIcons.book_fill,
-                    isDark: isDark,
-                  ),
-                  _buildTabItem(
-                    index: 2,
-                    label: 'Browse',
-                    icon: CupertinoIcons.compass_fill,
-                    isDark: isDark,
-                  ),
-                  _buildTabItem(
-                    index: 3,
-                    label: 'Search',
-                    icon: CupertinoIcons.search,
-                    isDark: isDark,
-                  ),
-                  _buildTabItem(
-                    index: 4,
-                    label: 'Downloads',
-                    icon: CupertinoIcons.arrow_down_circle_fill,
-                    badgeCount: activeDownloads > 0 ? activeDownloads : null,
-                    isDark: isDark,
-                  ),
-                ],
-              ),
-            ),
+    _visited.add(selected);
+    final colors = Theme.of(context).colorScheme;
+    final reduced = MediaQuery.disableAnimationsOf(context);
+    final compact =
+        MediaQuery.sizeOf(context).width < 370 ||
+        MediaQuery.textScalerOf(context).scale(12) > 17;
+    return PopScope(
+      canPop: selected == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) ref.read(navigationTabProvider.notifier).state = 0;
+      },
+      child: Scaffold(
+        extendBody: true,
+        body: IndexedStack(
+          index: selected,
+          children: List.generate(
+            _tabs.length,
+            (index) => _visited.contains(index)
+                ? TickerMode(
+                    enabled: selected == index,
+                    child: ExcludeFocus(
+                      excluding: selected != index,
+                      child: RepaintBoundary(child: _tabs[index]),
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
         ),
-      ),
-    );
-  }
+        // Blur is clipped to the floating navigation capsule.
+        bottomNavigationBar: SafeArea(
+          top: false,
+          minimum: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 500),
+              child: GlassSurface(
+                navigation: true,
+                radius: 36,
+                child: SizedBox(
+                  height: compact ? 58 : 64,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final tabWidth = constraints.maxWidth / _tabs.length;
+                      final capsuleWidth = (tabWidth - 8).clamp(36.0, 72.0);
+                      final capsuleHeight = compact ? 46.0 : 52.0;
+                      final isDark = Theme.of(context).brightness == Brightness.dark;
+                      final isPressed = _pressedIndex != null;
 
-  Widget _buildTabItem({
-    required int index,
-    required String label,
-    required IconData icon,
-    int? badgeCount,
-    required bool isDark,
-  }) {
-    final isSelected = _currentIndex == index;
-    final color = isSelected
-        ? (isDark ? Colors.white : Colors.black)
-        : (isDark ? Colors.white54 : Colors.black45);
-
-    return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          setState(() => _currentIndex = index);
-        },
-        child: Center(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeInOutCubic,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA))
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Icon(
-                      icon,
-                      size: 21,
-                      color: color,
-                    ),
-                    if (badgeCount != null)
-                      Positioned(
-                        right: -6,
-                        top: -4,
-                        child: Container(
-                          padding: const EdgeInsets.all(3),
-                          decoration: const BoxDecoration(
-                            color: HonColors.accentOrange,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                          child: Text(
-                            '$badgeCount',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
+                      return Stack(
+                        children: [
+                          // Single moving liquid glass spring capsule indicator
+                          AnimatedPositioned(
+                            duration: reduced
+                                ? Duration.zero
+                                : const Duration(milliseconds: 320),
+                            curve: Curves.easeOutBack,
+                            left: selected * tabWidth + (tabWidth - capsuleWidth) / 2,
+                            top: ((compact ? 58.0 : 64.0) - capsuleHeight) / 2,
+                            width: capsuleWidth,
+                            height: capsuleHeight,
+                            child: AnimatedScale(
+                              scale: isPressed && _pressedIndex == selected ? 0.92 : 1.0,
+                              duration: const Duration(milliseconds: 100),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.16)
+                                      : Colors.black.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.15)
+                                        : Colors.black.withValues(alpha: 0.06),
+                                    width: 0.7,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: isDark
+                                          ? Colors.black.withValues(alpha: 0.25)
+                                          : Colors.black.withValues(alpha: 0.04),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: color,
-                    letterSpacing: -0.2,
+
+                          // Row of tab items with touch handlers
+                          Row(
+                            children: List.generate(_tabs.length, (index) {
+                              final active = selected == index;
+                              return Expanded(
+                                child: Semantics(
+                                  selected: active,
+                                  button: true,
+                                  label: _labels[index],
+                                  child: Tooltip(
+                                    message: _labels[index],
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTapDown: (_) => setState(() => _pressedIndex = index),
+                                      onTapUp: (_) => setState(() => _pressedIndex = null),
+                                      onTapCancel: () => setState(() => _pressedIndex = null),
+                                      onTap: () {
+                                        if (selected == index) return;
+                                        FocusManager.instance.primaryFocus?.unfocus();
+                                        ref.read(navigationTabProvider.notifier).state = index;
+                                      },
+                                      child: Center(
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 4,
+                                            vertical: 5,
+                                          ),
+                                          child: ExcludeSemantics(
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Badge(
+                                                  isLabelVisible:
+                                                      index == 4 && activeDownloads > 0,
+                                                  label: Text(
+                                                    activeDownloads > 99
+                                                        ? '99+'
+                                                        : '$activeDownloads',
+                                                  ),
+                                                  child: Icon(
+                                                    _icons[index],
+                                                    size: 21,
+                                                    color: active
+                                                        ? (isDark ? Colors.white : Colors.black)
+                                                        : colors.onSurfaceVariant.withValues(alpha: 0.75),
+                                                  ),
+                                                ),
+                                                if (!compact) ...[
+                                                  const SizedBox(height: 3),
+                                                  FittedBox(
+                                                    fit: BoxFit.scaleDown,
+                                                    child: Text(
+                                                      _labels[index],
+                                                      maxLines: 1,
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight: active
+                                                            ? FontWeight.w600
+                                                            : FontWeight.w400,
+                                                        color: active
+                                                            ? (isDark ? Colors.white : Colors.black)
+                                                            : colors.onSurfaceVariant.withValues(alpha: 0.75),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),

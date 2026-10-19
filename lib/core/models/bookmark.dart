@@ -6,6 +6,8 @@ class Bookmark {
   final String label;
   final DateTime createdAt;
   final String? snippet;
+  final String? locatorString;
+  final String? locatorVersion;
 
   Bookmark({
     required this.id,
@@ -15,6 +17,8 @@ class Bookmark {
     required this.label,
     required this.createdAt,
     this.snippet,
+    this.locatorString,
+    this.locatorVersion,
   });
 
   Bookmark copyWith({
@@ -25,6 +29,8 @@ class Bookmark {
     String? label,
     DateTime? createdAt,
     String? snippet,
+    String? locatorString,
+    String? locatorVersion,
   }) {
     return Bookmark(
       id: id ?? this.id,
@@ -34,6 +40,8 @@ class Bookmark {
       label: label ?? this.label,
       createdAt: createdAt ?? this.createdAt,
       snippet: snippet ?? this.snippet,
+      locatorString: locatorString ?? this.locatorString,
+      locatorVersion: locatorVersion ?? this.locatorVersion,
     );
   }
 
@@ -45,6 +53,8 @@ class Bookmark {
         'label': label,
         'createdAt': createdAt.toIso8601String(),
         if (snippet != null) 'snippet': snippet,
+        if (locatorString != null) 'locatorString': locatorString,
+        if (locatorVersion != null) 'locatorVersion': locatorVersion,
       };
 
   factory Bookmark.fromMap(Map<String, dynamic> map) => Bookmark(
@@ -56,5 +66,7 @@ class Bookmark {
         createdAt: DateTime.tryParse(map['createdAt'] as String? ?? '') ??
             DateTime.now(),
         snippet: map['snippet'] as String?,
+        locatorString: map['locatorString'] as String?,
+        locatorVersion: map['locatorVersion'] as String?,
       );
 }

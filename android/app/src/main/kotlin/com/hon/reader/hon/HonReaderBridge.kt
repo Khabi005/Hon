@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -21,6 +22,15 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
     private var activePublicationPath: String? = null
     private var activeLocator: String? = null
     private var activeChapterIndex: Int = 0
+    private data class PendingOpen(val result: MethodChannel.Result, val timeout: Runnable)
+    private val pendingOpens = mutableMapOf<String, PendingOpen>()
+
+    private fun settleOpen(requestId: String, response: Map<String, Any?>) {
+        val pending = pendingOpens.remove(requestId) ?: return
+        mainHandler.removeCallbacks(pending.timeout)
+        pending.result.success(response)
+        Log.d("HonReadium", "settled request=$requestId state=${response["errorCode"] ?: if (response["cancelled"] == true) "cancelled" else "ready"}")
+    }
 
     init {
         instance = this
@@ -28,18 +38,22 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
     }
 
     fun cleanup() {
+        for (requestId in pendingOpens.keys.toList()) {
+            settleOpen(requestId, mapOf("success" to false, "cancelled" to true, "launched" to true))
+        }
         if (instance == this) {
             instance = null
         }
         channel.setMethodCallHandler(null)
     }
 
-    fun reportLocator(bookId: String, locatorJson: String, progression: Double) {
+    fun reportLocator(bookId: String, requestId: String, locatorJson: String, progression: Double) {
         mainHandler.post {
             channel.invokeMethod(
                 "onLocatorChanged",
                 mapOf(
                     "bookId" to bookId,
+                    "requestId" to requestId,
                     "locator" to locatorJson,
                     "progression" to progression,
                     "totalProgression" to progression
@@ -50,6 +64,10 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
 
     fun reportError(bookId: String, requestId: String, errorCode: String, errorMessage: String) {
         mainHandler.post {
+            settleOpen(requestId, mapOf(
+                "success" to false, "launched" to true,
+                "errorCode" to errorCode, "errorMessage" to errorMessage
+            ))
             channel.invokeMethod(
                 "onReaderError",
                 mapOf(
@@ -64,6 +82,7 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
 
     fun reportReady(bookId: String, requestId: String, isForegrounded: Boolean = true) {
         mainHandler.post {
+            settleOpen(requestId, mapOf("success" to true, "launched" to true))
             channel.invokeMethod(
                 "onReaderReady",
                 mapOf(
@@ -75,10 +94,12 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         }
     }
 
-    fun reportClosed(bookId: String, locatorJson: String?, totalProgression: Double?) {
+    fun reportClosed(bookId: String, requestId: String, locatorJson: String?, totalProgression: Double?) {
         mainHandler.post {
+            settleOpen(requestId, mapOf("success" to false, "cancelled" to true, "launched" to true))
             val payload = mutableMapOf<String, Any?>(
                 "bookId" to bookId,
+                "requestId" to requestId,
                 "locator" to locatorJson
             )
             if (totalProgression != null) {
@@ -88,10 +109,11 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         }
     }
 
-    fun reportPaused(bookId: String, locatorJson: String?, totalProgression: Double?) {
+    fun reportPaused(bookId: String, requestId: String, locatorJson: String?, totalProgression: Double?) {
         mainHandler.post {
             val payload = mutableMapOf<String, Any?>(
                 "bookId" to bookId,
+                "requestId" to requestId,
                 "locator" to locatorJson
             )
             if (totalProgression != null) {
@@ -101,17 +123,144 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
         }
     }
 
-    fun reportResumed(bookId: String) {
+    fun reportResumed(bookId: String, requestId: String) {
         mainHandler.post {
             channel.invokeMethod(
                 "onReaderResumed",
-                mapOf("bookId" to bookId)
+                mapOf("bookId" to bookId, "requestId" to requestId)
             )
         }
     }
 
+    fun reportPreferences(theme: String, scroll: Boolean, fontSize: Double, bookId: String? = null) {
+        val typography = try {
+            org.json.JSONObject(context.getSharedPreferences("hon_reader_preferences", Context.MODE_PRIVATE).getString("readium_typography", "{}") ?: "{}")
+        } catch (_: Exception) { org.json.JSONObject() }
+        val values = typography.keys().asSequence().associateWith { typography.opt(it) }
+        mainHandler.post {
+            val payload = mutableMapOf<String, Any?>(
+                "theme" to theme,
+                "isScroll" to scroll,
+                "fontSize" to fontSize,
+                "typography" to values
+            )
+            if (bookId != null && bookId.isNotEmpty()) {
+                payload["bookId"] = bookId
+            }
+            channel.invokeMethod("onReaderPreferencesChanged", payload)
+        }
+    }
+
+    fun getBookmarks(bookId: String, done: (List<Map<String, Any?>>) -> Unit) {
+        channel.invokeMethod("getReaderBookmarks", mapOf("bookId" to bookId), object : MethodChannel.Result {
+            override fun success(result: Any?) {
+                @Suppress("UNCHECKED_CAST")
+                done((result as? List<*>)?.mapNotNull { it as? Map<String, Any?> } ?: emptyList())
+            }
+            override fun error(code: String, message: String?, details: Any?) { done(emptyList()) }
+            override fun notImplemented() { done(emptyList()) }
+        })
+    }
+
+    fun toggleBookmark(
+        bookId: String,
+        chapter: Int,
+        title: String,
+        locatorJson: String? = null,
+        locatorVersion: String? = "readium-v2",
+        snippet: String? = null,
+        done: (Boolean?) -> Unit
+    ) {
+        val payload = mutableMapOf<String, Any?>(
+            "bookId" to bookId,
+            "chapterIndex" to chapter,
+            "title" to title,
+            "locatorVersion" to locatorVersion
+        )
+        if (locatorJson != null) payload["locator"] = locatorJson
+        if (snippet != null) payload["snippet"] = snippet
+        channel.invokeMethod("toggleReaderBookmark", payload, object : MethodChannel.Result {
+            override fun success(result: Any?) { done(result as? Boolean) }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
+    fun getHighlights(bookId: String, done: (List<Map<String, Any?>>) -> Unit) {
+        channel.invokeMethod("getReaderHighlights", mapOf("bookId" to bookId), object : MethodChannel.Result {
+            override fun success(result: Any?) {
+                @Suppress("UNCHECKED_CAST")
+                done((result as? List<*>)?.mapNotNull { it as? Map<String, Any?> } ?: emptyList())
+            }
+            override fun error(code: String, message: String?, details: Any?) { done(emptyList()) }
+            override fun notImplemented() { done(emptyList()) }
+        })
+    }
+
+    fun saveHighlight(highlight: Map<String, Any?>, done: (Boolean?) -> Unit) {
+        channel.invokeMethod("saveReaderHighlight", highlight, object : MethodChannel.Result {
+            override fun success(result: Any?) { done(result as? Boolean) }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
+    fun deleteHighlight(id: String, done: (Boolean?) -> Unit) {
+        channel.invokeMethod("deleteReaderHighlight", mapOf("id" to id), object : MethodChannel.Result {
+            override fun success(result: Any?) { done(result as? Boolean) }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
+    fun getBookReaderSettings(bookId: String, done: (Map<String, Any?>?) -> Unit) {
+        channel.invokeMethod("getBookReaderSettings", mapOf("bookId" to bookId), object : MethodChannel.Result {
+            override fun success(result: Any?) {
+                @Suppress("UNCHECKED_CAST")
+                done(result as? Map<String, Any?>)
+            }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
+    fun saveBookReaderSettings(bookId: String, settings: Map<String, Any?>, done: (Boolean?) -> Unit) {
+        channel.invokeMethod("saveBookReaderSettings", mapOf("bookId" to bookId, "settings" to settings), object : MethodChannel.Result {
+            override fun success(result: Any?) { done(result as? Boolean) }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
+    fun resetBookReaderSettings(bookId: String, done: (Boolean?) -> Unit) {
+        channel.invokeMethod("resetBookReaderSettings", mapOf("bookId" to bookId), object : MethodChannel.Result {
+            override fun success(result: Any?) { done(result as? Boolean) }
+            override fun error(code: String, message: String?, details: Any?) { done(null) }
+            override fun notImplemented() { done(null) }
+        })
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "setBrightness" -> {
+                val brightness = call.argument<Double>("brightness") ?: -1.0
+                val activity = context as? android.app.Activity
+                if (activity != null) {
+                    activity.window.attributes = activity.window.attributes.apply { screenBrightness = brightness.toFloat() }
+                }
+                result.success(true)
+            }
+            "openLink" -> {
+                val uri = android.net.Uri.parse(call.argument<String>("url") ?: "")
+                if (uri.scheme !in listOf("https", "http", "mailto")) {
+                    result.error("UNSUPPORTED_LINK", "Unsupported link", null)
+                } else try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    result.success(true)
+                } catch (error: Exception) {
+                    result.error("LINK_FAILED", error.message, null)
+                }
+            }
             "isPlatformSupported" -> {
                 result.success(true)
             }
@@ -144,6 +293,8 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                         }
                     }
 
+                    ReadiumReaderActivity.activeInstance?.finish()
+
                     activePublicationPath = filePath
                     activeLocator = initialLocator
                     activeChapterIndex = chapterIndex
@@ -157,19 +308,24 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                         putExtra("requestId", requestId)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
+                    // Complete the Flutter call only when the native navigator is ready,
+                    // fails, or is intentionally closed. A Dart timer cannot reliably
+                    // distinguish these states while another Activity is foregrounded.
+                    val timeout = Runnable {
+                        if (pendingOpens.containsKey(requestId)) {
+                            ReadiumReaderActivity.activeInstance?.closeIfWaiting(requestId)
+                            settleOpen(requestId, mapOf(
+                                "success" to false, "launched" to true,
+                                "errorCode" to "TIMEOUT",
+                                "errorMessage" to "Timed out waiting for Readium reader ready signal (30s)"
+                            ))
+                        }
+                    }
+                    pendingOpens[requestId] = PendingOpen(result, timeout)
+                    mainHandler.postDelayed(timeout, 30_000L)
                     context.startActivity(intent)
-
-                    val response = mapOf(
-                        "success" to true,
-                        "launched" to true,
-                        "filePath" to filePath,
-                        "initialChapterIndex" to activeChapterIndex,
-                        "initialLocator" to activeLocator,
-                        "requestId" to requestId,
-                        "engine" to "Readium/Android-Native"
-                    )
-                    result.success(response)
                 } catch (e: Exception) {
+                    pendingOpens.remove(requestId)?.let { mainHandler.removeCallbacks(it.timeout) }
                     result.error("OPEN_FAILED", "Failed to launch Readium reader: ${e.message}", null)
                 }
             }
@@ -188,13 +344,19 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                 val fontSize = call.argument<Double>("fontSize")
                 val theme = call.argument<String>("theme")
                 val isScroll = call.argument<Boolean>("isScroll")
+                val typography = call.argument<Map<String, Any?>>("typography")
 
                 // Durably save settings to SharedPreferences so subsequent reader opens use them
                 val prefs = context.getSharedPreferences("hon_reader_preferences", Context.MODE_PRIVATE)
                 val editor = prefs.edit()
                 if (fontSize != null) editor.putFloat("readium_font_size", fontSize.toFloat())
-                if (theme != null) editor.putString("readium_theme", theme.uppercase())
+                if (theme != null) editor.putString("readium_theme", theme.lowercase())
                 if (isScroll != null) editor.putBoolean("readium_scroll_mode", isScroll)
+                if (typography != null) {
+                    val merged = try { org.json.JSONObject(prefs.getString("readium_typography", "{}") ?: "{}") } catch (_: Exception) { org.json.JSONObject() }
+                    typography.forEach { (key, value) -> merged.put(key, value) }
+                    editor.putString("readium_typography", merged.toString())
+                }
                 editor.apply()
 
                 val active = ReadiumReaderActivity.activeInstance

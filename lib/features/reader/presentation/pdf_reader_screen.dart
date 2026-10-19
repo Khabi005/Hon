@@ -3,6 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../app/bootstrap/providers.dart';
+import '../../../app/theme/reader_theme.dart';
+import '../widgets/reader_chrome.dart';
+import '../sheets/reader_menu_popup.dart';
+import '../sheets/themes_settings_sheet.dart';
 import 'package:pdfx/pdfx.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
@@ -10,21 +16,18 @@ import '../../../core/models/reading_progress.dart';
 import '../sheets/pdf_contents_sheet.dart';
 import '../sheets/pdf_appearance_sheet.dart';
 
-class PdfReaderScreen extends StatefulWidget {
+class PdfReaderScreen extends ConsumerStatefulWidget {
   final Book book;
   final int initialPage;
 
-  const PdfReaderScreen({
-    super.key,
-    required this.book,
-    this.initialPage = 1,
-  });
+  const PdfReaderScreen({super.key, required this.book, this.initialPage = 1});
 
   @override
-  State<PdfReaderScreen> createState() => _PdfReaderScreenState();
+  ConsumerState<PdfReaderScreen> createState() => _PdfReaderScreenState();
 }
 
-class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingObserver {
+class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
+    with WidgetsBindingObserver {
   PdfControllerPinch? _pinchController;
   PdfController? _flipController;
 
@@ -35,7 +38,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   String? _errorMessage;
   bool _isUnsupportedPlatform = false;
 
-  PdfColorFilterMode _colorFilterMode = PdfColorFilterMode.original;
+  bool _isOrientationLocked = false;
+  double? _appliedBrightness;
   PdfPageViewMode _viewMode = PdfPageViewMode.continuousZoom;
 
   Offset? _pointerDownPos;
@@ -54,7 +58,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
       _isForegrounded = false;
       _pauseReadingSession();
     } else if (state == AppLifecycleState.resumed) {
@@ -69,13 +74,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
-      _sessionStartTime = null; // Crucial: STOP timer so background time is never counted!
+      _sessionStartTime =
+          null; // Crucial: STOP timer so background time is never counted!
     }
   }
 
   void _resumeReadingSession() {
     // Only restart timer if PDF has valid, readable document in foreground
-    if (!_isLoading && _errorMessage == null && !_isUnsupportedPlatform && _isForegrounded) {
+    if (!_isLoading &&
+        _errorMessage == null &&
+        !_isUnsupportedPlatform &&
+        _isForegrounded &&
+        _sessionStartTime == null) {
       _sessionStartTime = DateTime.now();
     }
   }
@@ -95,15 +105,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
     }
 
     // 2. Load persisted reader preferences
-    final savedFilter = DatabaseService.instance.getPdfColorFilter();
-    if (savedFilter == 'sepia') {
-      _colorFilterMode = PdfColorFilterMode.sepia;
-    } else if (savedFilter == 'inverted') {
-      _colorFilterMode = PdfColorFilterMode.inverted;
-    } else {
-      _colorFilterMode = PdfColorFilterMode.original;
-    }
-
     final savedViewMode = DatabaseService.instance.getPdfPageViewMode();
     if (savedViewMode == 'singlePage') {
       _viewMode = PdfPageViewMode.singlePage;
@@ -147,9 +148,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
       // 4. Pre-validate document opening to catch corrupt headers, encryption or format errors
       final testDoc = await PdfDocument.openFile(file.path);
       final docPages = testDoc.pagesCount;
-      await testDoc.close();
+      if (!mounted) {
+        await testDoc.close();
+        return;
+      }
 
       if (docPages <= 0) {
+        await testDoc.close();
         if (mounted) {
           setState(() {
             _isLoading = false;
@@ -167,7 +172,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
 
       if (_viewMode == PdfPageViewMode.continuousZoom) {
         final pinchCtrl = PdfControllerPinch(
-          document: PdfDocument.openFile(file.path),
+          document: Future.value(testDoc),
           initialPage: page,
         );
         if (mounted) {
@@ -177,16 +182,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
-            if (_isForegrounded) {
-              _sessionStartTime = DateTime.now();
-            } else {
-              _sessionStartTime = null;
-            }
+            _sessionStartTime = null;
           });
         }
       } else {
         final flipCtrl = PdfController(
-          document: PdfDocument.openFile(file.path),
+          document: Future.value(testDoc),
           initialPage: page,
         );
         if (mounted) {
@@ -196,11 +197,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
             _currentPage = page;
             _pageCount = docPages;
             _isLoading = false;
-            if (_isForegrounded) {
-              _sessionStartTime = DateTime.now();
-            } else {
-              _sessionStartTime = null;
-            }
+            _sessionStartTime = null;
           });
         }
       }
@@ -219,7 +216,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   void _saveProgress(int page, int pageCount) {
     if (pageCount <= 0) return;
     final clampedPage = page.clamp(1, pageCount);
-    if (mounted) {
+    if (mounted && (_currentPage != clampedPage || _pageCount != pageCount)) {
       setState(() {
         _currentPage = clampedPage;
         _pageCount = pageCount;
@@ -249,12 +246,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
     }
   }
 
-  void _nextPage() {
-    if (_currentPage < _pageCount) {
-      _goToPage(_currentPage + 1);
-    }
-  }
-
   void _prevPage() {
     if (_currentPage > 1) {
       _goToPage(_currentPage - 1);
@@ -280,14 +271,19 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
           ),
           duration: const Duration(milliseconds: 1400),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
       );
     }
   }
 
   Future<void> _switchViewMode(PdfPageViewMode mode) async {
-    if (_isUnsupportedPlatform || Platform.isLinux || _errorMessage != null) return;
+    if (!mounted || _isLoading || mode == _viewMode) return;
+    if (_isUnsupportedPlatform || Platform.isLinux || _errorMessage != null) {
+      return;
+    }
     if (widget.book.filePath == null) return;
     final file = File(widget.book.filePath!);
     if (!file.existsSync()) return;
@@ -299,7 +295,9 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
       _isLoading = true;
     });
 
+    _pauseReadingSession();
     await DatabaseService.instance.setPdfPageViewMode(mode.name);
+    if (!mounted) return;
 
     _pinchController?.dispose();
     _flipController?.dispose();
@@ -329,139 +327,186 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
     }
   }
 
-  void _showJumpToPageDialog() {
+  Future<void> _showJumpToPageDialog() async {
     if (_pageCount <= 1) return;
-    final textController = TextEditingController(text: '$_currentPage');
-    showCupertinoDialog(
+    final page = await showDialog<int>(
       context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: const Text('Go to Page'),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: Column(
-            children: [
-              Text('Enter page number (1 – $_pageCount):'),
-              const SizedBox(height: 12),
-              CupertinoTextField(
-                controller: textController,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                autofocus: true,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('Cancel'),
-            onPressed: () => Navigator.of(ctx).pop(),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            child: const Text('Go'),
-            onPressed: () {
-              final page = int.tryParse(textController.text.trim());
-              if (page != null && page >= 1 && page <= _pageCount) {
-                Navigator.of(ctx).pop();
-                _goToPage(page);
-              }
-            },
-          ),
-        ],
-      ),
+      builder: (_) => _PageJumpDialog(current: _currentPage, total: _pageCount),
     );
+    if (mounted && page != null) _goToPage(page);
+  }
+
+  Future<void> _toggleOrientationLock() async {
+    final orientation = MediaQuery.orientationOf(context);
+    await SystemChrome.setPreferredOrientations(
+      _isOrientationLocked
+          ? []
+          : [
+              orientation == Orientation.portrait
+                  ? DeviceOrientation.portraitUp
+                  : DeviceOrientation.landscapeLeft,
+            ],
+    );
+    if (mounted) setState(() => _isOrientationLocked = !_isOrientationLocked);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pauseReadingSession();
+    if (_isOrientationLocked) SystemChrome.setPreferredOrientations([]);
+    if (Platform.isAndroid && _appliedBrightness != null) {
+      const MethodChannel(
+        'com.hon.reader/readium_reader',
+      ).invokeMethod<void>('setBrightness', {'brightness': -1.0});
+    }
     _pinchController?.dispose();
     _flipController?.dispose();
     super.dispose();
   }
 
   ColorFilter? _getColorFilter() {
-    switch (_colorFilterMode) {
-      case PdfColorFilterMode.original:
-        return null;
-      case PdfColorFilterMode.sepia:
-        return const ColorFilter.mode(
-          Color(0xFFFBF0D9),
-          BlendMode.modulate,
-        );
-      case PdfColorFilterMode.inverted:
-        return const ColorFilter.matrix(<double>[
-          -1, 0, 0, 0, 255,
-          0, -1, 0, 0, 255,
-          0, 0, -1, 0, 255,
-          0, 0, 0, 1, 0,
-        ]);
-    }
+    final theme = ref.read(readerPreferencesProvider).themeConfig;
+    if (theme.preset == ReaderThemePreset.original) return null;
+    // Map white paper and black ink to the same six reader theme colors.
+    final bg = theme.backgroundColor;
+    final ink = theme.textColor;
+    final b = [bg.r * 255, bg.g * 255, bg.b * 255];
+    final t = [ink.r * 255, ink.g * 255, ink.b * 255];
+    return ColorFilter.matrix([
+      (b[0] - t[0]) / 255,
+      0,
+      0,
+      0,
+      t[0],
+      0,
+      (b[1] - t[1]) / 255,
+      0,
+      0,
+      t[1],
+      0,
+      0,
+      (b[2] - t[2]) / 255,
+      0,
+      t[2],
+      0,
+      0,
+      0,
+      1,
+      0,
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isBookmarked =
-        DatabaseService.instance.isBookmarked(widget.book.id, _currentPage);
+    final preferences = ref.watch(readerPreferencesProvider);
+    final theme = preferences.themeConfig;
+    if (Platform.isAndroid && _appliedBrightness != preferences.brightness) {
+      _appliedBrightness = preferences.brightness;
+      const MethodChannel('com.hon.reader/readium_reader').invokeMethod<void>(
+        'setBrightness',
+        {'brightness': preferences.brightness},
+      );
+    }
+    final isDark = theme.systemBrightness == Brightness.dark;
+    final isBookmarked = DatabaseService.instance.isBookmarked(
+      widget.book.id,
+      _currentPage,
+    );
 
-    return Scaffold(
-      backgroundColor: isDark ? Colors.black : const Color(0xFFF2F2F7),
-      body: SafeArea(
-        top: false,
-        bottom: false,
-        child: Stack(
-          children: [
-            // PDF Body with gesture listener and optional color tone filter
-            if (_isLoading)
-              const Center(child: CupertinoActivityIndicator())
-            else if (_isUnsupportedPlatform || _errorMessage != null)
-              _buildErrorView(isDark)
-            else
-              Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (e) {
-                  _pointerDownPos = e.position;
-                  _pointerDownTime = DateTime.now();
-                },
-                onPointerUp: (e) {
-                  if (_pointerDownPos != null && _pointerDownTime != null) {
-                    final dist = (e.position - _pointerDownPos!).distance;
-                    final dur = DateTime.now().difference(_pointerDownTime!);
-                    if (dist < 12 && dur.inMilliseconds < 450) {
-                      setState(() => _showControls = !_showControls);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      child: Scaffold(
+        backgroundColor: theme.backgroundColor,
+        body: SafeArea(
+          top: false,
+          bottom: false,
+          child: Stack(
+            children: [
+              // PDF Body with gesture listener and optional color tone filter
+              if (_isLoading)
+                const Center(child: CupertinoActivityIndicator())
+              else if (_isUnsupportedPlatform || _errorMessage != null)
+                _buildErrorView(isDark)
+              else
+                Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (e) {
+                    _pointerDownPos = e.position;
+                    _pointerDownTime = DateTime.now();
+                  },
+                  onPointerUp: (e) {
+                    if (_pointerDownPos != null && _pointerDownTime != null) {
+                      final dist = (e.position - _pointerDownPos!).distance;
+                      final dur = DateTime.now().difference(_pointerDownTime!);
+                      if (dist < 12 && dur.inMilliseconds < 450) {
+                        setState(() => _showControls = !_showControls);
+                      }
                     }
-                  }
-                },
-                child: _buildPdfViewer(),
-              ),
+                  },
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.paddingOf(context).top + 68,
+                      bottom: MediaQuery.paddingOf(context).bottom + 60,
+                    ),
+                    child: _buildPdfViewer(),
+                  ),
+                ),
 
-            // Top Apple Books Header Bar
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeInOut,
-              top: _showControls ? 0 : -110,
-              left: 0,
-              right: 0,
-              child: _buildTopBar(isDark, isBookmarked),
-            ),
-
-            // Bottom Floating Scrubber Pill
-            if (!_isLoading &&
-                !_isUnsupportedPlatform &&
-                _errorMessage == null &&
-                _pageCount > 0)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeInOut,
-                bottom: _showControls ? 0 : -140,
+              // Top Apple Books Header Bar
+              Positioned(
+                top: 0,
                 left: 0,
                 right: 0,
-                child: _buildBottomScrubber(isDark),
+                child: AnimatedSlide(
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 200),
+                  curve: Curves.easeInOut,
+                  offset: _showControls ? Offset.zero : const Offset(0, -1),
+                  child: ReaderControlsVisibility(
+                    visible: _showControls,
+                    child: ReaderHeader(
+                      theme: theme,
+                      location: '$_currentPage',
+                      status: _pageCount > 0
+                          ? '${_pageCount - _currentPage} pages left'
+                          : widget.book.title,
+                      onPrevious: _currentPage > 1 ? _prevPage : null,
+                      onClose: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                ),
               ),
-          ],
+
+              // Bottom Floating Scrubber Pill
+              if (!_isLoading &&
+                  !_isUnsupportedPlatform &&
+                  _errorMessage == null &&
+                  _pageCount > 0)
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedSlide(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    curve: Curves.easeInOut,
+                    offset: _showControls ? Offset.zero : const Offset(0, 1),
+                    child: ReaderControlsVisibility(
+                      visible: _showControls,
+                      child: ReaderFooter(
+                        theme: theme,
+                        progress: 'Page $_currentPage of $_pageCount',
+                        onProgress: _showJumpToPageDialog,
+                        onMenu: () => _showReaderMenu(theme, isBookmarked),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -470,10 +515,12 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
   Widget _buildPdfViewer() {
     Widget viewer;
 
-    if (_viewMode == PdfPageViewMode.continuousZoom && _pinchController != null) {
+    if (_viewMode == PdfPageViewMode.continuousZoom &&
+        _pinchController != null) {
       viewer = PdfViewPinch(
         controller: _pinchController!,
         onDocumentLoaded: (doc) {
+          _resumeReadingSession();
           if (mounted) {
             setState(() {
               _pageCount = doc.pagesCount;
@@ -486,6 +533,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
           }
         },
         onDocumentError: (error) {
+          _pauseReadingSession();
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -500,15 +548,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
               const Center(child: CupertinoActivityIndicator()),
           pageLoaderBuilder: (_) =>
               const Center(child: CupertinoActivityIndicator()),
-          errorBuilder: (_, error) => Center(
-            child: Text('Error rendering page: $error'),
-          ),
+          errorBuilder: (_, error) =>
+              Center(child: Text('Error rendering page: $error')),
         ),
       );
     } else if (_flipController != null) {
       viewer = PdfView(
         controller: _flipController!,
         onDocumentLoaded: (doc) {
+          _resumeReadingSession();
           if (mounted) {
             setState(() {
               _pageCount = doc.pagesCount;
@@ -521,6 +569,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
           }
         },
         onDocumentError: (error) {
+          _pauseReadingSession();
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -535,9 +584,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
               const Center(child: CupertinoActivityIndicator()),
           pageLoaderBuilder: (_) =>
               const Center(child: CupertinoActivityIndicator()),
-          errorBuilder: (_, error) => Center(
-            child: Text('Error rendering page: $error'),
-          ),
+          errorBuilder: (_, error) =>
+              Center(child: Text('Error rendering page: $error')),
         ),
       );
     } else {
@@ -551,228 +599,59 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
     return viewer;
   }
 
-  Widget _buildTopBar(bool isDark, bool isBookmarked) {
-    final hasControls =
-        !_isLoading && !_isUnsupportedPlatform && _errorMessage == null;
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(
-        12,
-        MediaQuery.of(context).padding.top + 8,
-        12,
-        8,
-      ),
-      decoration: BoxDecoration(
-        color: (isDark ? const Color(0xEE1C1C1E) : const Color(0xEEFFFFFF)),
-        border: Border(
-          bottom: BorderSide(
-            color: isDark ? Colors.white12 : Colors.black12,
-            width: 0.5,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(CupertinoIcons.chevron_left, size: 24),
-            color: isDark ? Colors.white : Colors.black,
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: Text(
-              widget.book.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-                color: isDark ? Colors.white : Colors.black,
+  void _showReaderMenu(ReaderThemeConfig theme, bool isBookmarked) {
+    ReaderMenuPopup.show(
+      context,
+      theme: theme,
+      searchLabel: 'Go to Page',
+      onOpenContents: () =>
+          PdfContentsSheet.show(
+            context,
+            theme: theme,
+            bookId: widget.book.id,
+            bookTitle: widget.book.title,
+            currentPage: _currentPage,
+            totalPages: _pageCount,
+            onSelectPage: _goToPage,
+          ).then((_) {
+            if (mounted) setState(() {});
+          }),
+      onOpenSearch: _showJumpToPageDialog,
+      onOpenThemes: () => ThemesSettingsSheet.show(
+        context,
+        supportsTypography: false,
+        bookId: widget.book.id,
+        layoutControl: StatefulBuilder(
+          builder: (context, update) => SegmentedButton<PdfPageViewMode>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(
+                value: PdfPageViewMode.singlePage,
+                label: Text('Paged'),
               ),
-            ),
-          ),
-          if (hasControls) ...[
-            // Bookmark toggle
-            IconButton(
-              icon: Icon(
-                isBookmarked
-                    ? CupertinoIcons.bookmark_fill
-                    : CupertinoIcons.bookmark,
-                size: 22,
-              ),
-              color: isBookmarked
-                  ? const Color(0xFF007AFF)
-                  : (isDark ? Colors.white70 : Colors.black54),
-              onPressed: _toggleBookmark,
-            ),
-            // Contents Sheet (Bookmarks & Page Grid)
-            IconButton(
-              icon: const Icon(CupertinoIcons.list_bullet, size: 22),
-              color: isDark ? Colors.white70 : Colors.black54,
-              onPressed: () {
-                PdfContentsSheet.show(
-                  context,
-                  bookId: widget.book.id,
-                  bookTitle: widget.book.title,
-                  currentPage: _currentPage,
-                  totalPages: _pageCount,
-                  onSelectPage: (p) => _goToPage(p),
-                ).then((_) {
-                  if (mounted) setState(() {});
-                });
-              },
-            ),
-            // Appearance options
-            IconButton(
-              icon: const Icon(CupertinoIcons.textformat_size, size: 22),
-              color: isDark ? Colors.white70 : Colors.black54,
-              onPressed: () {
-                PdfAppearanceSheet.show(
-                  context,
-                  currentFilter: _colorFilterMode,
-                  currentViewMode: _viewMode,
-                  onSelectFilter: (mode) {
-                    setState(() => _colorFilterMode = mode);
-                    DatabaseService.instance.setPdfColorFilter(mode.name);
-                  },
-                  onSelectViewMode: (mode) {
-                    if (_viewMode != mode) {
-                      _switchViewMode(mode);
-                    }
-                  },
-                );
-              },
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBottomScrubber(bool isDark) {
-    return Container(
-      margin: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        bottom: MediaQuery.of(context).padding.bottom + 12,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: (isDark ? const Color(0xEE1C1C1E) : const Color(0xEEFFFFFF)),
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.16),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(
-          color: isDark ? Colors.white12 : Colors.black12,
-          width: 0.5,
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Live Page Counter & Direct Jump Tap
-          GestureDetector(
-            onTap: _showJumpToPageDialog,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withOpacity(0.08)
-                    : Colors.black.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Page $_currentPage of $_pageCount',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white : Colors.black,
-                    ),
-                  ),
-                  if (_pageCount > 0) ...[
-                    const SizedBox(width: 6),
-                    Text(
-                      '(${((_currentPage / _pageCount) * 100).round()}%)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white54 : Colors.black45,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(width: 4),
-                  Icon(
-                    CupertinoIcons.chevron_up_chevron_down,
-                    size: 11,
-                    color: isDark ? Colors.white54 : Colors.black45,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          // Scrubber Row: Prev button, Slider, Next button
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(CupertinoIcons.chevron_left, size: 20),
-                color: _currentPage > 1
-                    ? (isDark ? Colors.white : Colors.black)
-                    : (isDark ? Colors.white24 : Colors.black26),
-                onPressed: _currentPage > 1 ? _prevPage : null,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    thumbShape:
-                        const RoundSliderThumbShape(enabledThumbRadius: 7),
-                    overlayShape:
-                        const RoundSliderOverlayShape(overlayRadius: 14),
-                    activeTrackColor: const Color(0xFF007AFF),
-                    inactiveTrackColor:
-                        isDark ? Colors.white24 : Colors.black12,
-                    thumbColor: Colors.white,
-                  ),
-                  child: Slider(
-                    value: _currentPage
-                        .toDouble()
-                        .clamp(1.0, math.max(1.0, _pageCount.toDouble())),
-                    min: 1.0,
-                    max: math.max(1.0, _pageCount.toDouble()),
-                    onChanged: (val) {
-                      setState(() {
-                        _currentPage = val.round();
-                      });
-                    },
-                    onChangeEnd: (val) {
-                      _goToPage(val.round());
-                    },
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(CupertinoIcons.chevron_right, size: 20),
-                color: _currentPage < _pageCount
-                    ? (isDark ? Colors.white : Colors.black)
-                    : (isDark ? Colors.white24 : Colors.black26),
-                onPressed: _currentPage < _pageCount ? _nextPage : null,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ButtonSegment(
+                value: PdfPageViewMode.continuousZoom,
+                label: Text('Scroll & Zoom'),
               ),
             ],
+            selected: {_viewMode},
+            onSelectionChanged: (selection) async {
+              await _switchViewMode(selection.first);
+              if (context.mounted) update(() {});
+            },
           ),
-        ],
+        ),
       ),
+      onToggleReadingMode: () => _switchViewMode(
+        _viewMode == PdfPageViewMode.singlePage
+            ? PdfPageViewMode.continuousZoom
+            : PdfPageViewMode.singlePage,
+      ),
+      onToggleBookmark: _toggleBookmark,
+      onToggleOrientationLock: _toggleOrientationLock,
+      isOrientationLocked: _isOrientationLocked,
+      isBookmarked: isBookmarked,
+      isContinuousScroll: _viewMode == PdfPageViewMode.continuousZoom,
     );
   }
 
@@ -830,8 +709,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
                   const SizedBox(width: 14),
                   FilledButton.tonal(
                     onPressed: () async {
-                      await DatabaseService.instance
-                          .setLibraryMembership(widget.book.id, false);
+                      await DatabaseService.instance.setLibraryMembership(
+                        widget.book.id,
+                        false,
+                      );
                       if (mounted) {
                         Navigator.of(context).pop();
                       }
@@ -852,4 +733,48 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> with WidgetsBindingOb
       ),
     );
   }
+}
+
+class _PageJumpDialog extends StatefulWidget {
+  final int current;
+  final int total;
+  const _PageJumpDialog({required this.current, required this.total});
+  @override
+  State<_PageJumpDialog> createState() => _PageJumpDialogState();
+}
+
+class _PageJumpDialogState extends State<_PageJumpDialog> {
+  late final controller = TextEditingController(text: '${widget.current}');
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  void submit() {
+    final page = int.tryParse(controller.text);
+    if (page != null && page >= 1 && page <= widget.total) {
+      Navigator.of(context).pop(page);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Go to Page'),
+    content: TextField(
+      controller: controller,
+      autofocus: true,
+      decoration: InputDecoration(labelText: 'Page 1–${widget.total}'),
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      onSubmitted: (_) => submit(),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(onPressed: submit, child: const Text('Go')),
+    ],
+  );
 }

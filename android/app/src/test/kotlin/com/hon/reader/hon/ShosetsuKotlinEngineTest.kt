@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
+import org.luaj.vm2.LuaError
 import java.io.File
 
 class ShosetsuKotlinEngineTest {
@@ -119,6 +120,24 @@ class ShosetsuKotlinEngineTest {
     }
 
     @Test
+    fun testGutenbergSearchWithSpacesBuildsValidQuery() = runBlocking {
+        var receivedQuery: String? = null
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            receivedQuery = chain.request().url.queryParameter("query")
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(sampleGutenbergSearchHtml.toResponseBody("text/html".toMediaType()))
+                .build()
+        }.build()
+        val results = ShosetsuKotlinEngine(client).search(loadBundledGutenbergScript(), "a double story", 0)
+        assertEquals("a double story", receivedQuery)
+        assertEquals(2, results.size)
+    }
+
+    @Test
     fun testKotlinEngineParsesNovelDetailsAndChapters() = runBlocking {
         val script = loadBundledGutenbergScript()
         val engine = ShosetsuKotlinEngine(createMockClient())
@@ -156,5 +175,109 @@ class ShosetsuKotlinEngineTest {
         assertTrue(globals.get("io").isnil())
         assertTrue(globals.get("luajava").isnil())
         assertTrue(globals.get("debug").isnil())
+        assertTrue(globals.get("package").isnil())
+        assertTrue(globals.get("require").isnil())
+        assertTrue(globals.get("loadfile").isnil())
+        assertTrue(globals.get("dofile").isnil())
     }
+
+    @Test(timeout = 10000)
+    fun testInfiniteLuaLoopStopsAtInstructionBudget() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val script = "return { search = function(_) while true do end end }"
+        try {
+            engine.search(script, "anything", 0)
+            fail("The extension should have been stopped")
+        } catch (error: LuaError) {
+            assertTrue(error.message.orEmpty().contains("execution budget"))
+        }
+    }
+
+    @Test
+    fun testInstalledExtensionValidationChecksRequiredMethods() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val valid = "return { search = function(_) return {} end, parseNovel = function(_) return {} end, getPassage = function(_) return 'chapter' end }"
+        assertTrue(engine.validateExtension(valid))
+        try {
+            engine.validateExtension("return { search = function(_) return {} end }")
+            fail("Incomplete extension should fail validation")
+        } catch (error: IllegalArgumentException) {
+            assertTrue(error.message.orEmpty().contains("parseNovel"))
+        }
+    }
+    @Test fun listingOnlyExtensionIsSupportedAndUnknownModulesFail() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val script = """
+            return {
+              parseNovel = function() return {} end,
+              getPassage = function() return "<p>text</p>" end,
+              listings = { Listing("All", false, function() return { Novel { title = "A title", link = "/1" } } end) }
+            }
+        """.trimIndent()
+        assertTrue(engine.validateExtension(script))
+        assertEquals("A title", engine.search(script, "", 0).single()["title"])
+        try {
+            engine.validateExtension("local x = Require('missing'); return {}")
+            fail("Unknown dependencies must not be replaced by empty tables")
+        } catch (expected: LuaError) {
+            assertTrue(expected.message!!.contains("Unsupported extension module"))
+        }
+    }
+
+    @Test fun cachedBytecodeDoesNotShareSourceGlobalsBetweenRequests() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val script = """
+            local count = 0
+            return {
+              search = function() count = count + 1; return {Novel {title = tostring(count), link = "/book"}} end,
+              parseNovel = function() return {} end,
+              getPassage = function() return "<p>text</p>" end
+            }
+        """.trimIndent()
+        assertEquals("1", engine.search(script, "a", 0).single()["title"])
+        assertEquals("1", engine.search(script, "b", 0).single()["title"])
+    }
+
+    @Test fun searchAndSettingsReceiveTypedDefaultsIncludingNestedGroups() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val script = """
+            local settings = {}
+            return {
+              searchFilters = {FilterGroup("Options", {TextFilter(5, "Text"), DropdownFilter(6, "Sort", {"A", "B"}), CheckboxFilter(7, "Check")})},
+              settings = {SwitchFilter(3, "Show notes")},
+              updateSetting = function(id, value) settings[id] = value end,
+              search = function(data)
+                assert(data[5] == "" and data[6] == 0 and data[7] == false)
+                assert(settings[3] == false)
+                return {Novel {title="Defaults", link="/book"}}
+              end,
+              parseNovel = function() return {} end,
+              getPassage = function() assert(settings[3] == false); return "<p>text</p>" end
+            }
+        """.trimIndent()
+        assertEquals("Defaults", engine.search(script, "query", 0).single()["title"])
+        assertTrue(engine.getPassage(script, "/chapter").contains("text"))
+    }
+
+    @Test fun emptyBrowseUsesSelectedListingAndMetadataPaginationContract() = runBlocking {
+        val engine = ShosetsuKotlinEngine(createMockClient())
+        val script = """
+            return {
+              search = function() return {Novel {title="Search",link="search"}} end,
+              parseNovel = function() return {} end,
+              getPassage = function() return "text" end,
+              listings = {
+                Listing("Latest", true, function(data) return {Novel {title=tostring(data[PAGE]),link="latest"}} end),
+                Listing("All", false, function(data) return {Novel {title="All",link="all"}} end)
+              }
+            }
+        """.trimIndent()
+        assertEquals("1", engine.search(script, "", 0).single()["title"])
+        assertEquals("2", engine.search(script, "", 1).single()["title"])
+        assertEquals("All", engine.search(script, "", 0, 1).single()["title"])
+        val listings = engine.describeExtension(script)["listings"] as List<*>
+        assertEquals(true, (listings[0] as Map<*, *>)["incrementing"])
+        assertEquals(false, (listings[1] as Map<*, *>)["incrementing"])
+    }
+
 }

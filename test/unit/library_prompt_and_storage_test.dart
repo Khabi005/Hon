@@ -287,6 +287,28 @@ void main() {
       await managedDir.delete(recursive: true);
     });
 
+    test('deleteBook does not follow a managed-path symlink to an external file', () async {
+      final managedDir = await Directory.systemTemp.createTemp('hon_symlink_storage_');
+      final covers = await Directory('${managedDir.path}/covers').create();
+      StorageService.instance.setBaseDirForTesting(managedDir);
+      final external = File('${managedDir.parent.path}/hon_external_${DateTime.now().microsecondsSinceEpoch}.jpg');
+      await external.writeAsString('external cover');
+      final link = Link('${covers.path}/linked.jpg');
+      await link.create(external.path);
+
+      const bookId = 'book_symlink_ref_test';
+      await db.saveBook(Book(
+        id: bookId, title: 'Linked Cover', format: BookFormat.epub,
+        coverPath: link.path, createdAt: DateTime.now(), updatedAt: DateTime.now(),
+      ));
+      final result = await db.deleteBook(bookId);
+      expect(result.skippedExternalFiles, contains(link.path));
+      expect(external.existsSync(), isTrue);
+
+      await external.delete();
+      await managedDir.delete(recursive: true);
+    });
+
     test('addReadingTime accumulates seconds and increments getTodayReadingMinutes', () async {
       final initialMins = db.getTodayReadingMinutes();
 

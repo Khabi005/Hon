@@ -23,7 +23,7 @@ void main() {
   });
 
   group('Phase 0E — WorkManager Background Download Recovery', () {
-    test('Recovers interrupted "running" downloads after process restart', () async {
+    test('Recovery preserves running job state while re-enqueuing unique work', () async {
       final now = DateTime.now();
 
       // Seed 3 jobs: one was running when app crashed/killed, one queued, one completed
@@ -80,11 +80,11 @@ void main() {
       // Both the running job and queued job should be processed/queued for recovery
       expect(recoveredCount, 2);
 
-      // Verify interrupted job was transitioned from 'running' to 'queued' with an explanation
+      // WorkManager retains a unique running job across process restarts. The
+      // database must not claim it was interrupted or reset its progress.
       final recoveredJob = dbService.getAllDownloadJobs().firstWhere((j) => j.id == 'job_interrupted_1');
-      expect(recoveredJob.status, DownloadStatus.queued);
-      expect(recoveredJob.progress, 0.0);
-      expect(recoveredJob.errorMessage, contains('Interrupted by process termination'));
+      expect(recoveredJob.status, DownloadStatus.running);
+      expect(recoveredJob.progress, 0.45);
 
       // Verify completed job was left completed
       final untouchedCompleted = dbService.getAllDownloadJobs().firstWhere((j) => j.id == 'job_completed_3');

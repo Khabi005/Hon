@@ -1,49 +1,62 @@
+import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import '../../../app/theme/reader_theme.dart';
 import '../../../app/theme/hon_colors.dart';
 import '../../../core/utils/epub_parser.dart';
 
 import '../../../core/database/database_service.dart';
 import '../../../core/models/bookmark.dart';
+import '../../../core/models/highlight.dart';
 
 class ReaderContentsSheet extends StatefulWidget {
   final String? bookId;
   final String bookTitle;
+  final ReaderThemeConfig? theme;
   final int currentChapterIndex;
   final int totalChapters;
   final List<EpubChapterItem> chapters;
   final ValueChanged<int> onSelectChapter;
+  final ValueChanged<Highlight>? onSelectHighlight;
 
   const ReaderContentsSheet({
     super.key,
+    this.theme,
     this.bookId,
     required this.bookTitle,
     required this.currentChapterIndex,
     required this.totalChapters,
     required this.chapters,
     required this.onSelectChapter,
+    this.onSelectHighlight,
   });
 
   static Future<void> show(
     BuildContext context, {
+    ReaderThemeConfig? theme,
     String? bookId,
     required String bookTitle,
     required int currentChapterIndex,
     required int totalChapters,
     required List<EpubChapterItem> chapters,
     required ValueChanged<int> onSelectChapter,
+    ValueChanged<Highlight>? onSelectHighlight,
   }) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: false,
       backgroundColor: Colors.transparent,
       builder: (_) => ReaderContentsSheet(
+        theme: theme,
         bookId: bookId,
         bookTitle: bookTitle,
         currentChapterIndex: currentChapterIndex,
         totalChapters: totalChapters,
         chapters: chapters,
         onSelectChapter: onSelectChapter,
+        onSelectHighlight: onSelectHighlight,
       ),
     );
   }
@@ -53,14 +66,21 @@ class ReaderContentsSheet extends StatefulWidget {
 }
 
 class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
-  int _selectedTabIndex = 0; // 0: Chapters, 1: Bookmarks, 2: Highlights
+  int _selectedTabIndex = 0; // Chapters and bookmarks.
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1C1C1E) : Colors.white;
-    final textColor = isDark ? Colors.white : Colors.black;
-    final subtextColor = isDark ? Colors.white60 : Colors.black54;
+    final isDark =
+        widget.theme?.systemBrightness == Brightness.dark ||
+        widget.theme == null && Theme.of(context).brightness == Brightness.dark;
+    final bgColor =
+        widget.theme?.uiControlsBackground ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final textColor =
+        widget.theme?.textColor ?? (isDark ? Colors.white : Colors.black);
+    final subtextColor =
+        widget.theme?.secondaryTextColor ??
+        (isDark ? Colors.white60 : Colors.black54);
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.88,
@@ -105,10 +125,7 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                       const SizedBox(height: 2),
                       Text(
                         'Chapter ${widget.currentChapterIndex + 1} of ${widget.totalChapters > 0 ? widget.totalChapters : widget.chapters.length}',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: subtextColor,
-                        ),
+                        style: TextStyle(fontSize: 13, color: subtextColor),
                       ),
                     ],
                   ),
@@ -121,7 +138,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                     height: 36,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                      color: isDark
+                          ? const Color(0xFF2C2C2E)
+                          : const Color(0xFFE5E5EA),
                     ),
                     child: Icon(
                       CupertinoIcons.checkmark,
@@ -143,7 +162,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
               height: 36,
               padding: const EdgeInsets.all(3),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                color: isDark
+                    ? const Color(0xFF2C2C2E)
+                    : const Color(0xFFE5E5EA),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
@@ -157,10 +178,7 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
           ),
 
           const SizedBox(height: 12),
-          Divider(
-            height: 1,
-            color: isDark ? Colors.white12 : Colors.black12,
-          ),
+          Divider(height: 1, color: isDark ? Colors.white12 : Colors.black12),
 
           // Tab Content
           Expanded(
@@ -168,12 +186,7 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                 ? _buildChaptersList(textColor, subtextColor, isDark)
                 : _selectedTabIndex == 1
                     ? _buildBookmarksTab(textColor, subtextColor, isDark)
-                    : _buildEmptyTabState(
-                        'No Highlights',
-                        'Select text while reading to create notes and highlights.',
-                        textColor,
-                        subtextColor,
-                      ),
+                    : _buildHighlightsTab(textColor, subtextColor, isDark),
           ),
         ],
       ),
@@ -197,7 +210,7 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                       color: Colors.black.withOpacity(0.08),
                       blurRadius: 4,
                       offset: const Offset(0, 1),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -300,11 +313,15 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
       ),
       itemBuilder: (context, index) {
         final bm = bookmarks[index];
-        final chIdx = bm.chapterIndex ?? (bm.pageIndex > 0 ? bm.pageIndex - 1 : 0);
+        final chIdx =
+            bm.chapterIndex ?? (bm.pageIndex > 0 ? bm.pageIndex - 1 : 0);
         final isCurrent = chIdx == widget.currentChapterIndex;
 
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 4,
+          ),
           leading: Container(
             width: 36,
             height: 36,
@@ -340,14 +357,133 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
             ),
             onPressed: () async {
               if (widget.bookId != null) {
-                await DatabaseService.instance
-                    .removeBookmark(widget.bookId!, bm.pageIndex);
+                await DatabaseService.instance.removeBookmark(
+                  widget.bookId!,
+                  bm.pageIndex,
+                );
                 setState(() {});
               }
             },
           ),
           onTap: () {
             widget.onSelectChapter(chIdx);
+            Navigator.of(context).pop();
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildHighlightsTab(Color textColor, Color subtextColor, bool isDark) {
+    final highlights = widget.bookId != null
+        ? DatabaseService.instance.getHighlights(widget.bookId!)
+        : <Highlight>[];
+
+    if (highlights.isEmpty) {
+      return _buildEmptyTabState(
+        'No Highlights',
+        'Select text while reading and tap Highlight to save passages and notes.',
+        textColor,
+        subtextColor,
+      );
+    }
+
+    Color colorFromKey(String key) {
+      switch (key) {
+        case 'green':
+          return const Color(0xFF34C759);
+        case 'blue':
+          return const Color(0xFF007AFF);
+        case 'pink':
+          return const Color(0xFFFF2D55);
+        case 'purple':
+          return const Color(0xFFAF52DE);
+        case 'yellow':
+        default:
+          return const Color(0xFFFFCC00);
+      }
+    }
+
+    return ListView.separated(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      itemCount: highlights.length,
+      separatorBuilder: (_, __) => Divider(
+        height: 1,
+        color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
+      ),
+      itemBuilder: (context, index) {
+        final hl = highlights[index];
+        var chIdx = 0;
+        try {
+          final loc = jsonDecode(hl.locatorString) as Map<String, dynamic>;
+          chIdx = (loc['chapterIndex'] as num?)?.toInt() ?? 0;
+        } catch (_) {}
+
+        final hlColor = colorFromKey(hl.color);
+
+        return ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 6,
+          ),
+          leading: Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              color: hlColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+          title: Text(
+            hl.selectedText,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              fontStyle: FontStyle.italic,
+              color: textColor,
+            ),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (hl.note != null && hl.note!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  hl.note!,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: HonColors.accentOrange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 2),
+              Text(
+                'Chapter ${chIdx + 1}',
+                style: TextStyle(fontSize: 12, color: subtextColor),
+              ),
+            ],
+          ),
+          trailing: IconButton(
+            icon: Icon(
+              CupertinoIcons.trash,
+              size: 18,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+            onPressed: () async {
+              await DatabaseService.instance.deleteHighlight(hl.id);
+              if (mounted) setState(() {});
+            },
+          ),
+          onTap: () {
+            if (widget.onSelectHighlight != null) {
+              widget.onSelectHighlight!(hl);
+            } else {
+              widget.onSelectChapter(chIdx);
+            }
             Navigator.of(context).pop();
           },
         );
@@ -379,11 +515,7 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
             Text(
               description,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: subtextColor,
-                height: 1.4,
-              ),
+              style: TextStyle(fontSize: 13, color: subtextColor, height: 1.4),
             ),
           ],
         ),

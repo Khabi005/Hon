@@ -3,11 +3,7 @@ class BrowseRequest {
   final String? filter;
   final String? sort;
 
-  const BrowseRequest({
-    this.page = 1,
-    this.filter,
-    this.sort,
-  });
+  const BrowseRequest({this.page = 1, this.filter, this.sort});
 }
 
 class SearchRequest {
@@ -118,4 +114,56 @@ abstract interface class NovelSource {
   Future<NovelDetails> getNovel(String novelId);
   Future<List<SourceChapter>> getChapters(String novelId);
   Future<ChapterContent> getChapter(String chapterId);
+}
+
+class SourceListing {
+  final int index;
+  final String name;
+  final bool incrementing;
+  const SourceListing({
+    required this.index,
+    required this.name,
+    required this.incrementing,
+  });
+}
+
+class SourceControl {
+  final int id;
+  final String label, group, kind;
+  final Object? value;
+  final List<String> options;
+  const SourceControl({
+    required this.id,
+    required this.label,
+    required this.group,
+    required this.kind,
+    this.value,
+    this.options = const [],
+  });
+  factory SourceControl.fromMap(Map<dynamic, dynamic> data) => SourceControl(
+    id: (data['id'] as num).toInt(),
+    label: data['label'] as String? ?? '',
+    group: data['group'] as String? ?? '',
+    kind: data['kind'] as String? ?? 'TextFilter',
+    value: data['value'],
+    options: (data['options'] as List? ?? [])
+        .map((value) => value.toString())
+        .toList(),
+  );
+}
+
+class SourceCatalogInfo {
+  final String baseUrl;
+  final List<SourceControl> settings, filters;
+  final bool hasSearch;
+  final bool searchIncrementing;
+  final List<SourceListing> listings;
+  const SourceCatalogInfo({
+    this.baseUrl = '',
+    this.settings = const [],
+    this.filters = const [],
+    this.hasSearch = true,
+    this.searchIncrementing = true,
+    this.listings = const [],
+  });
 }

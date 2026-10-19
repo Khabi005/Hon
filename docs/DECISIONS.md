@@ -78,3 +78,17 @@
   2. **"Remove from Library and Delete"**: Requires explicit user confirmation dialog. Permanently deletes the local EPUB/PDF file and local cover from disk, purges database entries, and cleans up associated download jobs.
 - **Reading Minutes Tracking**: Foreground reader sessions in Readium (`ReadiumReaderActivity`), `PdfReaderScreen`, and `ReaderScreen` accumulate active seconds and dynamically increment daily reading minutes in `DatabaseService` (`addReadingTime`).
 
+## ADR-010: Source Network Policy and Host Allowlist
+- **Decision:** Restrict Shosetsu Lua extension HTTP requests to the extension's declared `baseURL` registrable domain (and subdomains) plus an explicit per-source host allowlist. All HTTP redirects are strictly re-checked.
+- **Rationale:** 
+  - Prevents untrusted third-party extension scripts from scanning local networks (e.g., `192.168.x.x`, `10.x.x.x`, `localhost`) or leaking user session tokens/cookies to arbitrary external servers.
+  - OkHttp network interceptors verify the destination host for the initial request and every subsequent redirect hop.
+  - When blocked, a descriptive error naming the blocked host is raised (`Network request to '...' blocked by source network policy.`).
+- **What this may break:**
+  - Extensions that fetch chapter content, novel metadata, or CDN images hosted on distinct domains different from their declared `baseURL` (e.g. image CDNs like `cdn.example.com`, Cloudflare image domains, or external API gateways).
+- **How a user can add a host:**
+  - Navigate to **Browse** > tap the source's overflow menu / **Controls & Preferences** (or **Settings** > **Sources**).
+  - Scroll down to the **Network Policy & Allowed Hosts** section.
+  - Tap **Add Host**, enter the hostname or domain (e.g., `images.contentcdn.com`), and tap **Add**.
+  - Tap **Save** to persist the updated host allowlist.
+

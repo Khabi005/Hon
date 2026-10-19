@@ -14,7 +14,7 @@ class HonColors {
   static const Color lightSurface = Color(0xFFFFFFFF);
   static const Color lightSurfaceElevated = Color(0xFFFFFFFF);
   static const Color lightTextPrimary = Color(0xFF000000);
-  static const Color lightTextSecondary = Color(0xFF8E8E93);
+  static const Color lightTextSecondary = Color(0xFF68686F);
   static const Color lightTextTertiary = Color(0xFFC7C7CC);
   static const Color lightSeparator = Color(0xFFE5E5EA);
   static const Color lightCardBorder = Color(0x15000000);
@@ -24,7 +24,7 @@ class HonColors {
   static const Color darkSurface = Color(0xFF1C1C1E);
   static const Color darkSurfaceElevated = Color(0xFF2C2C2E);
   static const Color darkTextPrimary = Color(0xFFFFFFFF);
-  static const Color darkTextSecondary = Color(0xFF8E8E93);
+  static const Color darkTextSecondary = Color(0xFFB0B0B6);
   static const Color darkTextTertiary = Color(0xFF48484A);
   static const Color darkSeparator = Color(0xFF38383A);
   static const Color darkCardBorder = Color(0x20FFFFFF);
