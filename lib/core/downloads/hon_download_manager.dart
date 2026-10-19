@@ -156,6 +156,14 @@ class HonDownloadManager {
     await db.updateDownloadJob(
       latest.copyWith(status: DownloadStatus.paused, updatedAt: DateTime.now()),
     );
+    await db.ensureChaptersLoaded(job.bookId);
+    final chapters = db.getChapters(job.bookId);
+    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
+      await db.saveChapters(job.bookId, [
+        ch.copyWith(downloadState: ChapterDownloadState.paused, updatedAt: DateTime.now()),
+      ]);
+    }
   }
 
   Future<void> resumeDownload(String jobId) async {
@@ -167,8 +175,17 @@ class HonDownloadManager {
     final next = job.copyWith(
       status: DownloadStatus.queued,
       progress: 0,
+      errorMessage: null,
       updatedAt: DateTime.now(),
     );
+    await db.ensureChaptersLoaded(job.bookId);
+    final chapters = db.getChapters(job.bookId);
+    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
+      await db.saveChapters(job.bookId, [
+        ch.copyWith(downloadState: ChapterDownloadState.queued, updatedAt: DateTime.now()),
+      ]);
+    }
     try {
       await enqueueDownload(next, replace: true);
     } catch (error) {
@@ -197,9 +214,37 @@ class HonDownloadManager {
     for (final job
         in DatabaseService.instance
             .getAllDownloadJobs()
-            .where((job) => job.status == DownloadStatus.paused)
+            .where((job) => job.status == DownloadStatus.paused || job.status == DownloadStatus.failed)
             .toList()) {
       await resumeDownload(job.id);
+    }
+  }
+
+  Future<void> cancelAll() async {
+    for (final job
+        in DatabaseService.instance
+            .getAllDownloadJobs()
+            .where((job) => job.isActive || job.status == DownloadStatus.paused)
+            .toList()) {
+      await cancelDownload(job.id);
+    }
+  }
+
+  Future<void> pauseSelected(Iterable<String> jobIds) async {
+    for (final id in jobIds) {
+      await pauseDownload(id);
+    }
+  }
+
+  Future<void> resumeSelected(Iterable<String> jobIds) async {
+    for (final id in jobIds) {
+      await resumeDownload(id);
+    }
+  }
+
+  Future<void> cancelSelected(Iterable<String> jobIds) async {
+    for (final id in jobIds) {
+      await cancelDownload(id);
     }
   }
 
