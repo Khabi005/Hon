@@ -1,6 +1,6 @@
-# hon
+# Hon
 
-A new Flutter project.
+A Novel Reader Inspired from Apple Books
 
 ## Getting Started
 
