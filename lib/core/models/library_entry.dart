@@ -50,18 +50,27 @@ class LibraryEntry {
   }
 
   factory LibraryEntry.fromMap(Map<String, dynamic> map) {
+    final inLib = map['isInLibrary'];
+    final isInLibrary = inLib is bool ? inLib : (inLib is int ? inLib == 1 : false);
+    final fin = map['isFinished'];
+    final isFinished = fin is bool ? fin : (fin is int ? fin == 1 : false);
+    final rawCols = map['collectionIds'];
+    final List<String> collectionIds = rawCols is List
+        ? rawCols.map((c) => c.toString()).where((s) => s.isNotEmpty).toList()
+        : (rawCols as String? ?? '')
+            .split(',')
+            .where((s) => s.isNotEmpty)
+            .toList();
+
     return LibraryEntry(
       bookId: map['bookId'] as String,
-      isInLibrary: (map['isInLibrary'] as int) == 1,
+      isInLibrary: isInLibrary,
       dateAdded: DateTime.parse(map['dateAdded'] as String),
       lastReadAt: map['lastReadAt'] != null
           ? DateTime.parse(map['lastReadAt'] as String)
           : null,
-      isFinished: (map['isFinished'] as int? ?? 0) == 1,
-      collectionIds: (map['collectionIds'] as String? ?? '')
-          .split(',')
-          .where((s) => s.isNotEmpty)
-          .toList(),
+      isFinished: isFinished,
+      collectionIds: collectionIds,
       customSortOrder: (map['customSortOrder'] as int?) ?? 0,
     );
   }

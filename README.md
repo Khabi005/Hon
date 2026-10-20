@@ -80,21 +80,27 @@ Have an idea for a feature? Want a specific novel source added? Encountered a bu
 
 ---
 
-## 📱 Interface Gallery
+## 📱 Interface Gallery (Dark Theme)
 
 <div align="center">
 
-| Home & Shelf (Light Mode) | Home & Shelf (Dark Mode) |
+| Home & Reading Shelf | Library & Book Collections |
 |:---:|:---:|
-| <img src="docs/home-history-previews/home-light.png" alt="Home Light" width="360" /> | <img src="docs/home-history-previews/home-dark.png" alt="Home Dark" width="360" /> |
+| <img src="docs/screenshots/home-dark.png" alt="Home Screen (Dark)" width="320" style="border-radius: 16px;" /> | <img src="docs/screenshots/library-dark.png" alt="Library Screen (Dark)" width="320" style="border-radius: 16px;" /> |
 
-| Library & Collections | Source Catalog & Extensions |
+| Novel Sources & Catalog | Reader Themes & Settings |
 |:---:|:---:|
-| <img src="docs/phase1-previews/library.png" alt="Library" width="360" /> | <img src="docs/phase1-previews/browse.png" alt="Browse Sources" width="360" /> |
+| <img src="docs/screenshots/browse-dark.png" alt="Browse Sources (Dark)" width="320" style="border-radius: 16px;" /> | <img src="docs/screenshots/reader-themes.png" alt="Reader Themes & Settings" width="320" style="border-radius: 16px;" /> |
 
-| Resilient Background Downloads | Appearance & Theme Settings |
+| Reading History & Analytics | Source Controls & Sandbox |
 |:---:|:---:|
-| <img src="docs/phase1-previews/downloads.png" alt="Downloads" width="360" /> | <img src="docs/phase1-previews/appearance.png" alt="Appearance Settings" width="360" /> |
+| <img src="docs/screenshots/history-dark.png" alt="Reading History (Dark)" width="320" style="border-radius: 16px;" /> | <img src="docs/screenshots/source-controls-dark.png" alt="Source Controls (Dark)" width="320" style="border-radius: 16px;" /> |
+
+<details>
+<summary>☀️ <em>View Light Mode Home Preview</em></summary>
+<br>
+<img src="docs/screenshots/home-light.png" alt="Home Screen (Light)" width="320" style="border-radius: 16px;" />
+</details>
 
 </div>
 

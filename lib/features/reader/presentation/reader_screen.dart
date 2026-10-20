@@ -16,6 +16,7 @@ import '../../../core/sources/source_registry.dart';
 import '../../../core/models/book.dart';
 import '../../../core/models/reading_progress.dart';
 import '../../../core/models/highlight.dart';
+import '../../../core/models/bookmark.dart';
 import '../../../core/utils/epub_parser.dart';
 import '../../../shared/widgets/ornate_divider.dart';
 import 'reader_document.dart';
@@ -374,13 +375,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         ),
       ),
     );
+    final selectableRichText = SelectionListener(
+      selectionNotifier: _selectionNotifierFor(chapter, index),
+      child: richText,
+    );
 
     final contentWidget = block.heading
         ? Padding(
             padding: const EdgeInsets.only(top: 28, bottom: 18),
-            child: richText,
+            child: selectableRichText,
           )
-        : richText;
+        : selectableRichText;
 
     if (blockNotes.isEmpty) return contentWidget;
 
@@ -428,11 +433,29 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   DateTime? _sessionStartTime;
   bool _isForegrounded = true;
   late ReaderPreferencesNotifier _prefsNotifier;
+  final Map<String, SelectionListenerNotifier> _selectionNotifiers = {};
+
+  SelectionListenerNotifier _selectionNotifierFor(int chapter, int block) {
+    return _selectionNotifiers.putIfAbsent(
+      '$chapter:$block',
+      () => SelectionListenerNotifier(),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     _prefsNotifier = ref.read(readerPreferencesProvider.notifier);
+    _prefsNotifier.setActiveBookId(widget.book.id);
+    final bookOverrides = DatabaseService.instance.getBookReaderSettings(widget.book.id);
+    if (bookOverrides != null) {
+      _prefsNotifier.loadFromState(
+        ReaderPreferencesState.fromMap(bookOverrides),
+        bookId: widget.book.id,
+      );
+    } else {
+      _prefsNotifier.reloadDefaults(preserveBookId: widget.book.id);
+    }
     WidgetsBinding.instance.addObserver(this);
     // Do NOT start timer during loading! Timer starts once content is parsed, readable, AND foregrounded.
     _sessionStartTime = null;
@@ -503,7 +526,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_isOrientationLocked) {
       SystemChrome.setPreferredOrientations(const []);
     }
+    _prefsNotifier.setActiveBookId(null);
     _prefsNotifier.reloadDefaults();
+    for (final notifier in _selectionNotifiers.values) {
+      notifier.dispose();
+    }
+    _selectionNotifiers.clear();
     super.dispose();
   }
 
@@ -569,42 +597,68 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final doc = _document(_currentChapterIndex);
     final blocks = doc.blocks;
 
-    // Gather currently visible block indices to prevent selecting repeated text elsewhere
-    final visibleBlockIndices = <int>[];
-    if (_pagedPages.isNotEmpty && _currentPageIndex < _pagedPages.length) {
-      visibleBlockIndices.addAll(
-        _pagedPages[_currentPageIndex].map((f) => f.block).toSet(),
-      );
-    } else {
-      _captureAnchor();
-      for (int i = math.max(0, _anchor.block - 1);
-          i <= math.min(blocks.length - 1, _anchor.block + 3);
-          i++) {
-        visibleBlockIndices.add(i);
-      }
-    }
-
     int foundBlock = -1;
     int foundStart = -1;
     int foundEnd = -1;
     List<Map<String, int>>? multiSpans;
+    String actualSelectedText = text;
 
-    // 1. Check visible blocks for exact single-block match first
-    for (final i in visibleBlockIndices) {
-      if (i < 0 || i >= blocks.length) continue;
-      final blockText = blocks[i].text;
-      final idx = blockText.indexOf(text);
-      if (idx != -1) {
-        foundBlock = i;
-        foundStart = idx;
-        foundEnd = idx + text.length;
-        break;
+    // 0. Primary: Capture the real selection directly from SelectionListenerNotifiers
+    final activeSelections = <({int block, int start, int end, String text})>[];
+    for (int i = 0; i < blocks.length; i++) {
+      final notifier = _selectionNotifiers['$_currentChapterIndex:$i'];
+      if (notifier != null && notifier.registered) {
+        try {
+          final range = notifier.selection.range;
+          if (range != null) {
+            final startOffset = math.min(range.startOffset, range.endOffset);
+            final endOffset = math.max(range.startOffset, range.endOffset);
+            if (endOffset > startOffset) {
+              final bText = blocks[i].text;
+              final s = startOffset.clamp(0, bText.length);
+              final e = endOffset.clamp(0, bText.length);
+              if (e > s) {
+                activeSelections.add((block: i, start: s, end: e, text: bText.substring(s, e)));
+              }
+            }
+          }
+        } catch (_) {}
       }
     }
 
-    // 2. Check all blocks for single-block match if not on visible screen
+    if (activeSelections.isNotEmpty) {
+      foundBlock = activeSelections.first.block;
+      foundStart = activeSelections.first.start;
+      foundEnd = activeSelections.first.end;
+      if (activeSelections.length > 1) {
+        multiSpans = activeSelections
+            .map((s) => {'block': s.block, 'startOffset': s.start, 'endOffset': s.end})
+            .toList();
+        actualSelectedText = activeSelections.map((s) => s.text).join('\n\n');
+      } else {
+        actualSelectedText = activeSelections.first.text;
+      }
+    }
+
+    // Fallback: Gather currently visible block indices to prevent selecting repeated text elsewhere
     if (foundBlock == -1) {
-      for (int i = 0; i < blocks.length; i++) {
+      final visibleBlockIndices = <int>[];
+      if (_pagedPages.isNotEmpty && _currentPageIndex < _pagedPages.length) {
+        visibleBlockIndices.addAll(
+          _pagedPages[_currentPageIndex].map((f) => f.block).toSet(),
+        );
+      } else {
+        _captureAnchor();
+        for (int i = math.max(0, _anchor.block - 1);
+            i <= math.min(blocks.length - 1, _anchor.block + 3);
+            i++) {
+          visibleBlockIndices.add(i);
+        }
+      }
+
+      // 1. Check visible blocks for exact single-block match first
+      for (final i in visibleBlockIndices) {
+        if (i < 0 || i >= blocks.length) continue;
         final blockText = blocks[i].text;
         final idx = blockText.indexOf(text);
         if (idx != -1) {
@@ -614,75 +668,89 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           break;
         }
       }
-    }
 
-    // 3. Multi-block / cross-paragraph selection
-    if (foundBlock == -1) {
-      final paragraphs = text
-          .split(RegExp(r'\n+'))
-          .map((p) => p.trim())
-          .where((p) => p.isNotEmpty)
-          .toList();
-
-      if (paragraphs.length > 1) {
-        final searchBlocks = [
-          ...visibleBlockIndices,
-          ...List.generate(blocks.length, (i) => i)
-              .where((i) => !visibleBlockIndices.contains(i)),
-        ];
-        for (final startB in searchBlocks) {
-          if (startB + paragraphs.length - 1 >= blocks.length) continue;
-          final firstText = blocks[startB].text;
-          final firstIdx = firstText.lastIndexOf(paragraphs.first);
-          if (firstIdx == -1) continue;
-
-          bool matches = true;
-          for (int k = 1; k < paragraphs.length - 1; k++) {
-            if (!blocks[startB + k].text.contains(paragraphs[k])) {
-              matches = false;
-              break;
-            }
+      // 2. Check all blocks for single-block match if not on visible screen
+      if (foundBlock == -1) {
+        for (int i = 0; i < blocks.length; i++) {
+          final blockText = blocks[i].text;
+          final idx = blockText.indexOf(text);
+          if (idx != -1) {
+            foundBlock = i;
+            foundStart = idx;
+            foundEnd = idx + text.length;
+            break;
           }
-          if (!matches) continue;
-
-          final lastB = startB + paragraphs.length - 1;
-          final lastText = blocks[lastB].text;
-          final lastIdx = lastText.indexOf(paragraphs.last);
-          if (lastIdx == -1) continue;
-
-          foundBlock = startB;
-          foundStart = firstIdx;
-          foundEnd = firstText.length;
-          multiSpans = <Map<String, int>>[
-            {
-              'block': startB,
-              'startOffset': firstIdx,
-              'endOffset': firstText.length,
-            },
-          ];
-          for (int k = 1; k < paragraphs.length - 1; k++) {
-            multiSpans.add({
-              'block': startB + k,
-              'startOffset': 0,
-              'endOffset': blocks[startB + k].text.length,
-            });
-          }
-          multiSpans.add({
-            'block': lastB,
-            'startOffset': 0,
-            'endOffset': lastIdx + paragraphs.last.length,
-          });
-          break;
         }
       }
-    }
 
-    // 4. Fallback to anchor if still not located
-    if (foundBlock == -1) {
-      _captureAnchor();
-      foundBlock = _anchor.block;
-      foundStart = _anchor.offset;
-      foundEnd = foundStart + text.length;
+      // 3. Multi-block / cross-paragraph selection fallback
+      if (foundBlock == -1) {
+        final paragraphs = text
+            .split(RegExp(r'\n+'))
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty)
+            .toList();
+
+        if (paragraphs.length > 1) {
+          final searchBlocks = [
+            ...visibleBlockIndices,
+            ...List.generate(blocks.length, (i) => i)
+                .where((i) => !visibleBlockIndices.contains(i)),
+          ];
+          for (final startB in searchBlocks) {
+            if (startB + paragraphs.length - 1 >= blocks.length) continue;
+            final firstText = blocks[startB].text;
+            final firstIdx = firstText.lastIndexOf(paragraphs.first);
+            if (firstIdx == -1) continue;
+
+            bool matches = true;
+            for (int k = 1; k < paragraphs.length - 1; k++) {
+              if (!blocks[startB + k].text.contains(paragraphs[k])) {
+                matches = false;
+                break;
+              }
+            }
+            if (!matches) continue;
+
+            final lastB = startB + paragraphs.length - 1;
+            final lastText = blocks[lastB].text;
+            final lastIdx = lastText.indexOf(paragraphs.last);
+            if (lastIdx == -1) continue;
+
+            foundBlock = startB;
+            foundStart = firstIdx;
+            foundEnd = firstText.length;
+            multiSpans = <Map<String, int>>[
+              {
+                'block': startB,
+                'startOffset': firstIdx,
+                'endOffset': firstText.length,
+              },
+            ];
+            for (int k = 1; k < paragraphs.length - 1; k++) {
+              multiSpans.add({
+                'block': startB + k,
+                'startOffset': 0,
+                'endOffset': blocks[startB + k].text.length,
+              });
+            }
+            multiSpans.add({
+              'block': lastB,
+              'startOffset': 0,
+              'endOffset': lastIdx + paragraphs.last.length,
+            });
+            break;
+          }
+        }
+      }
+
+      // 4. Fallback to anchor if still not located
+      if (foundBlock == -1) {
+        _captureAnchor();
+        foundBlock = _anchor.block;
+        foundStart = _anchor.offset;
+        foundEnd = foundStart + text.length;
+      }
     }
 
     int pageIdx = _currentPageIndex;
@@ -692,12 +760,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       if (p != -1) pageIdx = p;
     }
 
+    final blockText = (foundBlock >= 0 && foundBlock < blocks.length) ? blocks[foundBlock].text : '';
+    final prefixContext = blockText.substring(math.max(0, foundStart - 32), math.max(0, foundStart));
+    final suffixContext = blockText.substring(math.min(blockText.length, foundEnd), math.min(blockText.length, foundEnd + 32));
+
     final locatorMap = <String, dynamic>{
+      'engine': 'hon-html-v2',
       'chapterIndex': _currentChapterIndex,
       'pageIndex': pageIdx,
       'block': foundBlock,
       'startOffset': foundStart,
       'endOffset': foundEnd,
+      'prefixContext': prefixContext,
+      'suffixContext': suffixContext,
     };
     if (multiSpans != null && multiSpans.isNotEmpty) {
       locatorMap['spans'] = multiSpans;
@@ -707,7 +782,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       id: 'hl_${widget.book.id}_${DateTime.now().microsecondsSinceEpoch}',
       bookId: widget.book.id,
       locatorString: locator,
-      selectedText: text,
+      selectedText: actualSelectedText,
       color: color,
       note: note,
       createdAt: DateTime.now(),
@@ -731,6 +806,63 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
   }
 
+  void _jumpToBookmark(Bookmark bm) {
+    int chIdx = bm.pageIndex;
+    int blockIdx = 0;
+    int offset = 0;
+    int pageIdx = 0;
+    if (bm.locatorString != null && bm.locatorString!.isNotEmpty) {
+      try {
+        final loc = jsonDecode(bm.locatorString!) as Map<String, dynamic>;
+        chIdx = (loc['chapter'] as num?)?.toInt() ??
+            (loc['chapterIndex'] as num?)?.toInt() ??
+            bm.pageIndex;
+        blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
+        offset = (loc['offset'] as num?)?.toInt() ?? 0;
+        pageIdx = (loc['page'] as num?)?.toInt() ?? (loc['pageIndex'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+    }
+
+    if (chIdx < 0 || chIdx >= _chapters.length) return;
+
+    final isPaginated = ref.read(readerPreferencesProvider).layoutMode == ReaderLayoutMode.paginated;
+    setState(() {
+      _currentChapterIndex = chIdx;
+      _anchor = ReaderTextAnchor(blockIdx, offset);
+      _hasAnchor = true;
+      _layoutSignature = null;
+      _scrollBaseIndex = chIdx;
+      _chapterKeys.clear();
+      _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, chIdx);
+    });
+
+    if (isPaginated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_pagedPages.isNotEmpty) {
+          final targetPage = _pagedPages.indexWhere((page) =>
+              page.any((f) => f.block == blockIdx && offset >= f.start && (f.end == 0 || offset <= f.end)));
+          final finalPage = targetPage != -1 ? targetPage : pageIdx.clamp(0, _pagedPages.length - 1);
+          setState(() => _currentPageIndex = finalPage);
+          if (_pageController.hasClients) {
+            _pageController.jumpToPage(finalPage + 1);
+          }
+        }
+      });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        final key = _blockKeys['$chIdx:$blockIdx'];
+        final ctx = key?.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+        } else {
+          _restoreScrollAnchor();
+        }
+      });
+    }
+  }
+
   void _jumpToHighlight(Highlight highlight) {
     int chIdx = 0;
     int blockIdx = 0;
@@ -739,8 +871,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     try {
       final loc = jsonDecode(highlight.locatorString) as Map<String, dynamic>;
       chIdx = (loc['chapterIndex'] as num?)?.toInt() ?? 0;
-      blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
-      offset = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+      if (loc['spans'] is List && (loc['spans'] as List).isNotEmpty) {
+        final firstSpan = (loc['spans'] as List).first as Map;
+        blockIdx = (firstSpan['block'] as num?)?.toInt() ?? 0;
+        offset = (firstSpan['startOffset'] as num?)?.toInt() ?? 0;
+      } else {
+        blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
+        offset = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+      }
       pageIdx = (loc['pageIndex'] as num?)?.toInt() ?? 0;
     } catch (_) {}
 
@@ -1658,6 +1796,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               chapters: _chapters,
               onSelectChapter: _jumpToChapter,
               onSelectHighlight: _jumpToHighlight,
+              onSelectBookmark: _jumpToBookmark,
             );
           },
           onOpenSearch: () {

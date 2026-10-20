@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
+import 'package:html/parser.dart' as html_parser;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/database_service.dart';
@@ -156,8 +157,22 @@ class BackupService {
       if (value is String) {
         if (entry.key == 'hon_collections_v1') {
           final incoming = Map<String, String>.from(jsonDecode(value) as Map);
+          final remap = <String, String>{};
           for (final c in incoming.entries) {
-            await DatabaseService.instance.createCollection(c.value, id: c.key);
+            final resolvedId = await DatabaseService.instance.createCollection(c.value, id: c.key);
+            if (resolvedId != c.key) {
+              remap[c.key] = resolvedId;
+            }
+          }
+          if (remap.isNotEmpty) {
+            final allEntries = DatabaseService.instance.libraryEntries;
+            for (final libEntry in allEntries) {
+              final needsRemap = libEntry.collectionIds.any((id) => remap.containsKey(id));
+              if (needsRemap) {
+                final remappedIds = libEntry.collectionIds.map((id) => remap[id] ?? id).toSet().toList();
+                await DatabaseService.instance.setBookCollections(libEntry.bookId, remappedIds);
+              }
+            }
           }
         } else if (entry.key == 'hon_extension_repositories_v1') {
           final existing =
@@ -506,6 +521,18 @@ Future<Map<String, dynamic>> _extractArchive(
       return null;
     }
 
+    final imageSrcMap = <String, String>{};
+    for (final entry in destinations.entries) {
+      final rel = entry.key;
+      if (rel.startsWith('images/')) {
+        final oldAbs = p.join(origin, rel.replaceAll('/', p.separator));
+        final oldFileUri = Uri.file(oldAbs).toString();
+        final newFileUri = Uri.file(entry.value).toString();
+        imageSrcMap[oldAbs] = entry.value;
+        imageSrcMap[oldFileUri] = newFileUri;
+      }
+    }
+
     final metadata = Map<String, dynamic>.from(manifest['metadata'] as Map);
     for (final value in metadata['books'] as List) {
       final book = value as Map;
@@ -520,32 +547,28 @@ Future<Map<String, dynamic>> _extractArchive(
         chapter['downloadState'] = 'notDownloaded';
       }
       final newChapterPath = chapter['localFilePath'] as String?;
-      if (newChapterPath != null) {
+      if (newChapterPath != null && imageSrcMap.isNotEmpty) {
         final chapterFile = File(newChapterPath);
         if (chapterFile.existsSync()) {
-          try {
-            var content = chapterFile.readAsStringSync();
-            var modified = false;
-            for (final entry in destinations.entries) {
-              final rel = entry.key;
-              if (rel.startsWith('images/')) {
-                final oldAbs = p.join(origin, rel.replaceAll('/', p.separator));
-                final oldFileUri = Uri.file(oldAbs).toString();
-                final newFileUri = Uri.file(entry.value).toString();
-                if (content.contains(oldAbs)) {
-                  content = content.replaceAll(oldAbs, entry.value);
-                  modified = true;
-                }
-                if (content.contains(oldFileUri)) {
-                  content = content.replaceAll(oldFileUri, newFileUri);
-                  modified = true;
-                }
-              }
+          final content = chapterFile.readAsStringSync();
+          final fragment = html_parser.parseFragment(content);
+          final imgElements = fragment.querySelectorAll('img[src], img[data-src]');
+          var modified = false;
+          for (final img in imgElements) {
+            final src = img.attributes['src'];
+            if (src != null && imageSrcMap.containsKey(src)) {
+              img.attributes['src'] = imageSrcMap[src]!;
+              modified = true;
             }
-            if (modified) {
-              chapterFile.writeAsStringSync(content, flush: true);
+            final dataSrc = img.attributes['data-src'];
+            if (dataSrc != null && imageSrcMap.containsKey(dataSrc)) {
+              img.attributes['data-src'] = imageSrcMap[dataSrc]!;
+              modified = true;
             }
-          } catch (_) {}
+          }
+          if (modified) {
+            chapterFile.writeAsStringSync(fragment.outerHtml, flush: true);
+          }
         }
       }
     }

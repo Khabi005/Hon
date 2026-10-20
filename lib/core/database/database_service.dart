@@ -102,6 +102,8 @@ class DatabaseService {
 
   Map<String, String> get collections => Map.unmodifiable(_collections);
 
+  List<LibraryEntry> get libraryEntries => List.unmodifiable(_libraryEntries.values);
+
   LibraryEntry? getLibraryEntry(String bookId) => _libraryEntries[bookId];
 
   Future<String> createCollection(String name, {String? id}) async {
@@ -424,9 +426,46 @@ class DatabaseService {
         for (final book in books) {
           await saveBook(book);
         }
+        final collectionsMap = data['collections'] as Map?;
+        final collectionRemap = <String, String>{};
+        if (collectionsMap != null) {
+          final allExisting = Map<String, String>.from(_collections);
+          for (final entry in collectionsMap.entries) {
+            final colId = entry.key.toString();
+            final colName = entry.value.toString();
+            final clean = colName.trim();
+            final existingEntry = allExisting.entries.where(
+              (e) => e.value.toLowerCase() == clean.toLowerCase(),
+            ).firstOrNull;
+            if (existingEntry != null && existingEntry.key != colId) {
+              collectionRemap[colId] = existingEntry.key;
+            } else {
+              _collections[colId] = clean;
+              if (database != null) {
+                await database.into(database.collectionsTable).insert(
+                  CollectionsTableCompanion.insert(
+                    id: colId,
+                    name: clean,
+                    createdAt: DateTime.now(),
+                    updatedAt: DateTime.now(),
+                  ),
+                  mode: drift.InsertMode.insertOrReplace,
+                );
+              }
+            }
+          }
+        }
         for (final entry in entries) {
-          await _writeLibraryEntry(entry);
-          _libraryEntries[entry.bookId] = entry;
+          final effective = collectionRemap.isEmpty
+              ? entry
+              : entry.copyWith(
+                  collectionIds: entry.collectionIds
+                      .map((id) => collectionRemap[id] ?? id)
+                      .toSet()
+                      .toList(),
+                );
+          await _writeLibraryEntry(effective);
+          _libraryEntries[effective.bookId] = effective;
         }
         final groups = <String, List<Chapter>>{};
         for (final chapter in chapters) {
@@ -448,25 +487,6 @@ class DatabaseService {
           try {
             await saveHighlight(Highlight.fromMap(item));
           } catch (_) {}
-        }
-        final collectionsMap = data['collections'] as Map?;
-        if (collectionsMap != null) {
-          for (final entry in collectionsMap.entries) {
-            final colId = entry.key.toString();
-            final colName = entry.value.toString();
-            _collections[colId] = colName;
-            if (database != null) {
-              await database.into(database.collectionsTable).insert(
-                CollectionsTableCompanion.insert(
-                  id: colId,
-                  name: colName,
-                  createdAt: DateTime.now(),
-                  updatedAt: DateTime.now(),
-                ),
-                mode: drift.InsertMode.insertOrReplace,
-              );
-            }
-          }
         }
         final settingsMap = data['bookReaderSettings'] as Map?;
         if (settingsMap != null) {
@@ -697,6 +717,8 @@ class DatabaseService {
               chapterIndex: drift.Value(bm.chapterIndex),
               label: drift.Value(bm.label),
               snippet: drift.Value(bm.snippet),
+              locatorString: drift.Value(bm.locatorString),
+              locatorVersion: drift.Value(bm.locatorVersion),
               createdAt: bm.createdAt,
             ),
             mode: drift.InsertMode.insertOrReplace,
@@ -2000,15 +2022,22 @@ class DatabaseService {
     return List.unmodifiable(list);
   }
 
-  bool isBookmarked(String bookId, int pageIndex) {
+  bool isBookmarked(String bookId, int pageIndex, {String? locatorString}) {
     final list = _bookmarks[bookId];
-    if (list == null) return false;
+    if (list == null || list.isEmpty) return false;
+    if (locatorString != null && locatorString.isNotEmpty) {
+      return list.any((b) => b.locatorString == locatorString);
+    }
     return list.any((b) => b.pageIndex == pageIndex);
   }
 
   Future<void> addBookmark(Bookmark bookmark) async {
     final list = _bookmarks.putIfAbsent(bookmark.bookId, () => []);
-    list.removeWhere((b) => b.pageIndex == bookmark.pageIndex);
+    list.removeWhere((b) =>
+        b.id == bookmark.id ||
+        (bookmark.locatorString != null &&
+            bookmark.locatorString!.isNotEmpty &&
+            b.locatorString == bookmark.locatorString));
     list.add(bookmark);
 
     final database = _db;
@@ -2033,16 +2062,39 @@ class DatabaseService {
     _notify();
   }
 
-  Future<void> removeBookmark(String bookId, int pageIndex) async {
+  Future<void> removeBookmarkById(String id) async {
+    for (final list in _bookmarks.values) {
+      list.removeWhere((b) => b.id == id);
+    }
+    final database = _db;
+    if (database != null) {
+      await (database.delete(database.bookmarksTable)
+            ..where((t) => t.id.equals(id)))
+          .go();
+    }
+    await _syncToDriftAndBackup();
+    _notify();
+  }
+
+  Future<void> removeBookmark(String bookId, int pageIndex, {String? locatorString}) async {
     final list = _bookmarks[bookId];
     if (list != null) {
-      list.removeWhere((b) => b.pageIndex == pageIndex);
-      final database = _db;
-      if (database != null) {
-        await (database.delete(database.bookmarksTable)..where(
-              (t) => t.bookId.equals(bookId) & t.pageIndex.equals(pageIndex),
-            ))
-            .go();
+      if (locatorString != null && locatorString.isNotEmpty) {
+        list.removeWhere((b) => b.locatorString == locatorString);
+        final database = _db;
+        if (database != null) {
+          await (database.delete(database.bookmarksTable)
+                ..where((t) => t.bookId.equals(bookId) & t.locatorString.equals(locatorString)))
+              .go();
+        }
+      } else {
+        list.removeWhere((b) => b.pageIndex == pageIndex);
+        final database = _db;
+        if (database != null) {
+          await (database.delete(database.bookmarksTable)
+                ..where((t) => t.bookId.equals(bookId) & t.pageIndex.equals(pageIndex)))
+              .go();
+        }
       }
       await _syncToDriftAndBackup();
       _notify();
@@ -2056,15 +2108,39 @@ class DatabaseService {
     String? snippet,
     String? locatorString,
     String? locatorVersion,
+    String? customId,
   }) async {
-    if (isBookmarked(bookId, pageIndex)) {
-      await removeBookmark(bookId, pageIndex);
+    final list = _bookmarks[bookId] ?? [];
+    Bookmark? existing;
+    if (locatorString != null && locatorString.isNotEmpty) {
+      for (final b in list) {
+        if (b.locatorString == locatorString) {
+          existing = b;
+          break;
+        }
+      }
+    } else {
+      for (final b in list) {
+        if (b.pageIndex == pageIndex) {
+          existing = b;
+          break;
+        }
+      }
+    }
+
+    if (existing != null) {
+      await removeBookmarkById(existing.id);
       return false;
     } else {
+      final locatorHash = (locatorString != null && locatorString.isNotEmpty)
+          ? locatorString.hashCode.toRadixString(16)
+          : '$pageIndex';
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
       final bm = Bookmark(
-        id: 'bm_${bookId}_$pageIndex',
+        id: customId ?? 'bm_${bookId}_${locatorHash}_$timestamp',
         bookId: bookId,
         pageIndex: pageIndex,
+        chapterIndex: pageIndex,
         label: label ?? 'Page $pageIndex',
         createdAt: DateTime.now(),
         snippet: snippet,

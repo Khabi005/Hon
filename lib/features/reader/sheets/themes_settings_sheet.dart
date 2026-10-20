@@ -280,8 +280,7 @@ class ThemesSettingsSheet extends ConsumerWidget {
                   const SizedBox(height: 10),
                   TextButton.icon(
                     onPressed: () async {
-                      await DatabaseService.instance.resetBookReaderSettings(bookId!);
-                      await notifier.reloadDefaults(preserveBookId: bookId);
+                      await notifier.resetToGlobalDefaults(targetBookId: bookId);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Reset book reader settings to defaults.')),

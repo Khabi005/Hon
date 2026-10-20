@@ -117,10 +117,14 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     }
   }
 
-  void _set(ReaderPreferencesState next, {String? targetBookId}) {
+  void _set(
+    ReaderPreferencesState next, {
+    String? targetBookId,
+    bool explicitGlobal = false,
+  }) {
     _dirty = true;
     state = next;
-    final destinationBookId = targetBookId ?? _activeBookId;
+    final destinationBookId = explicitGlobal ? null : (targetBookId ?? _activeBookId);
     _pendingWrite = _pendingWrite
         .then((_) => _persist(next, targetBookId: destinationBookId))
         .catchError(
@@ -147,47 +151,47 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     );
   }
 
-  void setPreset(ReaderThemePreset preset) {
-    _set(state.copyWith(themePreset: preset));
+  void setPreset(ReaderThemePreset preset, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(themePreset: preset), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void setLayoutMode(ReaderLayoutMode mode) {
-    _set(state.copyWith(layoutMode: mode));
+  void setLayoutMode(ReaderLayoutMode mode, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(layoutMode: mode), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void setFontFamily(ReaderFontFamily family) {
-    _set(state.copyWith(fontFamily: family, publisherStyles: false));
+  void setFontFamily(ReaderFontFamily family, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(fontFamily: family, publisherStyles: false), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void setFontSize(double size) {
-    _set(state.copyWith(fontSize: size.clamp(12.0, 32.0)));
+  void setFontSize(double size, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(fontSize: size.clamp(12.0, 32.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void increaseFontSize() {
-    setFontSize(state.fontSize + 1.5);
+  void increaseFontSize({String? targetBookId, bool explicitGlobal = false}) {
+    setFontSize(state.fontSize + 1.5, targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void decreaseFontSize() {
-    setFontSize(state.fontSize - 1.5);
+  void decreaseFontSize({String? targetBookId, bool explicitGlobal = false}) {
+    setFontSize(state.fontSize - 1.5, targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void setLineHeight(double height) {
-    _set(state.copyWith(lineHeight: height.clamp(1.2, 2.5)));
+  void setLineHeight(double height, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(lineHeight: height.clamp(1.2, 2.5)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void setHorizontalMargin(double value) =>
-      _set(state.copyWith(horizontalMargin: value.clamp(8.0, 48.0)));
-  void setParagraphSpacing(double value) =>
-      _set(state.copyWith(paragraphSpacing: value.clamp(0.0, 32.0)));
-  void setTextIndent(double value) =>
-      _set(state.copyWith(textIndent: value.clamp(0.0, 64.0)));
+  void setHorizontalMargin(double value, {String? targetBookId, bool explicitGlobal = false}) =>
+      _set(state.copyWith(horizontalMargin: value.clamp(8.0, 48.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
+  void setParagraphSpacing(double value, {String? targetBookId, bool explicitGlobal = false}) =>
+      _set(state.copyWith(paragraphSpacing: value.clamp(0.0, 32.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
+  void setTextIndent(double value, {String? targetBookId, bool explicitGlobal = false}) =>
+      _set(state.copyWith(textIndent: value.clamp(0.0, 64.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
 
-  void setBrightness(double b) {
-    _set(state.copyWith(brightness: b.clamp(0.1, 1.0)));
+  void setBrightness(double b, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(brightness: b.clamp(0.1, 1.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
-  void toggleJustified() {
-    _set(state.copyWith(isJustified: !state.isJustified));
+  void toggleJustified({String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(isJustified: !state.isJustified), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
   void applyNative({
@@ -199,9 +203,7 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     final preset = ReaderThemePreset.values
         .where((p) => p.name == theme)
         .firstOrNull;
-    if (bookId != null && bookId != _activeBookId) {
-      _activeBookId = bookId;
-    }
+    final targetId = bookId ?? _activeBookId;
     _set(
       state.copyWith(
         themePreset: preset ?? state.themePreset,
@@ -210,7 +212,7 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
             : ReaderLayoutMode.paginated,
         fontSize: (fontSize * 18.0).clamp(12.0, 32.0),
       ),
-      targetBookId: bookId ?? _activeBookId,
+      targetBookId: targetId,
     );
   }
 
@@ -218,9 +220,7 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     Map<String, dynamic> values, {
     String? bookId,
   }) {
-    if (bookId != null && bookId != _activeBookId) {
-      _activeBookId = bookId;
-    }
+    final targetId = bookId ?? _activeBookId;
     _set(
       state.copyWith(
         fontFamily: ReaderFontFamily.values
@@ -239,12 +239,23 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
         brightness: (values['brightness'] as num?)?.toDouble().clamp(0.1, 1.0),
         publisherStyles: values['publisherStyles'] as bool?,
       ),
-      targetBookId: bookId ?? _activeBookId,
+      targetBookId: targetId,
     );
   }
 
-  void setPublisherStyles(bool enabled) {
-    _set(state.copyWith(publisherStyles: enabled));
+  void setPublisherStyles(bool enabled, {String? targetBookId, bool explicitGlobal = false}) {
+    _set(state.copyWith(publisherStyles: enabled), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
+  }
+
+  Future<void> loadBookSettings(String bookId) async {
+    _activeBookId = bookId;
+    final saved = DatabaseService.instance.getBookReaderSettings(bookId);
+    if (saved != null) {
+      _dirty = true;
+      state = ReaderPreferencesState.fromMap(saved);
+    } else {
+      await reloadDefaults(preserveBookId: bookId);
+    }
   }
 
   void loadFromState(ReaderPreferencesState next, {String? bookId}) {
@@ -259,6 +270,27 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     await _load();
     if (preserveBookId != null) {
       _activeBookId = preserveBookId;
+    }
+  }
+
+  Future<void> resetToGlobalDefaults({String? targetBookId}) async {
+    final bookId = targetBookId ?? _activeBookId;
+    if (bookId != null) {
+      await DatabaseService.instance.resetBookReaderSettings(bookId);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+    ReaderPreferencesState global = const ReaderPreferencesState();
+    if (raw != null) {
+      try {
+        final json = jsonDecode(raw) as Map<String, dynamic>;
+        global = ReaderPreferencesState.fromMap(json);
+      } catch (_) {}
+    }
+    _dirty = false;
+    state = global;
+    if (bookId != null) {
+      _activeBookId = bookId;
     }
   }
 }

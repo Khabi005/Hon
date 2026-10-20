@@ -114,5 +114,84 @@ void main() {
       expect((span.children![4] as TextSpan).text, '9');
       expect((span.children![4] as TextSpan).style?.backgroundColor, isNull);
     });
+
+    test('a passage that appears twice highlights only the one actually selected', () {
+      const block0 = ReaderBlock(runs: [ReaderRun('I am the shadow. I walk the darkness.', TextStyle())]);
+      const block1 = ReaderBlock(runs: [ReaderRun('I am the shadow. I walk the darkness.', TextStyle())]);
+
+      final locatorMap = {
+        'engine': 'hon-html-v2',
+        'chapterIndex': 0,
+        'pageIndex': 0,
+        'block': 1,
+        'startOffset': 0,
+        'endOffset': 16,
+        'prefixContext': '',
+        'suffixContext': ' I walk the darkness.',
+      };
+      final hl = Highlight(
+        id: 'hl-block-1',
+        bookId: 'book-1',
+        selectedText: 'I am the shadow.',
+        locatorString: jsonEncode(locatorMap),
+        color: 'yellow',
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      expect(hl.selectedText, 'I am the shadow.');
+
+      final span0 = block0.span(highlights: []);
+      expect((span0.children!.first as TextSpan).style?.backgroundColor, isNull);
+
+      final span1 = block1.span(highlights: [
+        const HighlightSpan(start: 0, end: 16, color: Color(0x80FFD60A)),
+      ]);
+      final hlSlice = span1.children![0] as TextSpan;
+      expect(hlSlice.text, 'I am the shadow.');
+      expect(hlSlice.style?.backgroundColor, const Color(0x80FFD60A));
+
+      final restSlice = span1.children![1] as TextSpan;
+      expect(restSlice.text, ' I walk the darkness.');
+      expect(restSlice.style?.backgroundColor, isNull);
+    });
+
+    test('a two-paragraph selection renders in both blocks', () {
+      const block0 = ReaderBlock(runs: [ReaderRun('Paragraph one ends here.', TextStyle())]);
+      const block1 = ReaderBlock(runs: [ReaderRun('Paragraph two begins here.', TextStyle())]);
+
+      final locatorMap = {
+        'engine': 'hon-html-v2',
+        'chapterIndex': 0,
+        'pageIndex': 0,
+        'block': 0,
+        'startOffset': 10,
+        'endOffset': 24,
+        'spans': [
+          {'block': 0, 'startOffset': 10, 'endOffset': 24},
+          {'block': 1, 'startOffset': 0, 'endOffset': 13},
+        ],
+      };
+
+      final spans = (locatorMap['spans'] as List).cast<Map<String, int>>();
+      final spanForBlock0 = spans.where((s) => s['block'] == 0).map(
+        (s) => HighlightSpan(start: s['startOffset']!, end: s['endOffset']!, color: const Color(0x80FFD60A)),
+      ).toList();
+      final spanForBlock1 = spans.where((s) => s['block'] == 1).map(
+        (s) => HighlightSpan(start: s['startOffset']!, end: s['endOffset']!, color: const Color(0x80FFD60A)),
+      ).toList();
+
+      final rendered0 = block0.span(highlights: spanForBlock0);
+      final rendered1 = block1.span(highlights: spanForBlock1);
+
+      expect((rendered0.children![0] as TextSpan).text, 'Paragraph ');
+      expect((rendered0.children![0] as TextSpan).style?.backgroundColor, isNull);
+      expect((rendered0.children![1] as TextSpan).text, 'one ends here.');
+      expect((rendered0.children![1] as TextSpan).style?.backgroundColor, const Color(0x80FFD60A));
+
+      expect((rendered1.children![0] as TextSpan).text, 'Paragraph two');
+      expect((rendered1.children![0] as TextSpan).style?.backgroundColor, const Color(0x80FFD60A));
+      expect((rendered1.children![1] as TextSpan).text, ' begins here.');
+      expect((rendered1.children![1] as TextSpan).style?.backgroundColor, isNull);
+    });
   });
 }

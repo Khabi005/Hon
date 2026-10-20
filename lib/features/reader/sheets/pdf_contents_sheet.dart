@@ -69,7 +69,7 @@ class _PdfContentsSheetState extends State<PdfContentsSheet> {
   }
 
   Future<void> _deleteBookmark(Bookmark bm) async {
-    await DatabaseService.instance.removeBookmark(bm.bookId, bm.pageIndex);
+    await DatabaseService.instance.removeBookmarkById(bm.id);
     if (mounted) _loadBookmarks();
   }
 

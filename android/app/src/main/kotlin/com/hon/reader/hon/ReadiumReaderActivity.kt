@@ -163,6 +163,10 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     currentFontSize = it
                     changed = true
                 }
+                (settings["size"] as? Number)?.toDouble()?.let {
+                    currentFontSize = (it / 18.0).coerceIn(0.6, 2.5)
+                    changed = true
+                }
                 (settings["theme"] as? String)?.let {
                     currentPreset = it
                     changed = true
@@ -173,9 +177,28 @@ class ReadiumReaderActivity : AppCompatActivity() {
                         changed = true
                     }
                 }
+                (settings["layout"] as? String)?.let {
+                    val scroll = it == "verticalScroll"
+                    if (isScrollMode != scroll) {
+                        isScrollMode = scroll
+                        changed = true
+                    }
+                }
+                val typoObj = JSONObject()
                 (settings["typography"] as? String)?.let { typoStr ->
+                    try {
+                        val parsed = JSONObject(typoStr)
+                        for (k in parsed.keys()) typoObj.put(k, parsed.get(k))
+                    } catch (_: Exception) {}
+                }
+                for (k in listOf("font", "lineHeight", "margin", "paragraphSpacing", "indent", "justified", "brightness", "publisherStyles")) {
+                    if (settings.containsKey(k)) {
+                        typoObj.put(k, settings[k])
+                    }
+                }
+                if (typoObj.length() > 0) {
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                        .putString("readium_typography", typoStr)
+                        .putString("readium_typography_$bookId", typoObj.toString())
                         .apply()
                     changed = true
                 }
@@ -904,8 +927,10 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 ?: "{}"
             val settingsMap = mapOf(
                 "fontSize" to currentFontSize,
+                "size" to (currentFontSize * 18.0),
                 "theme" to currentPreset,
                 "isScroll" to isScrollMode,
+                "layout" to (if (isScrollMode) "verticalScroll" else "paginated"),
                 "typography" to typoJson
             )
             HonReaderBridge.instance?.saveBookReaderSettings(bookId, settingsMap) {}

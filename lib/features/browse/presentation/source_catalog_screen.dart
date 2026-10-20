@@ -16,6 +16,7 @@ import '../../reader/presentation/reader_navigator.dart';
 import '../../sheets/add_to_library_prompt.dart';
 import 'chapter_download_sheet.dart';
 import '../../settings/presentation/source_controls_screen.dart';
+import '../../../core/updates/chapter_update_service.dart';
 
 class SourceCatalogScreen extends StatefulWidget {
   final ExtensionMeta sourceMeta;
@@ -978,6 +979,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
         widget.novel.description ??
         'No description available for this novel.';
     final chapters = _novelDetails?.chapters ?? [];
+    final unresolved = ChapterUpdateService.instance.unresolvedChaptersByBook[bookId] ?? [];
     final savedChapters = {
       for (final item in DatabaseService.instance.getChapters(bookId))
         item.sourceChapterId: item,
@@ -1229,6 +1231,78 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                 ),
                               ],
                             ),
+
+                            if (unresolved.isNotEmpty) ...[
+                              const SizedBox(height: 20),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.amber.withValues(alpha: 0.35),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          CupertinoIcons.exclamationmark_triangle_fill,
+                                          size: 16,
+                                          color: Colors.amber,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Needs review (${unresolved.length})',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 14,
+                                            color: Colors.amber,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'These previously saved chapters were removed or altered upstream. Saved offline content remains accessible.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: textPrimary.withValues(alpha: 0.75),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    ...unresolved.map((ch) => Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 3),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            CupertinoIcons.doc_text,
+                                            size: 13,
+                                            color: Colors.amber,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Expanded(
+                                            child: Text(
+                                              ch.title,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: textPrimary,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )),
+                                  ],
+                                ),
+                              ),
+                            ],
 
                             const SizedBox(height: 28),
 

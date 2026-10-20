@@ -20,6 +20,7 @@ class ReaderContentsSheet extends StatefulWidget {
   final List<EpubChapterItem> chapters;
   final ValueChanged<int> onSelectChapter;
   final ValueChanged<Highlight>? onSelectHighlight;
+  final ValueChanged<Bookmark>? onSelectBookmark;
 
   const ReaderContentsSheet({
     super.key,
@@ -31,6 +32,7 @@ class ReaderContentsSheet extends StatefulWidget {
     required this.chapters,
     required this.onSelectChapter,
     this.onSelectHighlight,
+    this.onSelectBookmark,
   });
 
   static Future<void> show(
@@ -43,6 +45,7 @@ class ReaderContentsSheet extends StatefulWidget {
     required List<EpubChapterItem> chapters,
     required ValueChanged<int> onSelectChapter,
     ValueChanged<Highlight>? onSelectHighlight,
+    ValueChanged<Bookmark>? onSelectBookmark,
   }) {
     return showModalBottomSheet(
       context: context,
@@ -59,6 +62,7 @@ class ReaderContentsSheet extends StatefulWidget {
         chapters: chapters,
         onSelectChapter: onSelectChapter,
         onSelectHighlight: onSelectHighlight,
+        onSelectBookmark: onSelectBookmark,
       ),
     );
   }
@@ -549,16 +553,17 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
             ),
             onPressed: () async {
               if (widget.bookId != null) {
-                await DatabaseService.instance.removeBookmark(
-                  widget.bookId!,
-                  bm.pageIndex,
-                );
+                await DatabaseService.instance.removeBookmarkById(bm.id);
                 setState(() {});
               }
             },
           ),
           onTap: () {
-            widget.onSelectChapter(chIdx);
+            if (widget.onSelectBookmark != null) {
+              widget.onSelectBookmark!(bm);
+            } else {
+              widget.onSelectChapter(chIdx);
+            }
             Navigator.of(context).pop();
           },
         );
