@@ -293,11 +293,8 @@ class InstalledExtensionService extends ChangeNotifier {
     if (scriptBaseHost != null && scriptBaseHost.isNotEmpty) {
       initialAllowedHosts.add(scriptBaseHost);
     }
-    final repoHost = Uri.tryParse(repo.url)?.host;
-    if (repoHost != null && repoHost.isNotEmpty) {
-      initialAllowedHosts.add(repoHost);
-    }
     if (await NativeShosetsuBridge.instance.isSupported()) {
+
       await NativeShosetsuBridge.instance.validateExtension(
         bundle,
         allowedHosts: initialAllowedHosts.toList(),
@@ -402,10 +399,6 @@ class InstalledExtensionService extends ChangeNotifier {
             ...(source['allowedHosts'] as List)
                 .map((e) => e.toString().trim())
                 .where((e) => e.isNotEmpty),
-          if (source['imageURL'] is String)
-            Uri.tryParse(source['imageURL'] as String)?.host ?? '',
-          if (source['repositoryUrl'] is String)
-            Uri.tryParse(source['repositoryUrl'] as String)?.host ?? '',
         }..remove('');
         final merged = {...existing.allowedHosts, ...catalogHosts}.toList()..sort();
         final icon = source['imageURL'] as String?;
@@ -438,14 +431,7 @@ class InstalledExtensionService extends ChangeNotifier {
               .where((e) => e.isNotEmpty),
         );
       }
-      if (source['imageURL'] is String) {
-        final host = Uri.tryParse(source['imageURL'] as String)?.host;
-        if (host != null && host.isNotEmpty) initialAllowedHosts.add(host);
-      }
-      if (source['repositoryUrl'] is String) {
-        final host = Uri.tryParse(source['repositoryUrl'] as String)?.host;
-        if (host != null && host.isNotEmpty) initialAllowedHosts.add(host);
-      }
+
       _installed.add(
         InstalledExtension(
           sourceId: id,
