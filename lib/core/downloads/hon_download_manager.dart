@@ -16,7 +16,9 @@ class HonDownloadManager {
   static HonDownloadManager? _instance;
   static HonDownloadManager get instance =>
       _instance ??= HonDownloadManager._();
-  HonDownloadManager._();
+  HonDownloadManager._() {
+    DatabaseService.onCancelJobForDeletion = (jobId) => cancelDownload(jobId);
+  }
 
   static const MethodChannel _channel = MethodChannel(
     'com.hon.reader/download_worker',
@@ -140,25 +142,27 @@ class HonDownloadManager {
 
   Future<void> pauseDownload(String jobId) async {
     final db = DatabaseService.instance;
-    final job = db.getDownloadJob(jobId);
+    var job = db.getDownloadJob(jobId);
+    job ??= db.getAllDownloadJobs().where((j) => j.chapterId == jobId).firstOrNull;
     if (job == null || !job.isActive) return;
-    _localTokens[jobId] = (_localTokens[jobId] ?? 0) + 1;
+    final resolvedJobId = job.id;
+    _localTokens[resolvedJobId] = (_localTokens[resolvedJobId] ?? 0) + 1;
     if (Platform.isAndroid && !kIsWeb) {
       await _channel.invokeMethod('cancelDownload', {
-        'jobId': jobId,
+        'jobId': resolvedJobId,
         'status': 'paused',
       });
       await db.refreshDownloadsAndChapters(job.bookId);
       return;
     }
-    final latest = db.getDownloadJob(jobId);
+    final latest = db.getDownloadJob(resolvedJobId);
     if (latest == null || latest.status == DownloadStatus.completed) return;
     await db.updateDownloadJob(
       latest.copyWith(status: DownloadStatus.paused, updatedAt: DateTime.now()),
     );
     await db.ensureChaptersLoaded(job.bookId);
     final chapters = db.getChapters(job.bookId);
-    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    final ch = chapters.where((c) => c.id == job!.chapterId).firstOrNull;
     if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
       await db.saveChapters(job.bookId, [
         ch.copyWith(downloadState: ChapterDownloadState.paused, updatedAt: DateTime.now()),
@@ -168,7 +172,8 @@ class HonDownloadManager {
 
   Future<void> resumeDownload(String jobId) async {
     final db = DatabaseService.instance;
-    final job = db.getDownloadJob(jobId);
+    var job = db.getDownloadJob(jobId);
+    job ??= db.getAllDownloadJobs().where((j) => j.chapterId == jobId).firstOrNull;
     if (job == null || job.status == DownloadStatus.completed || job.isActive) {
       return;
     }
@@ -180,7 +185,7 @@ class HonDownloadManager {
     );
     await db.ensureChaptersLoaded(job.bookId);
     final chapters = db.getChapters(job.bookId);
-    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    final ch = chapters.where((c) => c.id == job!.chapterId).firstOrNull;
     if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
       await db.saveChapters(job.bookId, [
         ch.copyWith(downloadState: ChapterDownloadState.queued, updatedAt: DateTime.now()),
@@ -197,6 +202,41 @@ class HonDownloadManager {
         ),
       );
       rethrow;
+    }
+  }
+
+  /// Pauses the download job associated with a given chapter ID.
+  Future<void> pauseDownloadForChapter(String chapterId) async {
+    final db = DatabaseService.instance;
+    final job = db.getAllDownloadJobs().where((j) => j.chapterId == chapterId && j.isActive).firstOrNull;
+    if (job != null) {
+      await pauseDownload(job.id);
+    }
+  }
+
+  /// Resumes or re-queues the download job for a given chapter ID.
+  Future<void> resumeDownloadForChapter(String bookId, String chapterId) async {
+    final db = DatabaseService.instance;
+    final job = db.getAllDownloadJobs().where((j) => j.chapterId == chapterId).firstOrNull;
+    if (job != null && !job.isActive && job.status != DownloadStatus.completed) {
+      await resumeDownload(job.id);
+      return;
+    }
+    // If no existing job record, re-queue the chapter
+    final book = db.getBookById(bookId);
+    await db.ensureChaptersLoaded(bookId);
+    final chapter = db.getChapters(bookId).where((c) => c.id == chapterId).firstOrNull;
+    if (book != null && chapter != null) {
+      await queueChapters(book, [chapter]);
+    }
+  }
+
+  /// Cancels an active or queued download job for a given chapter ID.
+  Future<void> cancelDownloadForChapter(String chapterId) async {
+    final db = DatabaseService.instance;
+    final job = db.getAllDownloadJobs().where((j) => j.chapterId == chapterId).firstOrNull;
+    if (job != null) {
+      await cancelDownload(job.id);
     }
   }
 
@@ -259,7 +299,7 @@ class HonDownloadManager {
       final args = call.arguments as Map<dynamic, dynamic>?;
       final jobId = args?['jobId'] as String?;
       final bookId = args?['bookId'] as String?;
-      if (jobId != null && jobId.isNotEmpty) {
+      if (jobId != null && jobId.isNotEmpty && jobId != 'ALL') {
         await DatabaseService.instance.refreshDownloadJob(jobId);
       } else if (bookId != null && bookId.isNotEmpty) {
         await DatabaseService.instance.refreshDownloadsAndChapters(bookId);
@@ -288,7 +328,31 @@ class HonDownloadManager {
           job.status == DownloadStatus.queued ||
           job.status == DownloadStatus.retryWaiting) {
         try {
-          await enqueueDownload(job, persist: false);
+          await db.ensureChaptersLoaded(job.bookId);
+          final chapters = db.getChapters(job.bookId);
+          final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+
+          // Check if chapter file already exists and is non-empty on disk
+          if (ch?.localFilePath != null &&
+              File(ch!.localFilePath!).existsSync() &&
+              File(ch.localFilePath!).lengthSync() > 0) {
+            await db.saveChapters(job.bookId, [
+              ch.copyWith(
+                downloadState: ChapterDownloadState.downloaded,
+                updatedAt: DateTime.now(),
+              ),
+            ]);
+            await db.updateDownloadJob(
+              job.copyWith(
+                status: DownloadStatus.completed,
+                progress: 1.0,
+                updatedAt: DateTime.now(),
+              ),
+            );
+            continue;
+          }
+
+          await enqueueDownload(job, persist: true, replace: false);
           recoveredCount++;
         } catch (error) {
           debugPrint('Could not recover download ${job.id}: $error');
@@ -298,6 +362,7 @@ class HonDownloadManager {
 
     return recoveredCount;
   }
+
 
   /// Enqueues a download job to Android WorkManager (or local fallback executor)
   Future<void> enqueueDownload(
@@ -438,19 +503,22 @@ class HonDownloadManager {
 
   /// Cancels an active or queued download job
   Future<void> cancelDownload(String jobId) async {
-    _localTokens[jobId] = (_localTokens[jobId] ?? 0) + 1;
     final db = DatabaseService.instance;
-    final job = db.getDownloadJob(jobId);
+    var job = db.getDownloadJob(jobId);
+    job ??= db.getAllDownloadJobs().where((j) => j.chapterId == jobId).firstOrNull;
     if (job == null) return;
+    final targetJob = job;
+    final resolvedJobId = targetJob.id;
+    _localTokens[resolvedJobId] = (_localTokens[resolvedJobId] ?? 0) + 1;
     if (Platform.isAndroid && !kIsWeb) {
       await _channel.invokeMethod('cancelDownload', {
-        'jobId': jobId,
+        'jobId': resolvedJobId,
         'status': 'cancelled',
       });
-      await db.refreshDownloadsAndChapters(job.bookId);
+      await db.refreshDownloadsAndChapters(targetJob.bookId);
       return;
     }
-    final latest = db.getDownloadJob(jobId);
+    final latest = db.getDownloadJob(resolvedJobId);
     if (latest == null || latest.status == DownloadStatus.completed) return;
     await db.updateDownloadJob(
       latest.copyWith(
@@ -458,11 +526,11 @@ class HonDownloadManager {
         updatedAt: DateTime.now(),
       ),
     );
-    await db.ensureChaptersLoaded(job.bookId);
-    final chapters = db.getChapters(job.bookId);
-    final ch = chapters.where((c) => c.id == job.chapterId).firstOrNull;
+    await db.ensureChaptersLoaded(targetJob.bookId);
+    final chapters = db.getChapters(targetJob.bookId);
+    final ch = chapters.where((c) => c.id == targetJob.chapterId).firstOrNull;
     if (ch != null && ch.downloadState != ChapterDownloadState.downloaded) {
-      await db.saveChapters(job.bookId, [
+      await db.saveChapters(targetJob.bookId, [
         ch.copyWith(downloadState: ChapterDownloadState.notDownloaded, updatedAt: DateTime.now()),
       ]);
     }

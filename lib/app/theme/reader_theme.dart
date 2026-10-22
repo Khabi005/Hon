@@ -167,12 +167,14 @@ class ReaderPreferencesState {
     this.paragraphSpacing = 8.0,
     this.textIndent = 24.0,
     this.isJustified = true,
-    this.brightness = 0.85,
+    this.brightness = -1.0,
     this.publisherStyles = false,
   });
 
   ReaderThemeConfig get themeConfig =>
       ReaderThemeConfig.fromPreset(themePreset);
+
+  bool get isSystemBrightness => brightness < 0;
 
   ReaderPreferencesState copyWith({
     ReaderThemePreset? themePreset,
@@ -276,8 +278,10 @@ class ReaderPreferencesState {
       textIndent:
           ((map['indent'] as num?)?.toDouble() ?? 24.0).clamp(0.0, 64.0),
       isJustified: (map['justified'] as bool?) ?? true,
-      brightness:
-          ((map['brightness'] as num?)?.toDouble() ?? 0.85).clamp(0.1, 1.0),
+      brightness: () {
+        final b = (map['brightness'] as num?)?.toDouble() ?? -1.0;
+        return b < 0 ? -1.0 : b.clamp(0.1, 1.0);
+      }(),
       publisherStyles: (map['publisherStyles'] as bool?) ?? false,
     );
   }

@@ -17,7 +17,10 @@ import '../../../shared/widgets/book_cover_widget.dart';
 import '../../reader/presentation/reader_navigator.dart';
 import 'collections_screen.dart';
 import 'library_updates_screen.dart';
+import '../../browse/presentation/source_catalog_screen.dart';
+import '../../../core/models/novel_source.dart';
 import '../../../core/updates/chapter_update_service.dart';
+import '../../../core/export/epub_export_service.dart';
 
 enum LibraryFilter { all, epubs, pdfs, novels, finished }
 
@@ -515,7 +518,44 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         ),
         message: Text(book.author.isNotEmpty ? book.author : 'Library Book'),
         actions: [
-          if (book.format == BookFormat.webNovel)
+          if (book.format == BookFormat.webNovel) ...[
+            CupertinoActionSheetAction(
+              child: Text(
+                (DatabaseService.instance.getProgress(book.id)?.chapterIndex ?? 0) > 0
+                    ? 'Continue Reading'
+                    : 'Start Reading',
+              ),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                ReaderNavigator.openBook(context, book);
+              },
+            ),
+            CupertinoActionSheetAction(
+              child: const Text('View Series Catalogue'),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                final sourceId = book.sourceId ??
+                    (book.id.contains(':') ? book.id.split(':').first : 'unknown');
+                final sourceNovelId = book.sourceNovelId ??
+                    (book.id.contains(':')
+                        ? book.id.substring(book.id.indexOf(':') + 1)
+                        : book.id);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SourceNovelDetailsScreen(
+                      novel: SourceNovelSummary(
+                        id: sourceNovelId,
+                        title: book.title,
+                        author: book.author,
+                        coverUrl: book.coverPath,
+                      ),
+                      sourceId: sourceId,
+                      sourceName: sourceId,
+                    ),
+                  ),
+                );
+              },
+            ),
             CupertinoActionSheetAction(
               child: const Text('Check for New Chapters'),
               onPressed: () async {
@@ -540,6 +580,91 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                       context,
                     ).showSnackBar(SnackBar(content: Text('$error')));
                   }
+                }
+              },
+            ),
+          ],
+          if (book.isWebNovel)
+            CupertinoActionSheetAction(
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(CupertinoIcons.square_arrow_up, size: 20),
+                  SizedBox(width: 8),
+                  Text('Export Series as EPUB'),
+                ],
+              ),
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                final result = await EpubExportService.exportSeriesAsEpub(book: book);
+                if (!context.mounted) return;
+                if (result.success && result.exportedFilePath != null) {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (sheetCtx) => SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'EPUB Exported (${result.chapterCount} chapters)',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                            if (result.omittedImageCount > 0)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                child: Text(
+                                  'Note: ${result.omittedImageCount} remote or missing image${result.omittedImageCount > 1 ? "s" : ""} could not be bundled.',
+                                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.error),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            const SizedBox(height: 8),
+                            ListTile(
+                              leading: const Icon(CupertinoIcons.share),
+                              title: const Text('Share EPUB'),
+                              subtitle: const Text('Send to another app or device'),
+                              onTap: () async {
+                                Navigator.of(sheetCtx).pop();
+                                final shareRes = await EpubExportService.shareExportedEpub(result.exportedFilePath!);
+                                if (!shareRes.success && context.mounted && shareRes.errorMessage != null) {
+                                  messenger.showSnackBar(SnackBar(content: Text(shareRes.errorMessage!)));
+                                }
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(CupertinoIcons.folder),
+                              title: const Text('Save As...'),
+                              subtitle: const Text('Save to device storage or Downloads'),
+                              onTap: () async {
+                                Navigator.of(sheetCtx).pop();
+                                final saveRes = await EpubExportService.saveExportedEpubAs(result.exportedFilePath!);
+                                if (context.mounted) {
+                                  final message = saveRes.isSaved
+                                      ? 'EPUB saved successfully'
+                                      : saveRes.isFailed
+                                          ? 'Failed to save EPUB: ${saveRes.errorMessage ?? "Unknown error"}'
+                                          : 'Save cancelled';
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(message),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                } else {
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(result.errorMessage ?? 'Export failed'),
+                    ),
+                  );
                 }
               },
             ),
@@ -678,6 +803,43 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     );
   }
 
+  Future<void> _handleBookTap(BuildContext context, Book book) async {
+    if (book.format == BookFormat.webNovel) {
+      final prefs = await SharedPreferences.getInstance();
+      final mode = prefs.getString('hon_webnovel_library_tap_action') ?? 'catalogue';
+      if (mode == 'reader') {
+        if (context.mounted) {
+          await ReaderNavigator.openBook(context, book);
+        }
+        return;
+      }
+      final sourceId = book.sourceId ??
+          (book.id.contains(':') ? book.id.split(':').first : 'unknown');
+      final sourceNovelId = book.sourceNovelId ??
+          (book.id.contains(':')
+              ? book.id.substring(book.id.indexOf(':') + 1)
+              : book.id);
+      if (context.mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SourceNovelDetailsScreen(
+              novel: SourceNovelSummary(
+                id: sourceNovelId,
+                title: book.title,
+                author: book.author,
+                coverUrl: book.coverPath,
+              ),
+              sourceId: sourceId,
+              sourceName: sourceId,
+            ),
+          ),
+        );
+      }
+    } else {
+      await ReaderNavigator.openBook(context, book);
+    }
+  }
+
   Widget _buildGridItem(Book book) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final prog = DatabaseService.instance.getProgress(book.id);
@@ -688,7 +850,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       label: 'Read ${book.title}',
       hint: 'Long press for book options',
       child: GestureDetector(
-        onTap: () => ReaderNavigator.openBook(context, book),
+        onTap: () => _handleBookTap(context, book),
         onLongPress: () => _showBookOptionsSheet(context, book),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -756,7 +918,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: InkWell(
-        onTap: () => ReaderNavigator.openBook(context, book),
+        onTap: () => _handleBookTap(context, book),
         onLongPress: () => _showBookOptionsSheet(context, book),
         borderRadius: BorderRadius.circular(12),
         child: Row(

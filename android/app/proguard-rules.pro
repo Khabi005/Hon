@@ -22,7 +22,19 @@
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 -keep class com.hon.reader.hon.HonDownloadWorker { *; }
+-keep class com.hon.reader.hon.HonUpdateCheckWorker { *; }
 
-# Readium Toolkit components
--keep class org.readium.r2.** { *; }
--dontwarn org.readium.r2.**
+# Keep native JNI bindings intact
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# Keep Hon bridges, Shosetsu engine, and Readium activity intact
+-keep class com.hon.reader.hon.** { *; }
+-keepclassmembers class com.hon.reader.hon.** { *; }
+
+# Readium Toolkit components and adapters
+-keep class org.readium.** { *; }
+-keepclassmembers class org.readium.** { *; }
+-dontwarn org.readium.**
+

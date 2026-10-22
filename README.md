@@ -10,7 +10,7 @@
   </p>
 
   <p align="center">
-    <a href="https://github.com/Khabi005/Hon/releases"><img src="https://img.shields.io/badge/Release-v0.0.1--alpha-1C1C1E?style=for-the-badge&logo=github&logoColor=white" alt="Release v0.0.1" /></a>
+    <a href="https://github.com/Khabi005/Hon/releases"><img src="https://img.shields.io/badge/Release-v0.0.2--alpha-1C1C1E?style=for-the-badge&logo=github&logoColor=white" alt="Release v0.0.2" /></a>
     <a href="https://discord.gg/w2XsFwFTW"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
     <img src="https://img.shields.io/badge/Status-Active%20WIP-FF9500?style=for-the-badge" alt="Status: WIP" />
     <img src="https://img.shields.io/badge/Platform-Android%208.0+-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android 8.0+" />
@@ -43,12 +43,12 @@
 
 You can install Hon directly onto any Android device running Android 8.0 (API level 26) or newer.
 
-### 🌟 Current Version: `v0.0.1` (Alpha WIP)
+### 🌟 Current Version: `v0.0.2` (Alpha WIP)
 
 | Package | Architecture | Size | Recommendation |
 |:---|:---:|:---:|:---|
-| **[Hon-v0.0.1-arm64-v8a.apk](https://github.com/Khabi005/Hon/releases/tag/v0.0.1)** | `arm64-v8a` | **~30 MB** | **Recommended for almost all modern phones & tablets.** Leaner package and optimized native binaries. |
-| **[Hon-v0.0.1-complete.apk](https://github.com/Khabi005/Hon/releases/tag/v0.0.1)** | Universal (All ABIs) | **~72 MB** | Contains native engines for `arm64`, `armeabi-v7a`, and `x86_64`. Best for older hardware or emulators. |
+| **[Hon-v0.0.2-arm64-v8a.apk](https://github.com/Khabi005/Hon/releases/tag/v0.0.2)** | `arm64-v8a` | **~30 MB** | **Recommended for almost all modern phones & tablets.** Leaner package and optimized native binaries. |
+| **[Hon-v0.0.2-complete.apk](https://github.com/Khabi005/Hon/releases/tag/v0.0.2)** | Universal (All ABIs) | **~72 MB** | Contains native engines for `arm64`, `armeabi-v7a`, and `x86_64`. Best for older hardware or emulators. |
 
 👉 **Check all release notes and assets on the [Releases Page](https://github.com/Khabi005/Hon/releases).**
 

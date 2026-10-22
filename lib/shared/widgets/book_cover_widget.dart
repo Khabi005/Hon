@@ -184,7 +184,7 @@ class BookCoverWidget extends StatelessWidget {
               ),
             ),
           ),
-          if (author.isNotEmpty)
+          if (_hasKnownAuthor)
             Text(
               author,
               maxLines: 2,
@@ -198,5 +198,17 @@ class BookCoverWidget extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  bool get _hasKnownAuthor {
+    final clean = author.trim().toLowerCase();
+    return clean.isNotEmpty &&
+        clean != 'unknown' &&
+        clean != 'unknown author' &&
+        clean != '---' &&
+        clean != '--' &&
+        clean != '-' &&
+        clean != 'none' &&
+        clean != 'n/a';
   }
 }

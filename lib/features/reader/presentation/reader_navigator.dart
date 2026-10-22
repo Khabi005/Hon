@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../app/theme/app_appearance.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/native/readium_reader_service.dart';
@@ -19,6 +20,7 @@ class ReaderNavigator {
     double? initialScrollOffset,
     String? locator,
     String? initialChapterContent,
+    bool fromCatalogue = false,
   }) async {
     // If not explicitly provided, look up saved progress from DatabaseService
     final savedProgress = DatabaseService.instance.getProgress(book.id);
@@ -92,10 +94,15 @@ class ReaderNavigator {
         }
       }
 
+      final appAppearance = preferences.getString(appAppearanceKey) ??
+          preferences.getString('hon_app_appearance');
+      final isGlass = appAppearance == AppAppearance.liquidGlass.name;
+
       await ReadiumReaderService.applySettings(
         fontSize: fontSize,
         theme: theme,
         isScroll: isScroll,
+        isGlass: isGlass,
         typography: typography,
       );
       final res = await ReadiumReaderService.openEpub(
@@ -162,6 +169,7 @@ class ReaderNavigator {
                 initialScrollOffset: targetScrollOffset,
                 initialLocator: targetLocator,
                 initialChapterContent: initialChapterContent,
+                fromCatalogue: fromCatalogue,
               ),
             ),
           );
@@ -178,6 +186,7 @@ class ReaderNavigator {
             initialScrollOffset: targetScrollOffset,
             initialLocator: targetLocator,
             initialChapterContent: initialChapterContent,
+            fromCatalogue: fromCatalogue,
           ),
         ),
       );

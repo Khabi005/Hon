@@ -25,6 +25,9 @@ import '../sheets/reader_menu_popup.dart';
 import '../widgets/reader_chrome.dart';
 import '../sheets/themes_settings_sheet.dart';
 import '../sheets/reader_search_dialog.dart';
+import '../../../core/models/novel_source.dart';
+import '../../../core/sources/chapter_content_sanitizer.dart';
+import '../../browse/presentation/source_catalog_screen.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
   final Book book;
@@ -34,6 +37,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
   final double? initialScrollOffset;
   final String? initialLocator;
   final String? initialChapterContent;
+  final bool fromCatalogue;
 
   const ReaderScreen({
     super.key,
@@ -44,10 +48,18 @@ class ReaderScreen extends ConsumerStatefulWidget {
     this.initialScrollOffset,
     this.initialLocator,
     this.initialChapterContent,
+    this.fromCatalogue = false,
   });
 
   @override
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
+}
+
+enum ChapterLoadResult {
+  refreshedOnline,
+  offlineFallback,
+  skipped,
+  failed,
 }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
@@ -77,17 +89,39 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Set<int> _loadingChapters = {};
   final Map<int, String> _chapterErrors = {};
 
-  Future<void> _ensureChapterContent(int index) async {
-    if (_loadingChapters.contains(index) ||
-        _chapters[index].htmlContent.isNotEmpty) {
-      return;
+  Future<ChapterLoadResult> _ensureChapterContent(int index, {bool force = false}) async {
+    if (_loadingChapters.contains(index)) {
+      return ChapterLoadResult.skipped;
+    }
+    if (!force && _chapters[index].htmlContent.isNotEmpty) {
+      return ChapterLoadResult.skipped;
     }
     _loadingChapters.add(index);
+    bool usedOfflineFallback = false;
     try {
       String content;
       final path = _chapterFiles[index];
-      if (path != null && await File(path).exists()) {
+      if (force && widget.book.sourceId != null) {
+        // When forcing a reload, fetch fresh passage from source for in-memory reader display.
+        // Crucial: keep reload memory-only! Never overwrite the offline downloaded file directly,
+        // which could strip local downloaded illustrations, bypass download locks, or race workers.
+        try {
+          content = await SourceRegistry.instance.getChapterPassage(
+            widget.book.sourceId!,
+            _chapters[index].contentHref,
+          );
+        } catch (_) {
+          // If source fetch fails on reload but a local file exists, fall back to reading the file
+          if (path != null && await File(path).exists()) {
+            content = await File(path).readAsString();
+            usedOfflineFallback = true;
+          } else {
+            rethrow;
+          }
+        }
+      } else if (path != null && await File(path).exists()) {
         content = await File(path).readAsString();
+        usedOfflineFallback = true;
       } else if (widget.book.sourceId != null) {
         content = await SourceRegistry.instance.getChapterPassage(
           widget.book.sourceId!,
@@ -101,10 +135,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       if (content.trim().isEmpty) {
         throw const FormatException('The source returned an empty chapter.');
       }
-      if (!mounted) return;
+      content = ChapterContentSanitizer.sanitize(
+        content,
+        chapterTitle: _chapters[index].title,
+      );
+      if (!mounted) return ChapterLoadResult.skipped;
       final chapter = _chapters[index];
       final document = await ReaderDocument.parseAsync(content, title: chapter.title, baseUrl: chapter.contentHref);
-      if (!mounted) return;
+      if (!mounted) return ChapterLoadResult.skipped;
       setState(() {
         _chapters[index] = EpubChapterItem(
           id: chapter.id,
@@ -117,14 +155,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _layoutSignature = null;
       });
       if (index == _currentChapterIndex) _resumeReadingSession();
+      return usedOfflineFallback ? ChapterLoadResult.offlineFallback : ChapterLoadResult.refreshedOnline;
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _chapterErrors[index] = 'Could not load this chapter. $error',
-        );
+        // Only show error in state if chapter had no prior content loaded,
+        // preserving readable chapter content if reload fails.
+        if (_chapters[index].htmlContent.isEmpty) {
+          setState(
+            () => _chapterErrors[index] = 'Could not load this chapter. $error',
+          );
+        }
       }
+      if (force) rethrow;
+      return ChapterLoadResult.failed;
     } finally {
-      _loadingChapters.remove(index);
+      if (mounted) {
+        setState(() {
+          _loadingChapters.remove(index);
+        });
+      } else {
+        _loadingChapters.remove(index);
+      }
     }
   }
 
@@ -1055,6 +1106,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                 body = await File(ch.localFilePath!).readAsString();
               }
             }
+            if (body.isNotEmpty) {
+              body = ChapterContentSanitizer.sanitize(body, chapterTitle: ch.title);
+            }
             loadedChapters.add(
               EpubChapterItem(
                 id: ch.id,
@@ -1065,12 +1119,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             );
           }
         } else if (widget.initialChapterContent?.isNotEmpty == true) {
+          final title = 'Chapter ${requestedIndex + 1}';
           loadedChapters.add(
             EpubChapterItem(
               id: 'ch_$requestedIndex',
-              title: 'Chapter ${requestedIndex + 1}',
+              title: title,
               contentHref: 'webnovel_ch_$requestedIndex',
-              htmlContent: widget.initialChapterContent!,
+              htmlContent: ChapterContentSanitizer.sanitize(
+                widget.initialChapterContent!,
+                chapterTitle: title,
+              ),
             ),
           );
         }
@@ -1760,13 +1818,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   Widget _buildTopHeader(ReaderThemeConfig themeConfig) {
     final remaining = _chapters.length - _currentChapterIndex - 1;
+    final isWebNovel = widget.book.format == BookFormat.webNovel;
     return ReaderHeader(
       theme: themeConfig,
       location: '${_currentChapterIndex + 1}',
       status: remaining > 0
           ? '$remaining ${remaining == 1 ? 'chapter' : 'chapters'} left'
           : 'Last chapter',
-      onPrevious: _currentChapterIndex > 0
+      onBack: isWebNovel ? _backToCatalogue : null,
+      backLabel: 'Catalogue',
+      onPrevious: !isWebNovel && _currentChapterIndex > 0
           ? () => _jumpToChapter(_currentChapterIndex - 1)
           : null,
       onClose: () {
@@ -1776,11 +1837,40 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
   }
 
+  void _backToCatalogue() {
+    _saveProgress();
+    if (widget.fromCatalogue) {
+      Navigator.of(context).pop();
+    } else {
+      final sourceId = widget.book.sourceId ??
+          (widget.book.id.contains(':') ? widget.book.id.split(':').first : 'unknown');
+      final sourceNovelId = widget.book.sourceNovelId ??
+          (widget.book.id.contains(':')
+              ? widget.book.id.substring(widget.book.id.indexOf(':') + 1)
+              : widget.book.id);
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => SourceNovelDetailsScreen(
+            novel: SourceNovelSummary(
+              id: sourceNovelId,
+              title: widget.book.title,
+              author: widget.book.author,
+              coverUrl: widget.book.coverPath,
+            ),
+            sourceId: sourceId,
+            sourceName: sourceId,
+          ),
+        ),
+      );
+    }
+  }
+
   Widget _buildBottomBar(ReaderThemeConfig themeConfig) {
     final total = _chapters.isNotEmpty ? _chapters.length : _totalPages;
     return ReaderFooter(
       theme: themeConfig,
       progress: 'Chapter ${_currentChapterIndex + 1} of $total',
+      onReload: _reloadCurrentChapter,
       onMenu: () {
         ReaderMenuPopup.show(
           context,
@@ -1870,19 +1960,46 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   Future<void> _reloadCurrentChapter() async {
     final idx = _currentChapterIndex;
-    _loadingChapters.add(idx);
-    _chapterErrors.remove(idx);
-    _documents.remove(idx);
-    setState(() {});
-    await _ensureChapterContent(idx);
-    if (mounted) {
+    if (_loadingChapters.contains(idx)) return;
+    _captureAnchor();
+    try {
+      final result = await _ensureChapterContent(idx, force: true);
+      if (!mounted) return;
+      if (result == ChapterLoadResult.skipped) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _restoreScrollAnchor();
+      });
+      final String msg;
+      switch (result) {
+        case ChapterLoadResult.refreshedOnline:
+          msg = 'Chapter refreshed from source';
+          break;
+        case ChapterLoadResult.offlineFallback:
+          msg = 'Reloaded from saved offline copy';
+          break;
+        case ChapterLoadResult.failed:
+          msg = 'Failed to reload chapter';
+          break;
+        case ChapterLoadResult.skipped:
+          return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Chapter reloaded'),
-          duration: Duration(seconds: 1),
+        SnackBar(
+          content: Text(msg),
+          duration: const Duration(seconds: 1),
           behavior: SnackBarBehavior.floating,
         ),
       );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to reload chapter: $e'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 }

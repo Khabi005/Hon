@@ -114,13 +114,14 @@ class ShosetsuLuaEngine {
     String luaScript,
     String query, {
     int page = 0,
+    int? listing,
     Duration totalTimeout = const Duration(seconds: 45),
     Duration perAttemptTimeout = const Duration(seconds: 15),
   }) async {
     return _executeWithNetworkRetry<List<SourceNovelSummary>>(
       luaScript: luaScript,
       operation: 'search',
-      params: {'query': query, 'page': page},
+      params: {'query': query, 'page': page, 'listing': listing},
       totalTimeout: totalTimeout,
       perAttemptTimeout: perAttemptTimeout,
       mapper: (dynamic raw) {
@@ -211,6 +212,12 @@ class ShosetsuLuaEngine {
     required Duration perAttemptTimeout,
     required T Function(dynamic raw) mapper,
   }) async {
+    if (!kIsWeb && Platform.isAndroid && kReleaseMode) {
+      throw UnsupportedError(
+        'ShosetsuLuaEngine (pure Dart via lua_dardo_plus) must never be invoked on Android in release mode. NativeShosetsuBridge must be used.',
+      );
+    }
+
     final cache = <String, String>{};
     const maxRetries = 10;
     int retries = 0;
@@ -398,6 +405,13 @@ class ShosetsuLuaEngine {
     ls.getGlobal('PAGE');
     ls.pushInteger(page);
     ls.setTable(-3);
+
+    final listing = task.params['listing'] as int?;
+    if (listing != null) {
+      ls.getGlobal('LISTING');
+      ls.pushInteger(listing);
+      ls.setTable(-3);
+    }
 
     // Call Extension.search(data)
     ls.call(1, 1);
@@ -714,6 +728,7 @@ class ShosetsuLuaEngine {
 
       _G.QUERY = 0
       _G.PAGE = 1
+      _G.LISTING = 2
 
       NovelStatus = { UNKNOWN = 0, PUBLISHING = 1, COMPLETED = 2, PAUSED = 3, DROPPED = 4 }
       ChapterType = { HTML = 1, TEXT = 2 }

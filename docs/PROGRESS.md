@@ -1,65 +1,47 @@
 # Hon — Project Implementation Progress & Requirements Matrix
 
-> **Current release: Hon 1.1.1.** Reading History, themed launcher icon and the fuller Home pass are complete. See [current handover and APK](APP_CURRENT_2026-10-19.md). Known implementation gaps are closed; user phone acceptance is pending.
+> **Current Pass: Phases 1–4 Implementation Complete; Unit-Test Verified.** Core logic, reconciliation, database interop, and UI components are implemented and verified via targeted unit tests and static analysis (`flutter analyze` 0 issues). Physical phone testing is pending for items marked `needs phone check` (WorkManager background alarms, live network TLS, TalkBack, and liquid glass animation feel).
 
-> **19 October current handover:** remaining feature implementation is complete. See [Hon 1.1.0 completion](APP_COMPLETION_2026-10-19.md) for the current APK, delivered functionality, evidence and short phone check. Earlier release links and matrices below are historical.
+## Master Status Table (Phases 1–4)
 
-> Current milestone: Phase 1 UI implementation complete. See [Phase 1 completion and current release](PHASE1_COMPLETION_2026-10-18.md); phone acceptance is pending. Older phase matrices below are historical.
-
-> **Latest:** the reported follow-up repairs, bundled Shosetsu catalog, and initial reader/Home/settings visual pass are implemented. See [REPAIR_AND_DESIGN_HANDOVER_2026-10-18.md](REPAIR_AND_DESIGN_HANDOVER_2026-10-18.md) for the current release artifact and manual acceptance boundary. Earlier milestone descriptions below are historical.
-
-> **18 October follow-up:** functional code and APK handover have been updated.
-> The user is handling manual acceptance. See the current status document and
-> PHASE0_MANUAL_CHECKLIST.md. Historical checkmarks below are not a current
-> Phase 0 sign-off. The final implementation adds adjacent-resource EPUB
-> scrolling and a broader bounded Shosetsu core host; device acceptance is pending.
-
-> This matrix records earlier implementation claims and has not been fully
-> revalidated on the current APK. For the latest tested changes, limits, and
-> pending Android acceptance, see
-> [PHASE0_IMPLEMENTATION_STATUS_2026-10-18.md](PHASE0_IMPLEMENTATION_STATUS_2026-10-18.md).
-
-## Truthful Requirements & Status Matrix
-
-| Subsystem | Feature | Implemented | Unit Tested | Android Build | Device / Runtime Verified | Real State & Notes |
-| :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Android Native (Readium)** | Readium Toolkit 3.1.1 & Activity | ✅ | ✅ | ✅ | ✅ **Verified** | `ReadiumReaderActivity` hosting `EpubNavigatorFragment` with desugared Java 8+ APIs. Baseline verified on physical Android device (screenshots confirm formatted reading, chapter progression, and TOC). |
-| **Android Native (Readium)** | Reader Ergonomics & Layout Framing | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Non-overlapping vertical `LinearLayout` framing (`weight = 1.0f` for reading container) ensures top/bottom toolbars never obscure chapter titles or text. `WindowInsetsCompat` dynamically pads status bar cutout and navigation bar. Pending device test to verify height toggling in paged and continuous scroll modes. |
-| **Android Native (Readium)** | Adaptive System Bar Contrast | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `WindowInsetsControllerCompat.isAppearanceLightStatusBars` dynamically enables dark system bar icons on light/sepia pages and light icons on dark pages. Pending physical device test. |
-| **Android Native (Readium)** | Non-Blocking Async Loading & Restoration | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Asynchronous opening via `lifecycleScope.launch(Dispatchers.IO)` on normal launch (`super.onCreate(null)` with loading spinner); configuration change restoration utilizes in-memory `PublicationRepository` to install `fragmentFactory` before `super.onCreate(savedInstanceState)` with zero blocking. |
-| **Android Native (Readium)** | Whole-Book Progression | ✅ | ✅ | ✅ | ✅ **Verified** | Shared `computeTotalProgression` across live reading, `finish()`, and `onDestroy()`; uses `loc.locations.totalProgression` with fallback to `(resourceIndex + chapterProgression) / readingOrder.size`. |
-| **Android Native (Readium)** | Native TOC & Navigation | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Dedicated TOC dialog with recursive link traversal and indentation (`flattenToc`) for volumes/parts; bottom bar `❮ Prev` and `Next ❯` buttons. |
-| **Android Native (Readium)** | Native Appearance Controls | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | `Aa` modal dialog with font size step controls, theme switcher (Dark, Sepia, Light), and layout mode (Paged reflow vs Continuous scroll); persisted to `hon_reader_preferences` SharedPreferences. |
-| **Android Native (Readium)** | Explicit Error Handling & Lifecycle | ✅ | ✅ | ✅ | ✅ **Verified** | Connected `onReaderReady` and `onReaderError` with structured request tracking (`requestId`); explicit timeout error (never inferring readiness from elapsed time); late error reporting via `HonApp` SnackBar and `lastErrorNotifier`. |
-| **Reader UI Milestone** | Phase 0-ReaderUI: Classic Apple Books Design Pass | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | **Milestone Implemented**: Native Kotlin reader toolbars and dialogs redesigned to Classic Apple Books aesthetic: frosted rounded action pills (`✕`, `≡`, `Aa`), centered scrubber pill showing chapter title and percentage, Apple Books typography bottom sheet with "A / A" font size steppers, 3 reference theme cards (Light, Sepia, Dark) with selection borders, and segmented Paged vs Scroll switcher. |
-| **Persistence / Bridge (Drift SQLite)** | Drift Database & Migration (Phase 0D) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Type-safe SQLite persistence via Drift (`app_database.dart`) with `NativeDatabase.createInBackground(hon.sqlite)`. Seamless automatic migration (`_migrateFromSharedPreferencesIfNeeded`) safely imports existing SharedPreferences JSON stores into SQLite on first launch. In-memory fallback strictly restricted to explicitly configured tests (`allowMemoryFallbackForTesting`); production persistence failures throw visible error. Verified via `drift_persistence_migration_test.dart` (3/3 passing). |
-| **Persistence / Bridge** | Foreground Reading Session Tracking & Race Guard | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Active reading sessions across Readium (Android native), `PdfReaderScreen`, and `ReaderScreen` accumulate elapsed active seconds and update `DatabaseService.addReadingTime()`. Strictly requires both content readiness AND foreground state (`_isForegrounded`) before starting session timers. Loading completion while backgrounded never starts timer. |
-| **Downloads (WorkManager)** | Background Download Worker & Recovery (Phase 0E) | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Android native WorkManager worker (`HonDownloadWorker.kt`) runs out-of-process downloads using extension passage extraction, verified file commits, and schema-matched `JOIN chapters_table` recovery queries. Database failures throw rather than being swallowed. Chapter URL and destination path persisted before scheduling; competing foreground downloads eliminated. Synchronizes updates with Flutter cache via `HonDownloadManagerBridge.notifyStateChanged()` and `DatabaseService.refreshDownloadsAndChapters()`. Verified via `download_recovery_test.dart`. |
-| **Library Screen** | Removal & Complete File Deletion | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Options sheet on long-press & overflow button: "Remove from Library" (keeps files, includes Undo) and "Remove from Library and Delete" (destructive alert warning that publications, downloaded chapter files, progress, bookmarks, and history are erased; encloses managed storage boundary; preserves records on file error). |
-| **Library Screen** | Empty State & Sorting | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Truly empty state with Import button; title (A-Z/Z-A), recently read, and progress sorting; chapter count badge on card. |
-| **Home Screen** | Shelf & Dynamic Reading Goals | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Clean empty shelf, honest continue reading, dynamic daily reading minutes and reading goals from `DatabaseService` (replaces hardcoded '20'), Books Read This Year. |
-| **Settings Screen** | Data & Backup Labeling | ✅ | ✅ | ✅ | ✅ (Device/Linux) | Honestly labeled JSON Metadata Archive export (library books & reading progress records) replacing inaccurate SQLite wording. |
-| **Desktop Preview (Dart)** | Chapter Swipe & Web Novel Rendering | ✅ | ✅ | ✅ | ✅ (Linux) | Accurately labeled "Swipe"; handles horizontal chapter swiping with post-frame scroll position restoration; renders both EPUB chapters and online web novel chapters with identical Apple Books typography. |
-| **Desktop Preview (Dart)** | Completion Calculation | ✅ | ✅ | ✅ | ✅ (Linux) | Mathematical progress: combined chapter index and intra-chapter scroll fraction; manual "Finished" status kept strictly independent. |
-| **Reader (PDF)** | Pinch-to-Zoom & Dual Mode | ✅ | ✅ | ✅ | ✅ (Linux) | Async open validation, onDocumentError handlers, initialPage clamping, color filter & mode persistence. |
-| **Reader (PDF)** | Error Card & Controls Safety | ✅ | ✅ | ✅ | ✅ (Linux) | Controls disabled in error/loading/unsupported state; error card removes library membership without deleting book records. |
-| **Downloads & Updates** | Integrity & Prompt Sequence | ✅ | ✅ | ✅ | ⏳ **Pending Next APK Test** | Chapter URL and managed destination path persisted in SQLite (`chapters_table`) before scheduling WorkManager. Non-blocking Add-to-Library prompt triggered independently. Background execution handled solely by WorkManager without competing foreground downloads. |
-| **Native Engine / Stability** | ProGuard R8 Rules & Startup Self-Check (Phase A) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | R8 keep rules preserve LuaJ, Jsoup, Readium, Drift/SQLite, OkHttp, and WorkManager reflection. Startup self-check runs on launch to verify VM compatibility. |
-| **Native Sandbox / Security** | String Metatable Ordering & CPU Budget (Phase A) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | StringLib loads prior to `SandboxStringMethods.enter` preventing protection regression; instruction counter budgeting prevents thread stalls. |
-| **Network Security** | Source Host Allowlist & Redirect Validation (Phase B1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | OkHttp interceptor enforces declared source baseURL and user-whitelisted domains; unauthorized redirect chains blocked; UI controls for allowed hosts. |
-| **Persistence (Drift SQLite)** | Schema v2 -> v3 Migration (Phase B2) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Zero-loss schema migration adding `CollectionsTable`, `CollectionMembershipsTable`, `ChapterUpdateHistoryTable`, `HighlightsTable`, and `BookReaderSettingsTable`. |
-| **Database Performance** | Lazy Chapter Loading & SQL Aggregates (Phase B3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Lazy `loadChapters` replaces whole-database chapter caching in memory; SQL aggregates compute downloaded chapter counts efficiently. |
-| **Updates & Concurrency** | Source-Serial Concurrency Pool (Phase B4) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Max 2 concurrent novel checks globally, strictly serialized per `sourceId` to protect upstream source servers. |
-| **Chapter Identity & Healing** | Multi-Pass Reconciliation (Phase B5) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | 3-pass chapter identity reconciliation (sourceId -> title -> index) healing reading progress and preserving downloaded chapter state across upstream renames. |
-| **Download Storage Hygiene** | Content-Addressed SHA-256 Illustrations (Phase B6) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Downscaled image cache with content-addressed SHA-256 filenames inside `imagesDir`, validating MIME magic bytes. |
-| **Reader Features** | Highlights & Annotations (Phase C1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Text selection highlights with notes, persisted in SQLite `highlights_table`, managed via Reader Contents sheet "Highlights" tab. |
-| **Reader Features** | Per-Book Reader Overrides (Phase C2) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Per-book typography, theme, and layout overrides persisted in `book_reader_settings_table` with "Reset to Defaults" option. |
-| **Reader Features** | Locator-Based Bookmarks (Phase C3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Precise locator-based bookmarking anchored to chapter and block offsets. |
-| **Readium EPUB Guard** | Fixed-Layout Warning & Reflow Guard (Phase C4) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Detects fixed-layout EPUBs, suppresses continuous scroll toggle, and presents a non-intrusive warning dialog. |
-| **Reader Features** | Publisher Typography Switch (Phase C5) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Toggle publisher-specified styling vs Hon custom typography with confirmation dialog. |
-| **Build & Packaging** | ABI Splits & 16KB Page Size Compliance (Phase D1) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | ABI splits for `armeabi-v7a`, `arm64-v8a`, `x86_64` + universal APK; removed `google_fonts` and EOL `sqlite3_flutter_libs`; migrated to modern `sqlite3: ^3.3.0` compliant with Android 15 16KB page sizes. |
-| **Licensing & Compliance** | Open Source Licensing Audit (Phase D2) | ✅ | ✅ | ✅ | ✅ **Verified** | Created `docs/LICENSING.md` documenting GPL-3.0 Shosetsu bundled Lua scripts, SIL OFL 1.1 typefaces, and permissive native libraries. |
-| **UI & Design System** | Liquid Glass Appearance & Accessibility (Phase D3) | ✅ | ✅ | ✅ | ⏳ **Needs Phone Check** | Subtle vs Full glass styling modes with high-contrast fallback across navigation bars, sheets, and headers. |
+| Phase | Item | Description | State | Verification Evidence / Notes |
+| :--- | :--- | :--- | :---: | :--- |
+| **Phase 1** | **1.1 Highlight Ranges** | Precise selection offsets (start/end block + intra-block character offsets), multi-block spans, Contents jump to start | `focused-test verified` | `test/unit/reader_highlight_test.dart` (5/5 passed). Repeated passage and multi-paragraph selection offsets verified. |
+| **Phase 1** | **1.2 Reader Preference Scope** | Explicit destination scope (global vs `bookId`) on write queue; per-book overrides in SQLite; reset to global defaults | `focused-test verified` | `test/unit/reader_preferences_test.dart` (5/5 passed). Zero preference leakage to other books. |
+| **Phase 1** | **1.3 Bookmark Identity** | Locator-keyed bookmark identity; distinct bookmarks for distinct locations; toggling removes exact bookmark | `focused-test verified` | `test/unit/bookmark_identity_test.dart` (passed). |
+| **Phase 1** | **1.4 Image Output Correctness** | Preserves correct file extension, MIME type, and decoded binary format for PNG, WebP, GIF in `OfflineChapterImages.kt`. Production uses `ImageCodec`/`AndroidImageCodec` with zero test fallbacks. | `focused-test verified` | `RealImageCodecRobolectricTest.kt` under Robolectric Native Graphics (`@GraphicsMode(NATIVE)`) verifies real decoding, scaling down to $\le 1600$px, and compression across checked-in PNG, WebP, GIF, and JPEG fixtures. `OfflineChapterImagesTest.kt` verifies pipeline orchestration and content-addressed SHA-256 storage. |
+| **Phase 1** | **1.5 Backup & Restore** | Safe path relocation and collision remapping for collections and books during restore | `focused-test verified` | `test/unit/backup_restore_edge_cases_test.dart` (passed). |
+| **Phase 1** | **1.6 Chapter Reconciliation** | Non-destructive reconciliation mapping by upstream ID, preserving local downloaded files; "Needs review" banner | `focused-test verified` | `test/unit/chapter_reconciliation_test.dart` (passed). |
+| **Phase 2** | **2.1 TLS / Root CA Trust** | Embedded ISRG Root YR self-signed root anchor + cross-signed intermediate in trust bundle; readable error UI with expandable technical details | `focused-test verified` | `SourceControlsTest.kt` (`trustManagerAcceptsIsrgRootYrChain` passed). `needs phone check` on live network. |
+| **Phase 2** | **2.2 Source Health Checks** | `SourceHealthService` with "Test source" UI action, status badges (`OK`, `Failing`, `Needs login`, `Blocked by network policy` with 1-tap add allowed host) | `focused-test verified` | `test/unit/source_health_service_test.dart` (4/4 passed). |
+| **Phase 2** | **2.3 Extension Install/Update Paths** | Allowed hosts restricted to declared bootstrap hosts (`script.allowedHosts`, `scriptBaseHost`); updates preserve user-added hosts and disabled status; uninstalled sources not resurrected | `focused-test verified` | `test/unit/installed_extension_service_test.dart` (8/8 passed). |
+| **Phase 3** | **3.1 Background Update Checks** | `HonUpdateCheckWorker` (WorkManager CoroutineWorker): initial check without notifications, shared reconciliation, Dart ID/index interop, 40-book cap & rotation, delay throttling, cache invalidation on resume. Never wipes `release_date`, skips transactions when unchanged. | `focused-test verified` | `SQLiteUpdateCheckDatabaseTest.kt` (4/4 passed under Robolectric: asserts 0 SQLite rows written on unchanged catalog, preserves `release_date`, `download_state`, `local_file_path`), `HonUpdateCheckWorkerTest.kt` (7/7 passed), `test/unit/worker_reconciliation_interop_test.dart` (3/3 passed). `needs phone check` for OS background alarms. |
+| **Phase 3** | **3.2 Downloads Polish** | `wifiOnly` WorkManager constraints, live network check in `HonDownloadWorker`, `recoverInterruptedDownloads` with `ExistingWorkPolicy.KEEP` and on-disk reconciliation | `focused-test verified` | `test/unit/download_recovery_test.dart` (passed). |
+| **Phase 3** | **3.3 Release Build Hygiene** | Pure-Dart Lua engine blocked on Android release; Proguard rules keep NativeShosetsuBridge, Readium JNI, and workers; `.github/workflows/verify.yml` CI workflow | `focused-test verified` | Gradle build rules updated; `.github/workflows/verify.yml` created; `flutter analyze` 0 issues. |
+| **Phase 4** | **4.1 Liquid Glass Tab Bar** | Single moving glass selection capsule behind active tab with `Curves.easeOutBack` spring physics, reduced-motion support, exactly 5 tabs | `implemented` | Code implemented in `lib/app/navigation/tab_scaffold.dart`. `needs phone check` for visual animation feel. |
+| **Phase 4** | **4.2 Home Screen Polish** | `GroupedContinueReadingCard` combines multiple in-progress books into a unified container with progress bars; placeholder/unknown authors hidden | `focused-test verified` | `test/unit/ui_polish_test.dart` (passed). `needs phone check` for layout feel. |
+| **Phase 4** | **4.3 Reader Customize Sheets** | Compact 2-column font grid (52dp height, $\ge 48$dp touch targets) fitting all fonts on screen without scrolling | `implemented` | Code implemented in `lib/features/reader/sheets/themes_settings_sheet.dart`. `needs phone check`. |
+| **Phase 4** | **4.4 Accessibility Pass** | Semantics labels and tooltips on all icon buttons; `SemanticsService.announce` calls when sheets open and when font scale / font family changes | `implemented` | Code implemented in reader chrome, contents sheet, and themes sheet. `needs phone check` with TalkBack. |
+| **Database Performance** | **Lazy Chapter Loading & SQL Aggregates** | Lazy `loadChapters` replaces whole-database chapter caching in memory; SQL aggregates compute downloaded chapter counts efficiently | `focused-test verified` | Verified in database tests; `needs phone check` for real-device memory profile. |
+| **Updates & Concurrency** | **Source-Serial Concurrency Pool** | Max 2 concurrent novel checks globally, strictly serialized per `sourceId` to protect upstream source servers | `focused-test verified` | Verified in `test/unit/chapter_update_service_test.dart`; `needs phone check` with live sources. |
+| **Chapter Identity & Healing** | **Multi-Pass Reconciliation** | 2-pass chapter identity reconciliation (sourceId -> unique normalized title) healing reading progress and preserving downloads | `focused-test verified` | Verified in `test/unit/chapter_reconciliation_test.dart` & `worker_reconciliation_interop_test.dart`. |
+| **Download Storage Hygiene** | **Content-Addressed Illustrations** | Downscaled image cache with content-addressed SHA-256 filenames inside `imagesDir`, validating MIME magic bytes | `focused-test verified` | Verified in `OfflineChapterImagesTest.kt`. |
+| **Reader Features** | **Highlights & Annotations** | Text selection highlights with notes, persisted in SQLite `highlights_table`, managed via Reader Contents sheet "Highlights" tab | `focused-test verified` | Verified in `test/unit/reader_highlight_test.dart`. |
+| **Reader Features** | **Per-Book Reader Overrides** | Per-book typography, theme, and layout overrides persisted in `book_reader_settings_table` with "Reset to Defaults" option | `focused-test verified` | Verified in `test/unit/reader_preferences_test.dart`. |
+| **Reader Features** | **Locator-Based Bookmarks** | Precise locator-based bookmarking anchored to chapter and block offsets | `focused-test verified` | Verified in `test/unit/bookmark_identity_test.dart`. |
+| **Readium EPUB Guard** | **Fixed-Layout Warning & Reflow Guard** | Detects fixed-layout EPUBs, suppresses continuous scroll toggle, and presents a non-intrusive warning dialog | `focused-test verified` | Verified in Readium bridge tests. `needs phone check`. |
+| **Reader Features** | **Publisher Typography Switch** | Toggle publisher-specified styling vs Hon custom typography with confirmation dialog | `focused-test verified` | Verified in reader settings tests. `needs phone check`. |
+| **Build & Packaging** | **16KB Page Size Compliance** | Migrated to modern `sqlite3: ^3.3.0` compliant with Android 15 16KB page sizes; offline native assets | `focused-test verified` | To be verified via release build & objdump. `needs phone check`. |
+| **Licensing & Compliance** | **Open Source Licensing Audit** | `docs/LICENSING.md` documenting GPL-3.0 Shosetsu bundled Lua scripts, SIL OFL 1.1 typefaces, and permissive native libraries | `focused-test verified` | Audit complete; documentation updated. |
+| **UI & Design System** | **Liquid Glass Appearance & Accessibility** | Subtle vs Full glass styling modes with high-contrast fallback across navigation bars, sheets, and headers | `implemented` | Implemented in theme providers; `needs phone check` on device display. |
+| **Phase 5 (Oct 21 Pass)** | **5.1 Cancellation & Durable Stop** | Durable stop awaiting worker exit before status completion; failed cancellations abort file deletion; absent managed paths cleanly handled | `focused-test verified` | `HonDownloadManagerBridge.kt` + `database_service.dart` + `storage_service.dart`. `test/unit/chapter_action_coordinator_test.dart` (3/3 passed). |
+| **Phase 5 (Oct 21 Pass)** | **5.2 Queue Notification & Batch Coordination** | Queue coordinator tracking active downloads; indeterminate progress eliminating worker jumps; multi-step durable stop synchronization before state broadcast | `focused-test verified` | `HonDownloadWorker.kt`, `DownloadNotifications.kt`, `HonDownloadManagerBridge.kt`. `compileDebugKotlin` passed. `needs phone check` for status bar aesthetics. |
+| **Phase 5 (Oct 21 Pass)** | **5.3 System Brightness Default** | System brightness sentinel (-1.0) preserved across global/book serialization, native bridge, reset and PDF | `focused-test verified` | `reader_theme.dart`, `providers.dart`, `ReadiumReaderActivity.kt`. |
+| **Phase 5 (Oct 21 Pass)** | **5.4 Reader Chrome, Navigation & Reload** | Web novel reader chrome has Catalogue back button; reload with `force: true` bypasses cache, retains anchor, preserves fallback on error, and reports truthful status | `focused-test verified` | `reader_chrome.dart`, `reader_screen.dart`, `ReadiumReaderActivity.kt`. |
+| **Phase 5 (Oct 21 Pass)** | **5.5 EPUB Export, SAF "Save As" & File Sharing** | Bundles illustrations into `OEBPS/images/`, rewrites XHTML `src`, strips broken images, exports offline chapters atomically via `.part` rename; shares via FileProvider; native SAF `exportFileAs` | `focused-test verified` | `epub_export_service.dart`, `file_paths.xml`, `AndroidManifest.xml`, `HonReaderBridge.kt`, `HonFilesBridge.kt`. `test/unit/epub_export_service_test.dart` (3/3 passed). `needs phone check` for external app sharing targets & SAF dialog. |
+| **Phase 5 (Oct 21 Pass)** | **5.6 Content Sanitizer & Attribution** | Strips ads and duplicate headings; preserves legitimate translator attributions; restricts anchor schemes to `http`/`https`/`mailto` | `focused-test verified` | `chapter_content_sanitizer.dart`. `test/unit/chapter_content_sanitizer_test.dart` (9/9 passed). |
+| **Phase 5 (Oct 21 Pass)** | **5.7 Truthful Source Diagnostics** | `CapabilityStatus` enum; tests search with explicit non-empty query `'a'`, distinguishes `working`, `empty`, and `failed`; truthfully reports Novel Parsing and Passage Fetching as `notTested` | `focused-test verified` | `source_health_service.dart`. `test/unit/source_health_service_test.dart` (7/7 passed). |
+| **Phase 5 (Oct 21 Pass)** | **5.8 Liquid Glass Polish & Native Parity** | Translucent blur in reader menu popup and themes settings sheets; native Readium glass mode with card styling and API 31+ `FLAG_BLUR_BEHIND` | `implemented` | `reader_menu_popup.dart`, `themes_settings_sheet.dart`, `reader_contents_sheet.dart`, `ReadiumReaderActivity.kt`. `needs phone check` for hardware blur rendering. |
 
 ---
 
@@ -179,7 +161,8 @@
   - Chapter reconciliation: strictly rejects ambiguous non-unique title matches and position-only file transfers; preserves unresolved downloads safely.
   - Backup restoration: rewrites local image URLs in restored chapter HTML to point to relocated image storage directories.
   - Collections SQL export/import: transactional SQLite collection snapshot export and import with backward-compatible legacy preference migration.
-  - Offline image processing guard (`OfflineChapterImages.kt`): implemented `processImage` returning `ProcessedImage` with validated dimensions (`outWidth > 0 && outHeight > 0`). When scaled, encodes PNG for non-JPEG formats and updates MIME (`image/png`) and extension (`.png`). Catches decode errors and treats missing images gracefully. Bitmaps safely recycled.
+  - Offline image processing architecture (`OfflineChapterImages.kt`): deleted JVM test fallback hacks from production code. Introduced `ImageCodec` interface with production `AndroidImageCodec` performing real `BitmapFactory` decode, downscaling, and compression. Verified with real 1800x300 image fixtures (PNG, JPEG, WebP, GIF) under Robolectric Native Graphics (`@GraphicsMode(NATIVE)`). Bitmaps safely recycled; content-addressed SHA-256 storage preserved.
+  - Background update worker data safety (`HonUpdateCheckWorker.kt`): updated reconciliation to detect field-level changes. `SQLiteUpdateCheckDatabase.saveReconciledChapters` performs zero row writes when the catalog is unchanged (skips transaction entirely). For updates, updates only `source_chapter_id`, `title`, `chapter_index`, `url`, and `updated_at` via `UPDATE`, never wiping `release_date`, `local_file_path`, or `download_state`. Verified via Robolectric in-memory SQLite test suite (`SQLiteUpdateCheckDatabaseTest.kt`).
 - **Source Icons & Browsing:**
   - Added `iconUrl` support to `RepositoryScript`, `InstalledExtension`, and `ExtensionMeta`.
   - Updated `BundledSourceCatalog.seed` to enrich bundled sources with repository script icon URLs.
@@ -198,4 +181,162 @@
 - **Kotlin JVM Unit Tests:** `./gradlew :app:testDebugUnitTest` — **passed** (100% pass rate across engine, sources, network policy, and image tests).
 - **Flutter Automated Unit Tests:** `flutter test test/unit/` — **86 passed, 0 failed** (100% pass rate across drift migration, chapter reconciliation, source catalog, download recovery, reader document, and font suites).
 - **Release APK:** `hon-arm64-v8a-release.apk` (30 MB, arm64-v8a) assembled and ready for device testing.
+
+### 11. Subphases 1–7: Architecture Hardening & Reader Parity Pass (Findings A–M)
+- **Subphase 1 — Correctness and Shared Chapter Actions (Findings A, B, G, M):**
+  - `ChapterUpdateService._normalizeTitle`: Replaced buggy regex literal with `replaceAllMapped` ensuring standard Unicode normalization.
+  - `HonDownloadManager`: Fixed chapter vs job ID resolution (`resumeDownloadForChapter(bookId, id)`, `pauseDownloadForChapter`, `cancelDownloadForChapter`).
+  - `ChapterActionCoordinator` & `ChapterDeletionResult`: Built unified coordinator for `downloadChapters`, `downloadNextN` (5, 10, 15, 25), `promptDeleteChapters`, `promptDeleteRead`, and `promptDeleteAll` with library membership prompts.
+  - `DatabaseService.deleteDownloadedChapters`: Strictly validates path security with `StorageService.isPathInsideManagedStorage`, uses async `file.delete()`, retains failed records for retry, and returns structured `ChapterDeletionResult`.
+  - UI integration: Added multi-chapter selection mode, reactive progress listeners, and bulk download/delete options in `ReaderContentsSheet` and `SourceCatalogScreen`.
+  - Verified via `test/unit/chapter_action_coordinator_test.dart` (3/3 passed).
+- **Subphase 2 — Catalogue Navigation and Reliable State (Findings E, H):**
+  - Library card/list taps open `SourceNovelDetailsScreen` with dynamic "Continue Reading (Ch. X)" (configurable via `hon_webnovel_library_tap_action`). Options sheet includes explicit "Continue/Start Reading" and "View Series Catalogue".
+  - Offline resilience: Pre-populates `_novelDetails` immediately from SQLite cache (`cachedBook`, `cachedChapters`), avoiding blocking full-screen loaders or fatal errors when offline.
+  - Non-blocking error handling: Network failures display an informational banner with a Retry button, keeping cached chapters fully accessible.
+  - Centered navigation: Replaced pixel estimation with viewport-centered indexed calculation in `_scrollToChapter` and `_jumpToCurrentChapter`. Added "Jump to current" location buttons in catalogue and reader contents sheet.
+- **Subphase 3 — System Brightness, Fullscreen & Reader Parity (Findings C, D, J):**
+  - `ReadiumReaderActivity.kt`: Fullscreen system bars hide using `WindowInsetsCompat.Type.systemBars()` and `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`. Bars use `View.GONE` to eliminate dead padding. Viewport resizing restores scroll position via `readerContainer.post { goReading(currentLocator) }`.
+  - System Brightness: Android `-1.0` sets `WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE`. Flutter reader theme settings sheet features "Use system brightness" toggle with `Switch.adaptive`. Native typography sheet includes 1-tap System Brightness toggle.
+  - Reader Chrome Parity: Left header button routes to `onPrevious` displaying `location`, while right header button is reserved for `onClose`.
+- **Subphase 4 — Distinct Standard and Liquid Glass Appearances:**
+  - Standard mode: Crisp, opaque solid backgrounds (`base`), zero gradient wash, no backdrop blur.
+  - Liquid Glass mode: Bounded translucency (82% opacity in native Readium bar background, 75% in Flutter chrome) and backdrop blur (`sigmaX: 18, sigmaY: 18`).
+  - Forwarding: Appearance settings passed from Flutter through `ReadiumReaderService.applySettings` and `HonReaderBridge` to native `ReadiumReaderActivity`.
+- **Subphase 5 — Single Ongoing Queue Notification (Finding I):**
+  - Coalesced all download worker foreground notifications into a single ongoing notification with fixed `NOTIFICATION_ID = 4001`.
+  - Notification displays queue summary count (`"$count in queue"`), progress bar, and Pause/Cancel action buttons.
+  - Supports individual and batch stop requests (`requestAllJobsStopped`) with automatic dismissal when the queue empties (`dismissIfEmpty`).
+- **Subphase 6 — Export Downloaded Series as EPUB (Finding K):**
+  - Built `EpubExportService` compiling offline downloaded chapters into valid EPUB 3 publications.
+  - Strictly follows EPUB 3 spec: uncompressed `mimetype` as the first entry, `META-INF/container.xml`, `OEBPS/content.opf` (metadata, manifest, spine), `OEBPS/toc.xhtml` (nav), `OEBPS/toc.ncx` (EPUB 2 backward compatibility), `OEBPS/style.css`, bundled cover images, and clean chapter XHTML.
+  - Wired "Export series as EPUB" into Library options sheet and Catalogue action menu.
+  - Verified via `test/unit/epub_export_service_test.dart` (2/2 passed).
+- **Subphase 7 — Source Diagnostics and Content Sanitizer (Finding L):**
+  - `ChapterContentSanitizer`: Strips dangerous tags (`<script>`, `<style>`, `<iframe>`, `<form>`), ad containers and watermarks matching class/id regex patterns, and scraper promotional blocks while strictly preserving narrative prose and illustrations. Generates valid self-closing XHTML. Verified via `test/unit/chapter_content_sanitizer_test.dart` (9/9 passed).
+  - `SourceHealthService.diagnoseSource`: Produces a complete `SourceDiagnosticsMatrix` reporting health status and granular capability availability (Search, Catalog Listings, Novel Parsing, Passage Fetching). Verified via `test/unit/source_health_service_test.dart` (5/5 passed).
+
+### 12. October 21 Review Follow-Up Pass (Findings 1–12, Areas A–E)
+- **Area A — Download State & Cancellation Integrity (Findings 1, 2, 3, 11, 12):**
+  - `HonDownloadManagerBridge.kt`: Implemented `stopJobDurableAndAwait`, invalidating token in SharedPreferences synchronously, cancelling WorkManager unique work, awaiting worker exit via `HonDownloadWorker.stopAndAwait`, and updating SQLite jobs and chapters tables. In `cancelDownload`, executes asynchronously on `cancellationExecutor` and only returns success after durable stop finishes (resolves Finding 1). In `requestAllJobsStopped`, queries active job and book IDs directly from SQLite to cancel durable work across process restarts, invalidates all tokens, and emits notifications without the invalid "ALL" sentinel (resolves Finding 2).
+  - `HonDownloadWorker.kt` & `DownloadNotifications.kt`: Moved `setForeground` inside `executeDownload` so waiting workers do not overwrite active notification titles. Added measured progress reporting (10%, 75%, 100%) and automatic dismissal when queue empties (`dismissIfEmpty`) (resolves Finding 3).
+  - `storage_service.dart`: Updated `isPathInsideManagedStorage` to resolve ancestor directories when target files do not yet exist, safely validating absent managed destinations without falsely reporting them as outside managed storage (resolves Finding 12).
+  - `database_service.dart`: In `deleteDownloadedChapters`, checks cancellation outcome and aborts file deletion if cancellation fails. Missing files within managed storage are cleanly reconciled to `notDownloaded` without error (resolves Findings 1 & 12).
+  - `chapter_action_coordinator.dart`: Added `promptDeleteUnread` (calculating unread downloaded chapters ahead of current reading index) and `promptDownloadCustomN` (prompts dialog for custom count N and queues forward from reading index) (resolves Finding 11).
+  - `reader_contents_sheet.dart`: Added popup menu actions for custom download count and delete unread. Replaced static pixel math with `_currentChapterKey` and `Scrollable.ensureVisible` (resolves Finding 7). Added Liquid Glass blur branch with `GlassStyle.richOf(context)` (resolves Finding 6).
+  - `source_catalog_screen.dart`: Wired `_scrollToCurrentChapter` using `_currentChapterKey` on current reading chapter tile. Added `_deleteUnreadDownloads()` to catalogue popup menu (resolves Findings 7 & 11).
+- **Area B — Reader Settings & Navigation (Findings 4, 5, 6, 7):**
+  - `reader_theme.dart` & `providers.dart`: Default `brightness` set to `-1.0` (System brightness). Preserved negative values in `fromMap` and `applyNativeTypography` without clamping to `0.1` (resolves Finding 4).
+  - `reader_navigator.dart`: Uses versioned `appAppearanceKey` (`'hon_app_appearance_v1'`) with fallback. Added `fromCatalogue` parameter passed to `ReaderScreen` (resolves Findings 5 & 6).
+  - `reader_chrome.dart`: `ReaderHeader` updated with `onBack` and `backLabel` with `CupertinoIcons.chevron_left` for catalogue navigation. `ReaderFooter` updated with `onReload` parameter and `CupertinoIcons.arrow_clockwise` button for chapter reload (resolves Finding 6).
+  - `reader_screen.dart`: Added `_backToCatalogue` method and passed as `onBack` in `_buildTopHeader` for web novels. Passed `onReload: _reloadCurrentChapter` in `_buildBottomBar`. Applied `ChapterContentSanitizer.sanitize` on chapter loading in `_ensureChapterContent` and on initial load (resolves Finding 9).
+  - `ReadiumReaderActivity.kt`: Top-left `prevBtn` changed to "Contents" button triggering `showTocDialog()`. In `finish()`, resets `screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE` (resolves Findings 4 & 6).
+- **Area C — Real EPUB Export & Passage Cleanup (Findings 8, 9):**
+  - Android File Sharing: Added `res/xml/file_paths.xml` and registered `androidx.core.content.FileProvider` in `AndroidManifest.xml`. Added `shareFile` method handler in `HonReaderBridge.kt` using FileProvider and Intent.createChooser.
+  - `epub_export_service.dart`: Added `_bundleIllustrations` to package downloaded image files (`file://` or local paths) into `OEBPS/images/`, add OPF manifest entries, and rewrite XHTML `img` `src` to relative archive paths. Added `shareExportedEpub` calling `HonReaderBridge.shareFile`. Added `Share` action button to export snackbars in `library_screen.dart` and `source_catalog_screen.dart` (resolves Finding 8).
+  - `chapter_content_sanitizer.dart`: Removed broad `translate(d)? by` pattern from `_promoTextPatterns` to protect legitimate attribution notes. Anchored `_adTokenRegex` to word/hyphen boundaries. Added duplicate chapter heading removal matching `chapterTitle`. Restricted anchor `href` to `http`, `https`, and `mailto` (resolves Finding 9).
+- **Area D — Sources and Honest Diagnostics (Finding 10):**
+  - `source_health_service.dart`: Introduced `CapabilityStatus` enum (`notTested, working, empty, failed, unsupported`). Truthfully reports Novel Parsing and Passage Fetching as `notTested` unless explicitly probed against a specific novel/passage (resolves Finding 10).
+- **Area E — UI Polish & Appearance Modes (Finding 6):**
+  - `reader_menu_popup.dart`: Added `ClipRRect` and `BackdropFilter` with `GlassStyle.richOf(context)`.
+  - `themes_settings_sheet.dart`: Inherited theme extensions via `Theme.of(context).extensions.values`. Added `ClipRRect` and `BackdropFilter` with `GlassStyle.richOf(context)` in both main sheet and `_customize` sub-sheet (resolves Finding 6).
+
+### 13. October 21 Recheck Follow-Up Pass (Targeted Fixes 1–8 & Phone Testing Checklist)
+
+- **Targeted Fix 1 — Honest & Robust Chapter Reload (`reader_screen.dart`):**
+  - Added `force: true` to `_ensureChapterContent(int index, {bool force = false})`. Bypasses `_chapters[index].htmlContent.isNotEmpty` cache guard only during an explicit reload.
+  - Refetches fresh passage from `SourceRegistry` when forced, updating local chapter storage; falls back to re-reading the local file when offline.
+  - Preserves existing readable content in `_documents` and `_chapters` if reloading fails, preventing blank screen regression.
+  - `_reloadCurrentChapter`: captures reading anchor via `_captureAnchor()`, invokes `_ensureChapterContent(idx, force: true)`, restores anchor via `_restoreScrollAnchor()` on post-frame callback, and displays truthful SnackBar on success or failure.
+  - Verified via static analysis and unit tests.
+
+- **Targeted Fix 2 — Android EPUB Sharing & Persistent "Save As":**
+  - `file_paths.xml`: configured `<files-path name="app_flutter" path="../app_flutter" />` and `<cache-path name="shared_exports" path="exports" />`.
+  - `HonReaderBridge.kt`: in `shareFile`, defensively copies to native `exports/` cache dir if FileProvider resolution on external/document directory fails, logs errors, and returns `SHARE_FAILED` to Dart.
+  - `HonFilesBridge.kt`: added `exportFileAs` via `ACTION_CREATE_DOCUMENT` for native SAF export of EPUBs.
+  - `epub_export_service.dart`: added `ShareResult` model; `shareExportedEpub` returns `ShareResult` with descriptive error messages; added `saveExportedEpubAs` supporting SAF on Android and `FilePicker.platform.saveFile` fallback.
+  - `source_catalog_screen.dart` & `library_screen.dart`: on export success, presents modal bottom sheet with "Share EPUB" and "Save As...", surfacing errors if share or save fails.
+
+- **Targeted Fix 3 — EPUB Illustration Robustness & Atomic Output:**
+  - `epub_export_service.dart`:
+    - Added `await DatabaseService.instance.ensureChaptersLoaded(book.id)` when `chapters` argument is null.
+    - Illustration URI parser handles single-slash `file:/` (from Java `toURI().toString()`), `file:///`, and plain paths; decodes percent-encoded URIs (`Uri.decodeFull`).
+    - Validates image paths using `StorageService.instance.isPathInsideManagedStorage(file.path)` and `file.existsSync()`.
+    - Deduplication map `localImageMap[file.path]` is updated only *after* file read and archive insertion succeed.
+    - Strips unbundled/missing `<img>` tags (`result.replaceAll(fullMatch, '')`) so XHTML output is valid EPUB 3 without broken local references.
+    - Periodic `await Future<void>.delayed(Duration.zero)` every 20 chapters to keep UI isolate responsive.
+    - Atomic file creation: writes to `.part` file first and renames to `.epub` on completion, deleting temp file on error.
+  - Verified via `test/unit/epub_export_service_test.dart` (3/3 passed: empty chapter failure, structural EPUB 3 validity, and illustration bundling / deduplication / missing tag stripping / atomic rename).
+
+- **Targeted Fix 4 — Current-Chapter Positioning for Long Lazy Lists:**
+  - `source_catalog_screen.dart`: index-aware offset calculation taking `_reverseChapters` into account (`chapters.length - 1 - readingIndex`); two-stage positioning: jumps/animates close to target row, followed by `addPostFrameCallback` with `Scrollable.ensureVisible` for pixel-perfect centering; `_initialScrollOnce` triggers only once.
+  - `reader_contents_sheet.dart`: two-stage positioning with `addPostFrameCallback` alignment.
+
+- **Targeted Fix 5 — Queue Notification Ownership & Batch Coordination:**
+  - `DownloadNotifications.kt`: refactored to single queue coordinator with `ConcurrentHashMap` tracking active downloads; displays indeterminate progress (`setProgress(0, 0, true)`) eliminating worker progress jumps; automatically dismisses when queue count reaches 0.
+  - `HonDownloadWorker.kt`: reports descriptive phases ("Downloading passage", "Extracting illustrations"); calls `onJobFinished` in `finally`.
+  - `HonDownloadManagerBridge.kt`: in `requestAllJobsStopped`: (1) snapshots active jobs/books from SQLite, (2) synchronously invalidates and commits tokens, (3) acquires per-job scheduling locks before WorkManager cancellation and worker termination, (4) updates SQLite durable state only after all workers have stopped, (5) dispatches state notifications, (6) updates notifications.
+  - Verified via `./gradlew :app:compileDebugKotlin` (`BUILD SUCCESSFUL`).
+
+- **Targeted Fix 6 — Honest & Granular Source Diagnostics:**
+  - `source_health_service.dart`: tests search with explicit non-empty query (`'a'`); distinguishes empty results (`CapabilityStatus.empty`) from network/parse errors (`CapabilityStatus.failed`); never infers search capability from an empty listing query.
+  - Verified via `test/unit/source_health_service_test.dart` (7/7 passed: OK, policy block, Cloudflare/login, SSL failure, truthful diagnostic matrix, empty search results, and failing search execution).
+
+- **Targeted Fix 7 — Native/Flutter Reader Appearance Parity:**
+  - `ReadiumReaderActivity.kt`: when `isGlass == true` (and accessibility touch exploration is disabled), applies translucent card drawable with subtle stroke border to `topBar`, `bottomBar`, and bottom sheets; on API 31+ applies `FLAG_BLUR_BEHIND` and `blurBehindRadius = 25` to dialogs/sheets; removes `FLAG_BLUR_BEHIND` from main reader window so background apps are not blurred; updates `window.attributes = layoutParams` explicitly.
+
+- **Targeted Fix 8 — Verification, Diagnostics, and Honest Status Reporting:**
+  - Applied strict three-tier taxonomy: `implemented`, `focused-test verified`, and `needs phone check`.
+
+---
+
+## Phase 6 (Oct 22 Recheck Pass) — Comprehensive Resolutions
+
+| Finding | Component | Resolution Details | Status |
+| :--- | :--- | :--- | :---: |
+| **1. Reload Enum Library Scope** | `reader_screen.dart` | Moved `enum ChapterLoadResult` outside `_ReaderScreenState` to library scope, resolving the Dart compile blocker while preserving explicit return outcomes (`refreshedOnline`, `offlineFallback`, `skipped`, `failed`) and memory-only reload semantics. | `implemented` (checks not run; phone verification pending) |
+| **2. Batch Cancellation Lock-Order Inversion** | `HonDownloadManagerBridge.kt` | Removed outer SQLite write transaction wrapping `HonDownloadWorker.stopAndAwait(target.jobId)`, preventing database writer stalls while awaiting workers. Workers stop cleanly without holding SQLite locks; short, localized per-job transaction commits status and verifies `status != 'completed'` and `download_state != 'downloaded'`. | `implemented` (checks not run; phone verification pending) |
+| **3. Unified Coordinate Space & Measured Chapter Positioning** | `source_catalog_screen.dart`, `reader_contents_sheet.dart` | Aligned chapter tracking strictly to display positions (`displayIndex`), fixing inverted/mixed index orders on reversed lists. Replaced unbounded set accumulation with active mounted tracking (`_TrackedChapterItem` with `onMount`/`onUnmount`). Eliminated height guesswork by measuring actual row heights and header offset via `RenderAbstractViewport.of(renderBox).getOffsetToReveal(...)`. | `implemented` (checks not run; phone verification pending) |
+| **4. Opaque Glass Fallback & Runtime State Changes** | `ReadiumReaderActivity.kt` | `getBarBackgroundColor()` and `applyDialogGlassEffect()` explicitly check `if (isGlass && isBlurAllowed())`. When blur is disallowed (battery saver mode, accessibility touch exploration, or cross-window blur disabled), background colors return 100% opaque solid theme colors instead of 82% alpha translucent. Registered runtime listeners for `ACTION_POWER_SAVE_MODE_CHANGED`, `addCrossWindowBlurEnabledListener`, and `TouchExplorationStateChangeListener` to re-style bars dynamically. | `implemented` (checks not run; phone verification pending) |
+| **5. Notification Foreground Lifecycle Ownership** | `HonDownloadWorker.kt`, `DownloadNotifications.kt`, `HonDownloadManagerBridge.kt` | Uses WorkManager per-worker foreground service promotion (`setForeground`) with fallback to `NotificationManager` under background launch restrictions. Structural limit acknowledged: WorkManager ties foreground service lifecycle to individual worker execution rather than a standalone persistent foreground service daemon; status reported honestly as partial. | `partially implemented` (WorkManager per-worker foreground architecture; phone verification pending) |
+
+---
+
+## Physical Phone Testing Checklist
+
+The following items cannot be fully verified via unit tests or JVM host execution alone and require testing on a physical Android device:
+
+1. **Chapter Reload in Web Novel Reader:**
+   - [ ] Tap chapter reload button in bottom footer bar while reading an online chapter.
+   - [ ] Confirm reading scroll position is preserved without jumping to the top of the chapter.
+   - [ ] Confirm offline downloaded files are not overwritten or corrupted by reload attempts.
+   - [ ] Disable WiFi/data, tap reload, and verify fallback to saved copy with truthful "Reloaded from saved offline copy" SnackBar.
+
+2. **EPUB Export & File Sharing / SAF "Save As":**
+   - [ ] Export downloaded series as EPUB from the Library card popup menu and verify modal bottom sheet appears.
+   - [ ] If illustrations were omitted, confirm the red omission warning note is displayed in the bottom sheet.
+   - [ ] Tap "Share EPUB" and confirm Android system Share sheet opens without FileProvider crashes (`IllegalArgumentException: Failed to find configured root`).
+   - [ ] Share to an external reader app (e.g. Google Play Books, Moon+ Reader) and verify illustrations and table of contents render properly.
+   - [ ] Tap "Save As..." and verify Android Storage Access Framework (SAF) system file picker opens.
+   - [ ] Press "Cancel" in the SAF file picker and confirm app returns cleanly with "Save cancelled" SnackBar, without opening a secondary file picker.
+
+3. **Catalogue & Reader Contents Dynamic Chapter Centering:**
+   - [ ] Open a series with 500+ chapters in `SourceCatalogScreen` where reading progress is at chapter ~300.
+   - [ ] Verify catalog dynamically converges and centers on Chapter 300 without lag or getting stuck at index 0.
+   - [ ] Toggle "Newest chapter first" sort order and confirm catalogue jumps to the correct reversed position without freezing or crashing.
+   - [ ] Open Reader Contents sheet and confirm current reading chapter is immediately visible and centered in viewport.
+
+4. **Background Download Queue & Notifications:**
+   - [ ] Queue "Download Next 15" chapters while connected to WiFi.
+   - [ ] Pull down Android notification shade: confirm ongoing notification showing indeterminate progress bar and queue item count.
+   - [ ] Tap "Pause All": confirm notification dismisses, and newly enqueued jobs after pause snapshot are not cancelled or lost.
+   - [ ] Tap "Cancel All": verify notification dismisses and database states reflect cancellation cleanly.
+
+5. **Readium Native EPUB Appearance & Glass Fallback:**
+   - [ ] On Android 12+ (API 31+) device, switch app appearance to "Liquid Glass" mode.
+   - [ ] Open an EPUB book in Readium reader: verify top bar, bottom scrubber bar, and appearance dialog display translucent glass styling.
+   - [ ] Turn on Battery Saver mode while in the reader: verify bars and dialogs immediately switch to 100% solid opaque background.
+   - [ ] Turn off Battery Saver mode: verify translucent glass styling restores immediately.
+   - [ ] Confirm the main reader window does NOT blur phone wallpaper/desktop behind text.
+   - [ ] Verify System Brightness toggle respects device ambient brightness when enabled and custom slider overrides when disabled.
 

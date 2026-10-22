@@ -2,6 +2,7 @@ import '../../../app/theme/glass_surface.dart';
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../../../app/theme/hon_colors.dart';
 import '../../../core/database/database_service.dart';
@@ -14,9 +15,15 @@ import '../../../shared/widgets/book_cover_widget.dart';
 import '../../../shared/widgets/book_grid_layout.dart';
 import '../../reader/presentation/reader_navigator.dart';
 import '../../sheets/add_to_library_prompt.dart';
+import '../../../core/downloads/chapter_action_coordinator.dart';
 import 'chapter_download_sheet.dart';
 import '../../settings/presentation/source_controls_screen.dart';
 import '../../../core/updates/chapter_update_service.dart';
+import '../../../core/sources/installed_extension_service.dart';
+import '../../../core/sources/source_preferences.dart';
+import '../../../core/sources/source_health_service.dart';
+import '../../../core/export/epub_export_service.dart';
+
 
 class SourceCatalogScreen extends StatefulWidget {
   final ExtensionMeta sourceMeta;
@@ -55,6 +62,8 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
   String? _errorMessage;
   String? _rawErrorDetails;
   bool _showErrorDetails = false;
+  String? _blockedHost;
+  bool _isCloudflareOrLogin = false;
   List<SourceNovelSummary> _novels = [];
   final TextEditingController _searchController = TextEditingController();
   int _searchGeneration = 0;
@@ -63,23 +72,42 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
     final raw = error.toString().replaceFirst('SourceNetworkException: ', '');
     _rawErrorDetails = raw;
     _showErrorDetails = false;
+    _blockedHost = null;
+    _isCloudflareOrLogin = false;
     final lower = raw.toLowerCase();
     if (lower.contains('sslhandshakeexception') ||
         lower.contains('certpathvalidatorexception') ||
         lower.contains('trust anchor') ||
         lower.contains('certificate')) {
       _errorMessage =
-          'Unable to establish a secure connection to this source. '
-          'The website\'s SSL certificate chain could not be verified by Android '
-          '(missing intermediate certificates or untrusted root).';
+          'Secure connection failed (untrusted certificate). '
+          'The source website may have an invalid TLS certificate.';
     } else if (lower.contains('source network policy') ||
-        lower.contains('network policy')) {
-      _errorMessage =
-          'Network request blocked by source security policy. '
-          'This extension attempted to access an undeclared domain.';
+        lower.contains('network policy') ||
+        lower.contains('is not allowed') ||
+        lower.contains('domain not allowed')) {
+      final hostMatch = RegExp(
+        r"(?:domain|host|url|address)[\s:='`]+([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})",
+        caseSensitive: false,
+      ).firstMatch(raw) ??
+          RegExp(
+            r"https?://([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})",
+            caseSensitive: false,
+          ).firstMatch(raw) ??
+          RegExp(
+            r"'([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})'",
+            caseSensitive: false,
+          ).firstMatch(raw);
+      _blockedHost = hostMatch?.group(1);
+      _errorMessage = _blockedHost != null
+          ? 'Network request blocked by source security policy. Undeclared domain "$_blockedHost".'
+          : 'Network request blocked by source security policy. This extension attempted to access an undeclared domain.';
     } else if (lower.contains('cloudflare') ||
         lower.contains('captcha') ||
-        lower.contains('403 forbidden')) {
+        lower.contains('403 forbidden') ||
+        lower.contains('needs login') ||
+        lower.contains('unauthorized')) {
+      _isCloudflareOrLogin = true;
       _errorMessage =
           'This source is currently protected by Cloudflare or bot verification. '
           'You may need to open it in a browser or log in.';
@@ -97,6 +125,37 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
           'Failed to load catalog. The source encountered an unexpected error.';
     }
   }
+
+  Future<void> _addBlockedHost(String host) async {
+    final clean = host.trim().toLowerCase();
+    if (clean.isEmpty) return;
+    final ext = InstalledExtensionService.instance.find(widget.sourceMeta.id);
+    if (ext != null) {
+      final updated = {...ext.allowedHosts, clean}.toList()..sort();
+      await InstalledExtensionService.instance.updateAllowedHosts(
+        widget.sourceMeta.id,
+        updated,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Added $clean to allowed hosts')),
+        );
+      }
+    }
+    _infoLoaded ? _performSearch(_searchQuery) : _loadInitialCatalog();
+  }
+
+  Future<void> _testSourceHealth() async {
+    final res = await SourceHealthService.testSource(widget.sourceMeta.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Health check: ${res.label}${res.details != null ? " - ${res.details}" : ""}'),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
 
   @override
   void initState() {
@@ -424,12 +483,37 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                         spacing: 12,
                         runSpacing: 8,
                         children: [
+                          if (_blockedHost != null)
+                            FilledButton.icon(
+                              icon: const Icon(Icons.add_moderator, size: 16),
+                              label: Text('Add $_blockedHost to allowed hosts'),
+                              onPressed: () => _addBlockedHost(_blockedHost!),
+                            ),
+                          if (_isCloudflareOrLogin)
+                            FilledButton.icon(
+                              icon: const Icon(Icons.open_in_new, size: 16),
+                              label: const Text('Open website / Log in'),
+                              onPressed: () async {
+                                final url = _catalogInfo.baseUrl.isNotEmpty
+                                    ? _catalogInfo.baseUrl
+                                    : 'https://${widget.sourceMeta.id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '')}.com';
+                                await SourcePreferences.openWebsite(
+                                  widget.sourceMeta.id,
+                                  url,
+                                );
+                              },
+                            ),
                           OutlinedButton.icon(
                             icon: const Icon(CupertinoIcons.refresh, size: 16),
                             label: const Text('Retry'),
                             onPressed: () => _infoLoaded
                                 ? _performSearch(_searchQuery)
                                 : _loadInitialCatalog(),
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.network_check, size: 16),
+                            label: const Text('Test source'),
+                            onPressed: _testSourceHealth,
                           ),
                           if (_rawErrorDetails != null && _rawErrorDetails!.isNotEmpty)
                             TextButton.icon(
@@ -444,6 +528,7 @@ class _SourceCatalogScreenState extends State<SourceCatalogScreen> {
                             ),
                         ],
                       ),
+
                       if (_showErrorDetails && _rawErrorDetails != null) ...[
                         const SizedBox(height: 12),
                         Container(
@@ -640,10 +725,13 @@ class SourceNovelDetailsScreen extends StatefulWidget {
 class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   bool _isLoadingDetails = true;
   String? _detailsError;
+  String? _networkBannerError;
   NovelDetails? _novelDetails;
   bool _isOpeningChapter = false;
   bool _isDownloading = false;
   bool _reverseChapters = false;
+  bool _isSelectionMode = false;
+  final Set<String> _selectedChapterIds = <String>{};
   final ScrollController _scrollController = ScrollController();
 
   static String cleanHtmlSynopsis(String raw) {
@@ -668,14 +756,121 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     return text.trim();
   }
 
-  void _scrollToChapter(int index) {
-    if (!_scrollController.hasClients) return;
-    final target = (420.0 + index * 56.0).clamp(0.0, _scrollController.position.maxScrollExtent);
-    _scrollController.animateTo(
-      target,
-      duration: const Duration(milliseconds: 350),
-      curve: Curves.easeOutCubic,
-    );
+  bool _hasInitialScrolled = false;
+  final GlobalKey _currentChapterKey = GlobalKey();
+  final GlobalKey _chapterListHeaderKey = GlobalKey();
+  final Set<int> _mountedChapterPositions = <int>{};
+  final Map<int, double> _measuredItemHeights = <int, double>{};
+
+  void _scrollToCurrentChapter({bool animate = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final immediateCtx = _currentChapterKey.currentContext;
+      if (immediateCtx != null) {
+        Scrollable.ensureVisible(
+          immediateCtx,
+          alignment: 0.5,
+          duration: animate ? const Duration(milliseconds: 300) : Duration.zero,
+          curve: Curves.easeOutCubic,
+        );
+        _hasInitialScrolled = true;
+        return;
+      }
+
+      if (!_scrollController.hasClients) return;
+      final chapters = _novelDetails?.chapters ?? const [];
+      if (chapters.isEmpty) return;
+      final bookId = '${widget.sourceId}:${widget.novel.id}';
+      final progress = DatabaseService.instance.getProgress(bookId);
+      final readingIndex = progress?.chapterIndex.toInt() ?? 0;
+      final rawIndex = readingIndex.clamp(0, chapters.length - 1);
+      final targetPosition = _reverseChapters ? (chapters.length - 1 - rawIndex) : rawIndex;
+
+      // Dynamic converging loop: uses visible mounted indices and measured row heights to navigate toward distant chapters
+      for (int iteration = 0; iteration < 6; iteration++) {
+        if (!mounted) return;
+        final ctx = _currentChapterKey.currentContext;
+        if (ctx != null && ctx.mounted) {
+          Scrollable.ensureVisible(
+            ctx,
+            alignment: 0.5,
+            duration: animate && iteration == 0 ? const Duration(milliseconds: 300) : Duration.zero,
+            curve: Curves.easeOutCubic,
+          );
+          _hasInitialScrolled = true;
+          return;
+        }
+
+        final currentOffset = _scrollController.offset;
+        final viewport = _scrollController.position.viewportDimension;
+        final maxScroll = _scrollController.position.maxScrollExtent;
+
+        final avgRowHeight = _measuredItemHeights.isNotEmpty
+            ? (_measuredItemHeights.values.reduce((a, b) => a + b) / _measuredItemHeights.length)
+            : 58.0;
+
+        double nextOffset;
+        if (_mountedChapterPositions.isNotEmpty) {
+          final minMounted = _mountedChapterPositions.reduce((a, b) => a < b ? a : b);
+          final maxMounted = _mountedChapterPositions.reduce((a, b) => a > b ? a : b);
+
+          if (targetPosition < minMounted) {
+            final delta = minMounted - targetPosition;
+            nextOffset = (currentOffset - (delta * avgRowHeight) - (viewport / 2)).clamp(0.0, maxScroll);
+          } else if (targetPosition > maxMounted) {
+            final delta = targetPosition - maxMounted;
+            nextOffset = (currentOffset + (delta * avgRowHeight) + (viewport / 2)).clamp(0.0, maxScroll);
+          } else {
+            nextOffset = (currentOffset + ((targetPosition - minMounted) * avgRowHeight) - (viewport / 2)).clamp(0.0, maxScroll);
+          }
+        } else {
+          double listStartOffset = 0.0;
+          final headerContext = _chapterListHeaderKey.currentContext;
+          if (headerContext != null && headerContext.mounted) {
+            final renderBox = headerContext.findRenderObject() as RenderBox?;
+            if (renderBox != null && renderBox.hasSize) {
+              try {
+                final vp = RenderAbstractViewport.of(renderBox);
+                final revealed = vp.getOffsetToReveal(renderBox, 0.0);
+                listStartOffset = revealed.offset + renderBox.size.height;
+              } catch (_) {}
+            }
+          }
+          if (listStartOffset <= 0.0) {
+            listStartOffset = 520.0;
+          }
+          nextOffset = (listStartOffset + targetPosition * avgRowHeight - (viewport / 2)).clamp(0.0, maxScroll);
+        }
+
+        if ((nextOffset - currentOffset).abs() > 4.0) {
+          if (animate && iteration == 0) {
+            await _scrollController.animateTo(
+              nextOffset,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+            );
+          } else {
+            _scrollController.jumpTo(nextOffset);
+          }
+        }
+
+        await WidgetsBinding.instance.endOfFrame;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      if (mounted) {
+        final finalCtx = _currentChapterKey.currentContext;
+        if (finalCtx != null && finalCtx.mounted) {
+          Scrollable.ensureVisible(finalCtx, alignment: 0.5, duration: Duration.zero);
+          _hasInitialScrolled = true;
+        }
+      }
+    });
+  }
+
+  void _initialScrollOnce() {
+    if (_hasInitialScrolled) return;
+    _scrollToCurrentChapter(animate: false);
   }
 
   @override
@@ -683,8 +878,58 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
     super.initState();
     DatabaseService.instance.changeNotifier.addListener(_onDbChanged);
     final bookId = '${widget.sourceId}:${widget.novel.id}';
+    final cachedBook = DatabaseService.instance.getBookById(bookId);
+    final cachedChapters = DatabaseService.instance.getChapters(bookId);
+    if (cachedBook != null || cachedChapters.isNotEmpty) {
+      _novelDetails = NovelDetails(
+        id: widget.novel.id,
+        title: cachedBook?.title ?? widget.novel.title,
+        author: cachedBook?.author ?? widget.novel.author ?? widget.sourceName,
+        description: cachedBook?.description ?? widget.novel.description ?? '',
+        coverUrl: cachedBook?.coverPath ?? widget.novel.coverUrl,
+        chapters: [
+          for (final c in cachedChapters)
+            SourceChapter(
+              id: c.sourceChapterId.isNotEmpty ? c.sourceChapterId : c.id,
+              title: c.title,
+              index: c.chapterIndex,
+              url: c.url,
+            ),
+        ],
+      );
+      _isLoadingDetails = false;
+    }
     DatabaseService.instance.ensureChaptersLoaded(bookId).then((_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        if (_novelDetails == null || _novelDetails!.chapters.isEmpty) {
+          final chapters = DatabaseService.instance.getChapters(bookId);
+          if (chapters.isNotEmpty) {
+            final book = DatabaseService.instance.getBookById(bookId);
+            setState(() {
+              _novelDetails = NovelDetails(
+                id: widget.novel.id,
+                title: book?.title ?? widget.novel.title,
+                author: book?.author ?? widget.novel.author ?? widget.sourceName,
+                description: book?.description ?? widget.novel.description ?? '',
+                coverUrl: book?.coverPath ?? widget.novel.coverUrl,
+                chapters: [
+                  for (final c in chapters)
+                    SourceChapter(
+                      id: c.sourceChapterId.isNotEmpty ? c.sourceChapterId : c.id,
+                      title: c.title,
+                      index: c.chapterIndex,
+                      url: c.url,
+                    ),
+                ],
+              );
+              _isLoadingDetails = false;
+            });
+            _initialScrollOnce();
+          }
+        } else {
+          _initialScrollOnce();
+        }
+      }
     });
     _loadNovelDetails();
   }
@@ -701,10 +946,13 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   }
 
   Future<void> _loadNovelDetails() async {
-    setState(() {
-      _isLoadingDetails = true;
-      _detailsError = null;
-    });
+    if (_novelDetails == null) {
+      setState(() {
+        _isLoadingDetails = true;
+        _detailsError = null;
+        _networkBannerError = null;
+      });
+    }
 
     try {
       final details = await SourceRegistry.instance.getNovelDetails(
@@ -716,23 +964,29 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
         setState(() {
           _novelDetails = details;
           _isLoadingDetails = false;
+          _detailsError = null;
+          _networkBannerError = null;
         });
+        unawaited(_saveNovel());
         final bookId = '${widget.sourceId}:${widget.novel.id}';
         final progress = DatabaseService.instance.getProgress(bookId);
         if (progress != null && progress.chapterIndex > 0) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _scrollToChapter(progress.chapterIndex.toInt());
-          });
+          _initialScrollOnce();
         }
       }
     } catch (e) {
       if (mounted) {
+        final err = e.toString().replaceFirst(
+          'SourceNetworkException: ',
+          '',
+        );
         setState(() {
-          _detailsError = e.toString().replaceFirst(
-            'SourceNetworkException: ',
-            '',
-          );
           _isLoadingDetails = false;
+          if (_novelDetails == null || _novelDetails!.chapters.isEmpty) {
+            _detailsError = err;
+          } else {
+            _networkBannerError = err;
+          }
         });
       }
     }
@@ -803,6 +1057,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
           book,
           initialChapterIndex: chapterIndex,
           initialChapterContent: passageHtml,
+          fromCatalogue: true,
         );
       }
     } catch (e) {
@@ -892,35 +1147,15 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
 
   Future<void> _downloadNext(int count) async {
     final book = await _saveNovel();
-    await DatabaseService.instance.ensureChaptersLoaded(book.id);
-    final chapters = DatabaseService.instance.getChapters(book.id);
     final progress = DatabaseService.instance.getProgress(book.id);
-    final start = DatabaseService.instance.isBookFinished(book.id)
-        ? chapters.length
-        : progress == null
-            ? 0
-            : (progress.chapterIndex.toInt() +
-                (progress.completionPercentage >= 1 ? 1 : 0))
-                .clamp(0, chapters.length);
-    final targets = chapters
-        .skip(start)
-        .where((c) => c.downloadState != ChapterDownloadState.downloaded)
-        .take(count)
-        .toList();
-    if (targets.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No new chapters to download.')),
-        );
-      }
-      return;
-    }
-    final queued = await HonDownloadManager.instance.queueChapters(book, targets);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Queued $queued chapters.')),
-      );
-    }
+    final readingIndex = progress?.chapterIndex.toInt() ?? 0;
+    if (!mounted) return;
+    await ChapterActionCoordinator.instance.downloadNextN(
+      context,
+      book: book,
+      count: count,
+      currentReadingIndex: readingIndex,
+    );
   }
 
   Future<void> _deleteReadDownloads() async {
@@ -934,27 +1169,146 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       }
       return;
     }
-    final deleted = await DatabaseService.instance.deleteReadChapters(
-      book.id,
-      progress.chapterIndex.toDouble(),
+    if (!mounted) return;
+    await ChapterActionCoordinator.instance.promptDeleteRead(
+      context,
+      book: book,
+      currentChapterIndex: progress.chapterIndex.toDouble(),
     );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted $deleted read chapter files.')),
-      );
-      setState(() {});
-    }
+  }
+
+  Future<void> _deleteUnreadDownloads() async {
+    final book = await _saveNovel();
+    final progress = DatabaseService.instance.getProgress(book.id);
+    final readingIndex = progress?.chapterIndex.toDouble() ?? 0.0;
+    if (!mounted) return;
+    await ChapterActionCoordinator.instance.promptDeleteUnread(
+      context,
+      book: book,
+      currentChapterIndex: readingIndex,
+    );
   }
 
   Future<void> _deleteAllOffline() async {
-    final bookId = '${widget.sourceId}:${widget.novel.id}';
-    final deleted =
-        await DatabaseService.instance.deleteAllDownloadedChapters(bookId);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deleted $deleted offline chapter files.')),
+    final book = await _saveNovel();
+    if (!mounted) return;
+    await ChapterActionCoordinator.instance.promptDeleteAll(
+      context,
+      book: book,
+    );
+  }
+
+  Future<void> _downloadSelected() async {
+    if (_selectedChapterIds.isEmpty) return;
+    final book = await _saveNovel();
+    await DatabaseService.instance.ensureChaptersLoaded(book.id);
+    final allChapters = DatabaseService.instance.getChapters(book.id);
+    final targets = allChapters.where((c) =>
+        _selectedChapterIds.contains(c.id) ||
+        _selectedChapterIds.contains(c.sourceChapterId));
+    if (!mounted) return;
+    await ChapterActionCoordinator.instance.downloadChapters(
+      context,
+      book: book,
+      chapters: targets,
+    );
+    if (mounted) setState(() => _isSelectionMode = false);
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedChapterIds.isEmpty) return;
+    final book = await _saveNovel();
+    await DatabaseService.instance.ensureChaptersLoaded(book.id);
+    final allChapters = DatabaseService.instance.getChapters(book.id);
+    final targets = allChapters.where((c) =>
+        _selectedChapterIds.contains(c.id) ||
+        _selectedChapterIds.contains(c.sourceChapterId));
+    if (!mounted) return;
+    final res = await ChapterActionCoordinator.instance.promptDeleteChapters(
+      context,
+      book: book,
+      chapters: targets,
+    );
+    if (res != null && mounted) {
+      setState(() {
+        _selectedChapterIds.clear();
+        _isSelectionMode = false;
+      });
+    }
+  }
+
+  Future<void> _exportEpub() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final book = await _saveNovel();
+    final res = await EpubExportService.exportSeriesAsEpub(book: book);
+    if (!mounted) return;
+    if (res.success && res.exportedFilePath != null) {
+      showModalBottomSheet(
+        context: context,
+        builder: (sheetCtx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'EPUB Exported (${res.chapterCount} chapters)',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                if (res.omittedImageCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Text(
+                      'Note: ${res.omittedImageCount} remote or missing image${res.omittedImageCount > 1 ? "s" : ""} could not be bundled.',
+                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.error),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const Icon(CupertinoIcons.share),
+                  title: const Text('Share EPUB'),
+                  subtitle: const Text('Send to another app or device'),
+                  onTap: () async {
+                    Navigator.of(sheetCtx).pop();
+                    final shareRes = await EpubExportService.shareExportedEpub(res.exportedFilePath!);
+                    if (!shareRes.success && mounted && shareRes.errorMessage != null) {
+                      messenger.showSnackBar(SnackBar(content: Text(shareRes.errorMessage!)));
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(CupertinoIcons.folder),
+                  title: const Text('Save As...'),
+                  subtitle: const Text('Save to device storage or Downloads'),
+                  onTap: () async {
+                    Navigator.of(sheetCtx).pop();
+                    final saveRes = await EpubExportService.saveExportedEpubAs(res.exportedFilePath!);
+                    if (mounted) {
+                      final message = saveRes.isSaved
+                          ? 'EPUB saved successfully'
+                          : saveRes.isFailed
+                              ? 'Failed to save EPUB: ${saveRes.errorMessage ?? "Unknown error"}'
+                              : 'Save cancelled';
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(message),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
       );
-      setState(() {});
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(res.errorMessage ?? 'Export failed'),
+        ),
+      );
     }
   }
 
@@ -984,6 +1338,10 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
       for (final item in DatabaseService.instance.getChapters(bookId))
         item.sourceChapterId: item,
     };
+    final progress = DatabaseService.instance.getProgress(bookId);
+    final readingIndex = progress?.chapterIndex.toInt() ?? 0;
+    final hasStarted = progress != null &&
+        (progress.chapterIndex > 0 || progress.completionPercentage > 0);
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -1008,9 +1366,9 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
           ),
         ),
       ),
-      body: _isLoadingDetails
+      body: (_isLoadingDetails && _novelDetails == null)
           ? const Center(child: CupertinoActivityIndicator(radius: 14))
-          : _detailsError != null
+          : (_detailsError != null && _novelDetails == null)
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -1058,6 +1416,48 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            if (_networkBannerError != null) ...[
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.amber.withValues(alpha: 0.35),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      CupertinoIcons.wifi_exclamationmark,
+                                      size: 18,
+                                      color: Colors.amber,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        'Offline or source unreachable. Showing cached chapters.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: textPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: _loadNovelDetails,
+                                      child: const Text(
+                                        'Retry',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                             // Cover & Metadata
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1191,13 +1591,27 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                         vertical: 12,
                                       ),
                                     ),
-                                    icon: const Icon(
-                                      CupertinoIcons.book,
+                                    icon: Icon(
+                                      hasStarted ? CupertinoIcons.book_fill : CupertinoIcons.book,
                                       size: 18,
                                     ),
-                                    label: const Text('Read Online'),
+                                    label: Text(
+                                      hasStarted
+                                          ? 'Continue (Ch. ${readingIndex + 1})'
+                                          : 'Start Reading',
+                                    ),
                                     onPressed: chapters.isNotEmpty
-                                        ? () => _openChapter(chapters.first, 0)
+                                        ? () async {
+                                            final target = readingIndex.clamp(0, chapters.length - 1);
+                                            final book = await _saveNovel();
+                                            if (context.mounted) {
+                                              await ReaderNavigator.openBook(
+                                                context,
+                                                book,
+                                                initialChapterIndex: target,
+                                              );
+                                            }
+                                          }
                                         : null,
                                   ),
                                 ),
@@ -1308,6 +1722,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
 
                             // Chapter List Header
                             Row(
+                              key: _chapterListHeaderKey,
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
@@ -1321,6 +1736,34 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    if (hasStarted && readingIndex < chapters.length)
+                                      IconButton(
+                                        icon: const Icon(CupertinoIcons.location, size: 18),
+                                        tooltip: 'Jump to current reading chapter',
+                                        onPressed: () => _scrollToCurrentChapter(),
+                                      ),
+                                    IconButton(
+                                      icon: Icon(
+                                        _isSelectionMode
+                                            ? CupertinoIcons.checkmark_circle_fill
+                                            : CupertinoIcons.checkmark_circle,
+                                        size: 18,
+                                        color: _isSelectionMode
+                                            ? HonColors.accentOrange
+                                            : null,
+                                      ),
+                                      tooltip: _isSelectionMode
+                                          ? 'Exit selection'
+                                          : 'Select chapters',
+                                      onPressed: () => setState(
+                                        () {
+                                          _isSelectionMode = !_isSelectionMode;
+                                          if (!_isSelectionMode) {
+                                            _selectedChapterIds.clear();
+                                          }
+                                        },
+                                      ),
+                                    ),
                                     IconButton(
                                       icon: const Icon(
                                         CupertinoIcons.sort_down,
@@ -1329,10 +1772,11 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                       tooltip: _reverseChapters
                                           ? 'Oldest chapter first'
                                           : 'Newest chapter first',
-                                      onPressed: () => setState(
-                                        () =>
-                                            _reverseChapters = !_reverseChapters,
-                                      ),
+                                      onPressed: () => setState(() {
+                                        _reverseChapters = !_reverseChapters;
+                                        _mountedChapterPositions.clear();
+                                        _hasInitialScrolled = false;
+                                      }),
                                     ),
                                     PopupMenuButton<String>(
                                       tooltip: 'Bulk chapter options',
@@ -1348,8 +1792,14 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                           case 'next10':
                                             await _downloadNext(10);
                                             break;
+                                          case 'next15':
+                                            await _downloadNext(15);
+                                            break;
                                           case 'next25':
                                             await _downloadNext(25);
+                                            break;
+                                          case 'select':
+                                            setState(() => _isSelectionMode = true);
                                             break;
                                           case 'custom':
                                             await _handleDownloadChapters();
@@ -1357,8 +1807,14 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                           case 'deleteRead':
                                             await _deleteReadDownloads();
                                             break;
+                                          case 'deleteUnread':
+                                            await _deleteUnreadDownloads();
+                                            break;
                                           case 'deleteAll':
                                             await _deleteAllOffline();
+                                            break;
+                                          case 'exportEpub':
+                                            await _exportEpub();
                                             break;
                                         }
                                       },
@@ -1372,19 +1828,37 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                                           child: Text('Download next 10'),
                                         ),
                                         const PopupMenuItem(
+                                          value: 'next15',
+                                          child: Text('Download next 15'),
+                                        ),
+                                        const PopupMenuItem(
                                           value: 'next25',
                                           child: Text('Download next 25'),
+                                        ),
+                                        const PopupMenuDivider(),
+                                        const PopupMenuItem(
+                                          value: 'select',
+                                          child: Text('Select chapters...'),
                                         ),
                                         const PopupMenuItem(
                                           value: 'custom',
                                           child: Text(
-                                            'Select range / chapters...',
+                                            'Select range / chapters sheet...',
                                           ),
+                                        ),
+                                        const PopupMenuDivider(),
+                                        const PopupMenuItem(
+                                          value: 'exportEpub',
+                                          child: Text('Export series as EPUB'),
                                         ),
                                         const PopupMenuDivider(),
                                         const PopupMenuItem(
                                           value: 'deleteRead',
                                           child: Text('Delete read chapters'),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'deleteUnread',
+                                          child: Text('Delete unread chapters'),
                                         ),
                                         const PopupMenuItem(
                                           value: 'deleteAll',
@@ -1403,6 +1877,69 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                         ),
                       ),
                     ),
+                    if (_isSelectionMode)
+                      SliverToBoxAdapter(
+                        child: Container(
+                          margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.06)
+                                : Colors.black.withValues(alpha: 0.04),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isDark ? Colors.white12 : Colors.black12,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${_selectedChapterIds.length} selected',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: textPrimary,
+                                ),
+                              ),
+                              const Spacer(),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    if (_selectedChapterIds.length == chapters.length) {
+                                      _selectedChapterIds.clear();
+                                    } else {
+                                      _selectedChapterIds.addAll(chapters.map((c) => c.id));
+                                    }
+                                  });
+                                },
+                                child: Text(_selectedChapterIds.length == chapters.length ? 'Clear' : 'Select All'),
+                              ),
+                              IconButton(
+                                tooltip: 'Download selected',
+                                icon: const Icon(CupertinoIcons.arrow_down_circle, size: 20),
+                                onPressed: _selectedChapterIds.isEmpty ? null : _downloadSelected,
+                              ),
+                              IconButton(
+                                tooltip: 'Delete downloaded',
+                                icon: const Icon(CupertinoIcons.trash, size: 20),
+                                onPressed: _selectedChapterIds.isEmpty ? null : _deleteSelected,
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _isSelectionMode = false;
+                                    _selectedChapterIds.clear();
+                                  });
+                                },
+                                child: const Text('Done'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
                       sliver: SliverList.builder(
@@ -1416,6 +1953,8 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                           final state =
                               saved?.downloadState ??
                               ChapterDownloadState.notDownloaded;
+                          final isSelected =
+                              _selectedChapterIds.contains(chapter.id);
 
                           Widget trailingWidget;
                           String? subtitleText;
@@ -1449,10 +1988,11 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                               subtitleText = 'Paused';
                               trailingWidget = IconButton(
                                 tooltip: 'Resume download',
-                                onPressed: saved == null
-                                    ? null
-                                    : () => HonDownloadManager.instance
-                                        .resumeDownload(saved.id),
+                                onPressed: () => HonDownloadManager.instance
+                                    .resumeDownloadForChapter(
+                                      bookId,
+                                      saved?.id ?? chapter.id,
+                                    ),
                                 icon: const Icon(
                                   CupertinoIcons.pause_circle_fill,
                                   color: HonColors.accentOrange,
@@ -1464,10 +2004,11 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                               subtitleText = 'Download failed';
                               trailingWidget = IconButton(
                                 tooltip: 'Retry download',
-                                onPressed: saved == null
-                                    ? null
-                                    : () => HonDownloadManager.instance
-                                        .resumeDownload(saved.id),
+                                onPressed: () => HonDownloadManager.instance
+                                    .resumeDownloadForChapter(
+                                      bookId,
+                                      saved?.id ?? chapter.id,
+                                    ),
                                 icon: Icon(
                                   CupertinoIcons.exclamationmark_circle_fill,
                                   color: Theme.of(context).colorScheme.error,
@@ -1489,32 +2030,75 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                               break;
                           }
 
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 6,
-                            ),
-                            title: Text(
-                              chapter.title,
-                              style: const TextStyle(fontSize: 14),
-                            ),
-                            subtitle: subtitleText != null
-                                ? Text(
-                                    subtitleText,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color:
-                                          state == ChapterDownloadState.failed
-                                          ? Theme.of(context).colorScheme.error
-                                          : state ==
-                                                ChapterDownloadState.downloaded
-                                          ? HonColors.accentGreen
+                          final isCurrent = hasStarted &&
+                              (saved?.chapterIndex.toInt() == readingIndex ||
+                                  index == readingIndex);
+
+                          return _TrackedChapterItem(
+                            key: ValueKey(chapter.id),
+                            displayIndex: position,
+                            onMount: (pos) => _mountedChapterPositions.add(pos),
+                            onUnmount: (pos) => _mountedChapterPositions.remove(pos),
+                            onMeasured: (pos, height) => _measuredItemHeights[pos] = height,
+                            child: ListTile(
+                              key: isCurrent ? _currentChapterKey : null,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 6,
+                              ),
+                              leading: _isSelectionMode
+                                  ? Icon(
+                                      isSelected
+                                          ? CupertinoIcons.checkmark_circle_fill
+                                          : CupertinoIcons.circle,
+                                      color: isSelected
+                                          ? HonColors.accentOrange
                                           : textSecondary,
-                                    ),
-                                  )
-                                : null,
-                            onTap: () => _openChapter(chapter, index),
-                            trailing: trailingWidget,
+                                      size: 22,
+                                    )
+                                  : null,
+                              title: Text(
+                                chapter.title,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                              subtitle: subtitleText != null
+                                  ? Text(
+                                      subtitleText,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color:
+                                            state == ChapterDownloadState.failed
+                                            ? Theme.of(context).colorScheme.error
+                                            : state ==
+                                                  ChapterDownloadState.downloaded
+                                            ? HonColors.accentGreen
+                                            : textSecondary,
+                                      ),
+                                    )
+                                  : null,
+                              onTap: () {
+                                if (_isSelectionMode) {
+                                  setState(() {
+                                    if (isSelected) {
+                                      _selectedChapterIds.remove(chapter.id);
+                                    } else {
+                                      _selectedChapterIds.add(chapter.id);
+                                    }
+                                  });
+                                  return;
+                                }
+                                _openChapter(chapter, index);
+                              },
+                              onLongPress: () {
+                                if (!_isSelectionMode) {
+                                  setState(() {
+                                    _isSelectionMode = true;
+                                    _selectedChapterIds.add(chapter.id);
+                                  });
+                                }
+                              },
+                              trailing: trailingWidget,
+                            ),
                           );
                         },
                       ),
@@ -1549,4 +2133,66 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
             ),
     );
   }
+}
+
+class _TrackedChapterItem extends StatefulWidget {
+  final int displayIndex;
+  final ValueChanged<int> onMount;
+  final ValueChanged<int> onUnmount;
+  final void Function(int displayIndex, double height)? onMeasured;
+  final Widget child;
+
+  const _TrackedChapterItem({
+    super.key,
+    required this.displayIndex,
+    required this.onMount,
+    required this.onUnmount,
+    this.onMeasured,
+    required this.child,
+  });
+
+  @override
+  State<_TrackedChapterItem> createState() => _TrackedChapterItemState();
+}
+
+class _TrackedChapterItemState extends State<_TrackedChapterItem> {
+  @override
+  void initState() {
+    super.initState();
+    widget.onMount(widget.displayIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final h = context.size?.height;
+        if (h != null && h > 0) {
+          widget.onMeasured?.call(widget.displayIndex, h);
+        }
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(_TrackedChapterItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.displayIndex != widget.displayIndex) {
+      widget.onUnmount(oldWidget.displayIndex);
+      widget.onMount(widget.displayIndex);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final h = context.size?.height;
+          if (h != null && h > 0) {
+            widget.onMeasured?.call(widget.displayIndex, h);
+          }
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.onUnmount(widget.displayIndex);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

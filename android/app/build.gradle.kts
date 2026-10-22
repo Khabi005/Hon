@@ -61,12 +61,15 @@ android {
             isEnable = true
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86_64")
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 
-    testOptions.unitTests.all {
-        it.systemProperty("hon.bundledSources", rootProject.file("../assets/sources/bundled").absolutePath)
+    testOptions {
+        unitTests.all {
+            it.systemProperty("hon.bundledSources", rootProject.file("../assets/sources/bundled").absolutePath)
+        }
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -84,6 +87,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.test:core:1.6.1")
 }
 
 flutter {

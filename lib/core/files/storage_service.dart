@@ -30,19 +30,45 @@ class StorageService {
   Directory get imagesDir => Directory(p.join(_baseDir!.path, 'images'));
 
   /// Only publications, covers, chapters, and images owned by Hon may be deleted.
-  /// Resolve actual filesystem links; lexical normalization alone is unsafe.
-  bool isPathInsideManagedStorage(String filePath) {
+  /// Resolves actual filesystem links; handles both existing files and absent destinations.
+  bool isPathInsideManagedStorage(String filePath, {Directory? specificRoot}) {
     if (_baseDir == null) return false;
     try {
-      final file = File(filePath);
-      if (!file.existsSync()) return false;
-      final target = file.resolveSymbolicLinksSync();
-      for (final dir in [publicationsDir, coversDir, chaptersDir, imagesDir]) {
-        if (!dir.existsSync()) continue;
-        final root = dir.resolveSymbolicLinksSync();
-        if (p.isWithin(root, target)) return true;
+      final normalized = p.normalize(p.absolute(filePath));
+      final candidateRoots = specificRoot != null
+          ? [specificRoot]
+          : [publicationsDir, coversDir, chaptersDir, imagesDir];
+
+      final file = File(normalized);
+      if (file.existsSync()) {
+        final target = file.resolveSymbolicLinksSync();
+        for (final dir in candidateRoots) {
+          if (!dir.existsSync()) continue;
+          final root = dir.resolveSymbolicLinksSync();
+          if (p.isWithin(root, target) || root == target) return true;
+        }
+        return false;
+      } else {
+        // Destination does not exist on disk yet or was removed.
+        // Traverse upwards to nearest existing ancestor to guard against symlink traversal.
+        var dir = file.parent;
+        while (!dir.existsSync() && dir.path != dir.parent.path) {
+          dir = dir.parent;
+        }
+        if (!dir.existsSync()) return false;
+        final resolvedAncestor = dir.resolveSymbolicLinksSync();
+        for (final managedDir in candidateRoots) {
+          if (!managedDir.existsSync()) continue;
+          final root = managedDir.resolveSymbolicLinksSync();
+          if (p.isWithin(root, resolvedAncestor) || root == resolvedAncestor) {
+            final rootNorm = p.normalize(root);
+            if (p.isWithin(rootNorm, normalized) || rootNorm == normalized) {
+              return true;
+            }
+          }
+        }
+        return false;
       }
-      return false;
     } catch (_) {
       return false;
     }

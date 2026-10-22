@@ -11,6 +11,8 @@ class ReaderHeader extends StatelessWidget {
   final String location;
   final String status;
   final VoidCallback? onPrevious;
+  final VoidCallback? onBack;
+  final String? backLabel;
   final VoidCallback onClose;
   const ReaderHeader({
     super.key,
@@ -18,6 +20,8 @@ class ReaderHeader extends StatelessWidget {
     required this.location,
     required this.status,
     this.onPrevious,
+    this.onBack,
+    this.backLabel,
     required this.onClose,
   });
 
@@ -39,18 +43,53 @@ class ReaderHeader extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 64,
+            width: 88,
             child: Align(
               alignment: Alignment.centerLeft,
-              child: IconButton(
-                tooltip: 'Back',
-                onPressed: onClose,
-                icon: Icon(
-                  CupertinoIcons.chevron_back,
-                  size: 22,
-                  color: theme.textColor,
-                ),
-              ),
+              child: onBack != null
+                  ? TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: onBack,
+                      icon: Icon(
+                        CupertinoIcons.chevron_left,
+                        size: 16,
+                        color: theme.secondaryTextColor,
+                      ),
+                      label: Text(
+                        backLabel ?? 'Catalogue',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: theme.secondaryTextColor,
+                        ),
+                      ),
+                    )
+                  : onPrevious != null
+                      ? TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: onPrevious,
+                          icon: Icon(
+                            CupertinoIcons.arrow_counterclockwise,
+                            size: 13,
+                            color: theme.secondaryTextColor,
+                          ),
+                          label: Text(
+                            location.isNotEmpty ? location : 'Prev',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.secondaryTextColor,
+                            ),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
             ),
           ),
           Expanded(
@@ -104,12 +143,14 @@ class ReaderFooter extends StatelessWidget {
   final ReaderThemeConfig theme;
   final String progress;
   final VoidCallback? onProgress;
+  final VoidCallback? onReload;
   final VoidCallback onMenu;
   const ReaderFooter({
     super.key,
     required this.theme,
     required this.progress,
     this.onProgress,
+    this.onReload,
     required this.onMenu,
   });
 
@@ -130,7 +171,20 @@ class ReaderFooter extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const SizedBox(width: 48),
+          SizedBox(
+            width: 48,
+            child: onReload != null
+                ? IconButton(
+                    tooltip: 'Reload chapter',
+                    onPressed: onReload,
+                    icon: Icon(
+                      CupertinoIcons.arrow_clockwise,
+                      size: 20,
+                      color: theme.textColor,
+                    ),
+                  )
+                : null,
+          ),
           Expanded(
             child: Semantics(
               button: onProgress != null,

@@ -68,10 +68,16 @@ class SourceRegistry {
   List<ExtensionMeta>? _extensionCache;
 
   final Map<String, String> _testScripts = {};
+  final Map<String, SourceCatalogInfo> _testCatalogInfo = {};
 
   @visibleForTesting
   void setSourceScriptForTesting(String sourceId, String script) {
     _testScripts[sourceId] = script;
+  }
+
+  @visibleForTesting
+  void setCatalogInfoForTesting(String sourceId, SourceCatalogInfo info) {
+    _testCatalogInfo[sourceId] = info;
   }
 
   Future<void> init() async {
@@ -269,6 +275,9 @@ class SourceRegistry {
   }
 
   Future<SourceCatalogInfo> getCatalogInfo(String sourceId) async {
+    if (_testCatalogInfo.containsKey(sourceId)) {
+      return _testCatalogInfo[sourceId]!;
+    }
     final script = await getSourceScript(sourceId);
     final isAndroid = NativeShosetsuBridge.instance.isAndroidTarget;
     if (isAndroid && !kIsWeb) {
@@ -284,7 +293,26 @@ class SourceRegistry {
         sourceId: sourceId,
       );
     }
-    return const SourceCatalogInfo();
+    return _parseCatalogInfoFallback(script);
+  }
+
+  SourceCatalogInfo _parseCatalogInfoFallback(String script) {
+    final listings = <SourceListing>[];
+    final listingsMatch = RegExp(r'''(?:listings|_self\[["']listings["']\])\s*=\s*\{([^;]+?)\}''', dotAll: true).firstMatch(script);
+    if (listingsMatch != null) {
+      final body = listingsMatch.group(1)!;
+      final nameRegex = RegExp(r'''(?:name\s*=\s*["']([^"']+)["']|Listing\s*\(\s*["']([^"']+)["'])''');
+      final matches = nameRegex.allMatches(body);
+      int idx = 0;
+      for (final m in matches) {
+        final name = m.group(1) ?? m.group(2) ?? 'Listing $idx';
+        listings.add(SourceListing(index: idx++, name: name, incrementing: true));
+      }
+    }
+    return SourceCatalogInfo(
+      hasSearch: script.contains('search') || script.contains('QUERY'),
+      listings: listings,
+    );
   }
 
   /// Executes upstream extension search (e.g. Project Gutenberg)
@@ -316,7 +344,7 @@ class SourceRegistry {
         sourceId: sourceId,
       );
     }
-    return await ShosetsuLuaEngine.instance.search(script, query, page: page);
+    return await ShosetsuLuaEngine.instance.search(script, query, page: page, listing: listing);
   }
 
   /// Parses novel details and real chapter list via the upstream extension

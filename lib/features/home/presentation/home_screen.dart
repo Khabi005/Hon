@@ -140,25 +140,20 @@ class HomeScreen extends ConsumerWidget {
             ),
             if (continuing.isNotEmpty) ...[
               _heading('Continue Reading', primary, action: history, compact: true),
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  height:
-                      160 +
-                      (MediaQuery.textScalerOf(context).scale(20) - 20) * 8,
-                  child: ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: continuing.length.clamp(0, 8),
-                    separatorBuilder: (_, __) => const SizedBox(width: 14),
-                    itemBuilder: (_, index) => ContinueReadingCard(
-                      book: continuing[index],
-                      progress: db.getProgress(continuing[index].id),
-                      width: (MediaQuery.sizeOf(context).width - 64).clamp(
-                        260,
-                        360,
-                      ),
-                    ),
-                  ),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+                sliver: SliverToBoxAdapter(
+                  child: continuing.length == 1
+                      ? ContinueReadingCard(
+                          book: continuing.first,
+                          progress: db.getProgress(continuing.first.id),
+                          width: double.infinity,
+                        )
+                      : GroupedContinueReadingCard(
+                          books: continuing,
+                          db: db,
+                          onHistory: history,
+                        ),
                 ),
               ),
             ] else
@@ -440,13 +435,15 @@ class HomeScreen extends ConsumerWidget {
                         height: 1.25,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      book.author,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: secondary, fontSize: 11),
-                    ),
+                    if (isKnownAuthor(book.author)) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        book.author,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: secondary, fontSize: 11),
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -15,14 +15,20 @@ class HonFilesBridge(private val activity: Activity, messenger: BinaryMessenger)
     private var source: File? = null
     init { channel.setMethodCallHandler(this) }
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "exportBackup") { result.notImplemented(); return }
+        if (call.method != "exportBackup" && call.method != "exportFileAs") { result.notImplemented(); return }
         if (pending != null) { result.error("BUSY", "A save dialog is already open.", null); return }
         val file = File(call.argument<String>("path") ?: "").canonicalFile
-        val root = File(activity.filesDir.parentFile, "app_flutter/staging").canonicalFile
-        if (!file.isFile || !file.path.startsWith(root.path + File.separator)) { result.error("INVALID_FILE", "Backup is outside staging storage.", null); return }
+        val appDataDir = activity.filesDir.parentFile?.canonicalFile ?: activity.filesDir.canonicalFile
+        if (!file.isFile || !file.path.startsWith(appDataDir.path + File.separator)) {
+            result.error("INVALID_FILE", "File is outside application storage.", null)
+            return
+        }
+        val defaultType = if (call.method == "exportBackup") "application/zip" else "application/epub+zip"
+        val mimeType = call.argument<String>("mimeType") ?: defaultType
+        val title = call.argument<String>("title") ?: file.name
         pending = result; source = file
         try { activity.startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "application/zip"; putExtra(Intent.EXTRA_TITLE, file.name)
+            addCategory(Intent.CATEGORY_OPENABLE); type = mimeType; putExtra(Intent.EXTRA_TITLE, title)
         }, 18447) } catch (error: Exception) { pending = null; source = null; result.error("SAVE_FAILED", error.message, null) }
     }
     fun handleResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {

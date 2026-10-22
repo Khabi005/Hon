@@ -82,15 +82,17 @@ class ChapterUpdateService extends ChangeNotifier {
     );
   }
 
-  String _normalizeTitle(String s) {
+  static String normalizeTitle(String s) {
     var lower = s.toLowerCase().trim();
     // Normalize chapter abbreviations e.g. "chapter 1", "chap. 1", "ch 1" -> "c1"
-    lower = lower.replaceAll(
+    lower = lower.replaceAllMapped(
       RegExp(r'\b(?:chapter|chap|ch)\.?\s*(\d+)', unicode: true),
-      'c\$1',
+      (m) => 'c${m.group(1)}',
     );
     return lower.replaceAll(RegExp(r'[\s\p{P}\p{S}]+', unicode: true), '');
   }
+
+  String _normalizeTitle(String s) => normalizeTitle(s);
 
   static bool areTitlesSimilar(String t1, String t2) {
     final norm1 = t1.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\s]'), ' ').trim();

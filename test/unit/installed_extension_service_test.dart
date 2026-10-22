@@ -167,4 +167,172 @@ void main() {
       expect(await service.loadScript(installed.sourceId), bundle);
     },
   );
+
+  test(
+    'install from repository sets allowedHosts only to declared bootstrap hosts without repo host',
+    () async {
+      const scriptWithBase =
+          'local baseURL = "https://source.example.com"\nreturn { search = function() return {} end }';
+      final service = InstalledExtensionService(
+        client: MockClient(
+          (request) async =>
+              http.Response(scriptWithBase, 200, request: request),
+        ),
+      );
+      final repo = ExtensionRepository(
+        id: 'external-repo',
+        name: 'External Repo',
+        url: 'https://repo.unrelated-domain.org/shosetsu/',
+        refreshedAt: DateTime(2026),
+        scripts: const [],
+      );
+      const scriptEntry = RepositoryScript(
+        id: 'secure-source',
+        name: 'Secure Source',
+        language: 'en',
+        fileName: 'secure_source',
+        version: '1.0.0',
+        libraryVersion: '',
+        allowedHosts: ['api.source.example.com'],
+      );
+
+      final installed = await service.install(repo, scriptEntry);
+
+      // Must include baseURL host and declared allowedHosts
+      expect(installed.allowedHosts, contains('source.example.com'));
+      expect(installed.allowedHosts, contains('api.source.example.com'));
+      // Must NOT silently grant the repository domain
+      expect(
+        installed.allowedHosts,
+        isNot(contains('repo.unrelated-domain.org')),
+      );
+    },
+  );
+
+  test(
+    'update preserves user-added allowed hosts and disabled state',
+    () async {
+      const scriptV1 =
+          'local baseURL = "https://source.example.com"\nreturn { search = function() return {} end }';
+      const scriptV2 =
+          'local baseURL = "https://source.example.com"\nreturn { search = function() return {1} end }';
+      var version = '1.0.0';
+      final service = InstalledExtensionService(
+        client: MockClient(
+          (request) async => http.Response(
+            version == '1.0.0' ? scriptV1 : scriptV2,
+            200,
+            request: request,
+          ),
+        ),
+      );
+      final repo = ExtensionRepository(
+        id: 'repo-1',
+        name: 'Repo 1',
+        url: 'https://repo1.org/',
+        refreshedAt: DateTime(2026),
+        scripts: const [],
+      );
+      const scriptEntryV1 = RepositoryScript(
+        id: 'source-1',
+        name: 'Source 1',
+        language: 'en',
+        fileName: 'source_1',
+        version: '1.0.0',
+        libraryVersion: '',
+        allowedHosts: ['api.source.example.com'],
+      );
+
+      final installed = await service.install(repo, scriptEntryV1);
+      expect(installed.enabled, isTrue);
+
+      // User adds a custom host and disables the source
+      await service.updateAllowedHosts(installed.sourceId, [
+        ...installed.allowedHosts,
+        'user-custom-cdn.net',
+      ]);
+      await service.setEnabled(installed.sourceId, false);
+
+      expect(service.find(installed.sourceId)?.enabled, isFalse);
+      expect(
+        service.find(installed.sourceId)?.allowedHosts,
+        contains('user-custom-cdn.net'),
+      );
+
+      // Now update the extension to version 2.0.0
+      version = '2.0.0';
+      const scriptEntryV2 = RepositoryScript(
+        id: 'source-1',
+        name: 'Source 1',
+        language: 'en',
+        fileName: 'source_1',
+        version: '2.0.0',
+        libraryVersion: '',
+        allowedHosts: [
+          'api.source.example.com',
+          'v2-api.source.example.com',
+        ],
+      );
+
+
+      final updated = await service.install(repo, scriptEntryV2);
+
+      // User-added host permission MUST be preserved
+      expect(updated.allowedHosts, contains('user-custom-cdn.net'));
+      expect(updated.allowedHosts, contains('v2-api.source.example.com'));
+      // Disabled state MUST be preserved
+      expect(updated.enabled, isFalse);
+      expect(service.find(installed.sourceId)?.enabled, isFalse);
+    },
+  );
+
+  test(
+    'uninstalled sources are not resurrected on catalog refresh unless explicitly reinstalled',
+    () async {
+      final service = InstalledExtensionService();
+      await service.init();
+
+      // Seed a bundled source
+      final bundledSource = {
+        'sourceId':
+            'ext_1111111111111111111111111111111111111111111111111111111111111111',
+        'repositoryId': 'repo_1',
+        'repositoryUrl': 'https://repo.org/',
+        'scriptId': 's1',
+        'name': 'Source One',
+        'language': 'en',
+        'version': '1.0.0',
+        'asset': 'assets/sources/bundled/s1.lua',
+        'sha256': sha256.convert(utf8.encode(script)).toString(),
+        'allowedHosts': ['source1.org'],
+      };
+
+      await service.seedBundled(
+        [bundledSource],
+        (asset) async => script,
+      );
+      final id = bundledSource['sourceId'] as String;
+      expect(service.find(id), isNotNull);
+
+      // Deliberately uninstall the source
+      await service.uninstall(id);
+      expect(service.find(id), isNull);
+
+      // Re-running catalog seed (e.g. app update / hash refresh) must NOT resurrect it
+      await service.seedBundled(
+        [bundledSource],
+        (asset) async => script,
+      );
+      expect(service.find(id), isNull, reason: 'Must not resurrect deliberately uninstalled source');
+
+      // Unmarking removed (explicit reinstall by user) allows it to be reinstalled
+      await service.unmarkRemoved(id);
+      await service.seedBundled(
+        [bundledSource],
+        (asset) async => script,
+      );
+      expect(service.find(id), isNotNull, reason: 'Explicit reinstallation must succeed');
+    },
+  );
 }
+

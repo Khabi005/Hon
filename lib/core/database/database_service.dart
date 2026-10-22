@@ -12,9 +12,12 @@ import '../models/reading_progress.dart';
 import '../models/download_job.dart';
 import '../models/bookmark.dart';
 import '../models/highlight.dart';
+import '../models/chapter_deletion_result.dart';
 import '../files/storage_service.dart';
 import '../utils/epub_parser.dart';
 import 'app_database.dart';
+
+export '../models/chapter_deletion_result.dart';
 
 enum LibrarySort { titleAz, titleZa, recent, progress }
 
@@ -63,6 +66,9 @@ class DatabaseService {
 
   final ValueNotifier<int> changeNotifier = ValueNotifier<int>(0);
   final ValueNotifier<int> libraryChangeNotifier = ValueNotifier<int>(0);
+
+  void addListener(VoidCallback listener) => changeNotifier.addListener(listener);
+  void removeListener(VoidCallback listener) => changeNotifier.removeListener(listener);
 
   /// Resets in-memory instance and custom DB (useful for tests)
   @visibleForTesting
@@ -1108,38 +1114,21 @@ class DatabaseService {
     _notify();
   }
 
+  /// Reloads all data caches from Drift SQLite and notifies library/change listeners.
+  /// Used when Android WorkManager or an external process writes updates to SQLite.
+  Future<void> reloadFromDatabase() async {
+    final previouslyLoadedBookIds = _chapters.keys.toList();
+    await _loadFromDrift();
+    for (final bookId in previouslyLoadedBookIds) {
+      await loadChapters(bookId);
+    }
+    _notify(library: true);
+  }
+
   /// Reconciles chapter files written by Android WorkManager while Flutter was
   /// stopped and could not receive its MethodChannel notification.
   Future<void> refreshAllChapters() async {
-    final database = _db;
-    if (database == null) return;
-    final rows = await database.select(database.chaptersTable).get();
-    final chapters = <String, List<Chapter>>{};
-    for (final row in rows) {
-      chapters
-          .putIfAbsent(row.bookId, () => [])
-          .add(
-            Chapter(
-              id: row.id,
-              bookId: row.bookId,
-              sourceChapterId: row.sourceChapterId,
-              title: row.title,
-              chapterIndex: row.chapterIndex,
-              url: row.url,
-              localFilePath: row.localFilePath,
-              downloadState: ChapterDownloadState.values.firstWhere(
-                (state) => state.name == row.downloadState,
-                orElse: () => ChapterDownloadState.notDownloaded,
-              ),
-              releaseDate: row.releaseDate,
-              updatedAt: row.updatedAt,
-            ),
-          );
-    }
-    _chapters
-      ..clear()
-      ..addAll(chapters);
-    _notify();
+    await reloadFromDatabase();
   }
 
   void _cleanLegacySyntheticDemos() {
@@ -1945,38 +1934,106 @@ class DatabaseService {
     await _persistChapterRows(resolvedToPersist);
   }
 
+  /// Optional hook to coordinate download worker cancellation before file deletion.
+  static Future<void> Function(String jobId)? onCancelJobForDeletion;
+
+  /// Validates whether a file path is safely within Hon managed storage.
+  bool isPathInsideHonManagedStorage(String filePath, {Directory? specificRoot}) {
+    try {
+      return StorageService.instance.isPathInsideManagedStorage(
+        filePath,
+        specificRoot: specificRoot,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Safely deletes offline files for the specified chapters and resets their state to notDownloaded.
-  Future<int> deleteDownloadedChapters(String bookId, Iterable<Chapter> chaptersToDelete) async {
+  /// Coordinates active worker cancellation, validates managed paths, uses asynchronous IO,
+  /// preserves records on failure so they remain retryable, and returns a detailed ChapterDeletionResult.
+  Future<ChapterDeletionResult> deleteDownloadedChapters(
+    String bookId,
+    Iterable<Chapter> chaptersToDelete,
+  ) async {
     await ensureChaptersLoaded(bookId);
     final currentChapters = getChapters(bookId);
     final targetIds = chaptersToDelete.map((c) => c.id).toSet();
     final updatedList = <Chapter>[];
+    final failedChapterIds = <String>[];
+    final errors = <String>[];
     int deletedCount = 0;
+    int failedCount = 0;
+    int skippedCount = 0;
 
-    for (final chapter in currentChapters) {
-      if (targetIds.contains(chapter.id) &&
-          (chapter.downloadState == ChapterDownloadState.downloaded || chapter.localFilePath != null)) {
-        if (chapter.localFilePath != null) {
-          try {
-            final file = File(chapter.localFilePath!);
-            if (file.existsSync()) {
-              file.deleteSync();
-            }
-          } catch (e) {
-            debugPrint('Failed to delete chapter file: $e');
-          }
+    // 1. Coordinate cancellation of any active or queued download jobs for target chapters
+    final jobsToCancel = getAllDownloadJobs()
+        .where((j) => targetIds.contains(j.chapterId) && j.isActive)
+        .toList();
+    final failedCancellationChapterIds = <String>{};
+    for (final job in jobsToCancel) {
+      try {
+        if (onCancelJobForDeletion != null) {
+          await onCancelJobForDeletion!(job.id);
         }
-        updatedList.add(
-          chapter.copyWith(
-            localFilePath: null,
-            downloadState: ChapterDownloadState.notDownloaded,
-            updatedAt: DateTime.now(),
-          ),
-        );
-        deletedCount++;
+      } catch (e) {
+        debugPrint('Failed to cancel job ${job.id} for chapter ${job.chapterId}: $e');
+        failedCancellationChapterIds.add(job.chapterId);
       }
     }
 
+    // 2. Process each target chapter
+    for (final chapter in currentChapters) {
+      if (!targetIds.contains(chapter.id)) continue;
+
+      if (failedCancellationChapterIds.contains(chapter.id)) {
+        failedCount++;
+        failedChapterIds.add(chapter.id);
+        errors.add('Failed to cancel active download job for "${chapter.title}" before deletion');
+        continue;
+      }
+
+      final isDownloaded = chapter.downloadState == ChapterDownloadState.downloaded;
+      final filePath = chapter.localFilePath;
+
+      if (!isDownloaded && filePath == null) {
+        skippedCount++;
+        continue;
+      }
+
+      if (filePath != null) {
+        if (!isPathInsideHonManagedStorage(filePath, specificRoot: StorageService.instance.chaptersDir)) {
+          failedCount++;
+          failedChapterIds.add(chapter.id);
+          errors.add('Refused to delete file outside managed storage: $filePath');
+          continue;
+        }
+
+        try {
+          final file = File(filePath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (e) {
+          failedCount++;
+          failedChapterIds.add(chapter.id);
+          errors.add('Failed to delete chapter file for "${chapter.title}": $e');
+          // KEEP the record intact with localFilePath and downloadState so it remains retryable!
+          continue;
+        }
+      }
+
+      updatedList.add(
+        chapter.copyWith(
+          localFilePath: null,
+          downloadState: ChapterDownloadState.notDownloaded,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      deletedCount++;
+    }
+
+    // 3. Persist updated chapters in DB and remove obsolete job records
     if (updatedList.isNotEmpty) {
       final updatedMap = {for (final c in updatedList) c.id: c};
       final newList = currentChapters.map((c) => updatedMap[c.id] ?? c).toList();
@@ -1996,7 +2053,15 @@ class DatabaseService {
       }
       _notify();
     }
-    return deletedCount;
+
+    return ChapterDeletionResult(
+      requestedCount: chaptersToDelete.length,
+      deletedCount: deletedCount,
+      failedCount: failedCount,
+      skippedCount: skippedCount,
+      failedChapterIds: failedChapterIds,
+      errors: errors,
+    );
   }
 
   /// Deletes downloaded chapters prior to the current reading chapter index.
@@ -2004,15 +2069,17 @@ class DatabaseService {
     await ensureChaptersLoaded(bookId);
     final toDelete = getChapters(bookId)
         .where((c) => c.chapterIndex < currentChapterIndex && c.downloadState == ChapterDownloadState.downloaded);
-    return deleteDownloadedChapters(bookId, toDelete);
+    final res = await deleteDownloadedChapters(bookId, toDelete);
+    return res.deletedCount;
   }
 
   /// Deletes all downloaded chapters for the given book.
   Future<int> deleteAllDownloadedChapters(String bookId) async {
     await ensureChaptersLoaded(bookId);
     final toDelete = getChapters(bookId)
-        .where((c) => c.downloadState == ChapterDownloadState.downloaded);
-    return deleteDownloadedChapters(bookId, toDelete);
+        .where((c) => c.downloadState == ChapterDownloadState.downloaded || c.localFilePath != null);
+    final res = await deleteDownloadedChapters(bookId, toDelete);
+    return res.deletedCount;
   }
 
   // --- Bookmarks ---

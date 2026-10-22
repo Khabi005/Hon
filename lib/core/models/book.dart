@@ -35,6 +35,10 @@ class Book {
     required this.updatedAt,
   });
 
+  bool get isWebNovel => format == BookFormat.webNovel;
+  bool get isEpub => format == BookFormat.epub;
+  bool get isPdf => format == BookFormat.pdf;
+
   Book copyWith({
     String? id,
     String? title,

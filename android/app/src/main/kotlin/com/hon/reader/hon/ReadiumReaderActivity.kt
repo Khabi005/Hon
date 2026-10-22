@@ -1,12 +1,17 @@
 package com.hon.reader.hon
 
 import android.app.Dialog
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
+import android.os.PowerManager
+import android.view.accessibility.AccessibilityManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Build
 import android.view.Gravity
 import android.view.ActionMode
 import android.view.Menu
@@ -17,6 +22,7 @@ import android.content.pm.ActivityInfo
 import android.view.Window
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.view.WindowManager
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -96,6 +102,24 @@ class ReadiumReaderActivity : AppCompatActivity() {
     private var currentFontSize: Double = 1.0
     private var currentPreset: String = "calm"
     private var isScrollMode: Boolean = false
+    private var isGlass: Boolean = false
+
+    private val powerSaveReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            updateThemeStyling()
+        }
+    }
+
+    private val blurEnabledListener: java.util.function.Consumer<Boolean>? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            java.util.function.Consumer<Boolean> {
+                updateThemeStyling()
+            }
+        } else null
+
+    private val touchExplorationListener = AccessibilityManager.TouchExplorationStateChangeListener {
+        updateThemeStyling()
+    }
 
     private val currentTheme: Theme
         get() = when (currentPreset) {
@@ -211,6 +235,42 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun isBlurAllowed(): Boolean {
+        if (!isGlass) return false
+        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
+        if (am?.isTouchExplorationEnabled == true) return false
+        val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        if (pm?.isPowerSaveMode == true) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                if (!windowManager.isCrossWindowBlurEnabled()) return false
+            } catch (_: Exception) {}
+        }
+        return true
+    }
+
+    private fun applyDialogGlassEffect(dialog: Dialog, cardLayout: View? = null) {
+        val isLight = androidx.core.graphics.ColorUtils.calculateLuminance(getThemeBackgroundColor()) > 0.5
+        val strokeColor = if (isLight) Color.argb(25, 0, 0, 0) else Color.argb(35, 255, 255, 255)
+        if (isGlass && isBlurAllowed()) {
+            if (cardLayout != null) {
+                cardLayout.background = makeCardDrawable(getBarBackgroundColor(), 22f, strokeColor, 1)
+            }
+        } else {
+            if (cardLayout != null) {
+                cardLayout.background = makeCardDrawable(getBarBackgroundColor(), 22f)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isBlurAllowed()) {
+            try {
+                dialog.window?.let { w ->
+                    w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                    w.attributes = w.attributes.apply { blurBehindRadius = 25 }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun showAddNoteDialog(locator: Locator, selectedText: String) {
         val dialog = Dialog(this)
         val layout = LinearLayout(this).apply {
@@ -218,6 +278,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
             background = makeCardDrawable(getBarBackgroundColor(), 22f)
             setPadding(dp(20), dp(16), dp(20), dp(20))
         }
+        applyDialogGlassEffect(dialog, layout)
         layout.addView(TextView(this).apply {
             text = "Add Note"
             textSize = 18f
@@ -314,12 +375,17 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun getBarBackgroundColor(): Int {
-        return when (currentPreset) {
+        val base = when (currentPreset) {
             "original" -> Color.parseColor("#F2F2F7")
             "quiet", "bold" -> Color.parseColor("#1C1C1E")
             "paper" -> Color.WHITE
             "focus" -> Color.parseColor("#F6F3E6")
             else -> Color.parseColor("#E8DCBF")
+        }
+        return if (isGlass && isBlurAllowed()) {
+            Color.argb((255 * 0.82).toInt(), Color.red(base), Color.green(base), Color.blue(base))
+        } else {
+            base
         }
     }
 
@@ -394,12 +460,15 @@ class ReadiumReaderActivity : AppCompatActivity() {
             window.navigationBarColor = barBgColor
             insetsController.isAppearanceLightStatusBars = isLightPage
             insetsController.isAppearanceLightNavigationBars = isLightPage
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
         } else {
             val pageBgColor = getThemeBackgroundColor()
             window.statusBarColor = pageBgColor
             window.navigationBarColor = pageBgColor
             insetsController.isAppearanceLightStatusBars = isLightPage
             insetsController.isAppearanceLightNavigationBars = isLightPage
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -412,8 +481,24 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val accent = getAccentColor()
 
         rootLayout.setBackgroundColor(pageBg)
-        topBar.setBackgroundColor(barBg)
-        bottomBar.setBackgroundColor(barBg)
+
+        if (isGlass && isBlurAllowed()) {
+            val strokeColor = if (androidx.core.graphics.ColorUtils.calculateLuminance(pageBg) > 0.5) {
+                Color.argb(25, 0, 0, 0)
+            } else {
+                Color.argb(35, 255, 255, 255)
+            }
+            topBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
+            bottomBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
+        } else {
+            topBar.setBackgroundColor(barBg)
+            bottomBar.setBackgroundColor(barBg)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+            } catch (_: Exception) {}
+        }
 
         titleView.setTextColor(primaryText)
         backBtn.setTextColor(primaryText)
@@ -595,6 +680,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 else -> it
             }
         }
+        isGlass = prefs.getBoolean("is_glass", false)
 
         val path = filePath
         if (path == null) {
@@ -611,6 +697,19 @@ class ReadiumReaderActivity : AppCompatActivity() {
             finish()
             return
         }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(powerSaveReceiver, IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurEnabledListener != null) {
+            try {
+                windowManager.addCrossWindowBlurEnabledListener(blurEnabledListener)
+            } catch (_: Exception) {}
+        }
+        (getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager)
+            ?.addTouchExplorationStateChangeListener(touchExplorationListener)
 
         // Fast restoration path: Configuration change where publication is still alive in memory
         val cachedPub = PublicationRepository.get(path)
@@ -689,16 +788,12 @@ class ReadiumReaderActivity : AppCompatActivity() {
             setBackgroundColor(getBarBackgroundColor())
             setPadding(dp(16), dp(36), dp(16), dp(8))
             prevBtn = TextView(this@ReadiumReaderActivity).apply {
-                text = "↶ 1"
+                text = "Contents"
                 textSize = 13f
                 gravity = Gravity.CENTER_VERTICAL
-                contentDescription = "Previous chapter"
-                layoutParams = LinearLayout.LayoutParams(dp(64), dp(44))
-                setOnClickListener {
-                    val pub = publication ?: return@setOnClickListener
-                    val index = currentChapterIndex(pub)
-                    if (index > 0) goReading(pub.readingOrder[index - 1])
-                }
+                contentDescription = "Table of contents"
+                layoutParams = LinearLayout.LayoutParams(dp(72), dp(44))
+                setOnClickListener { showTocDialog() }
             }
             addView(prevBtn)
             titleView = TextView(this@ReadiumReaderActivity).apply {
@@ -826,10 +921,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val count = publication?.readingOrder?.size ?: 1
         val progressLabel = "Chapter ${index + 1} of $count"
         if (progressText.text.toString() != progressLabel) progressText.text = progressLabel
-        val locationLabel = "↶ ${index + 1}"
-        if (prevBtn.text.toString() != locationLabel) prevBtn.text = locationLabel
-        prevBtn.isEnabled = index > 0
-        prevBtn.alpha = if (index > 0) 1f else .4f
+        if (prevBtn.text.toString() != "Contents") prevBtn.text = "Contents"
+        prevBtn.isEnabled = true
+        prevBtn.alpha = 1f
         val remainingLabel = if (index + 1 < count) "${count - index - 1} chapters left" else "Last chapter"
         if (titleView.text.toString() != remainingLabel) titleView.text = remainingLabel
         val now = android.os.SystemClock.elapsedRealtime()
@@ -912,15 +1006,22 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun toggleControls() {
+        val loc = currentLocator
         areControlsVisible = !areControlsVisible
-        val visibility = if (areControlsVisible) View.VISIBLE else View.INVISIBLE
+        val visibility = if (areControlsVisible) View.VISIBLE else View.GONE
         topBar.visibility = visibility
         bottomBar.visibility = visibility
         updateSystemBars()
+        if (loc != null) {
+            readerContainer.post {
+                goReading(loc)
+            }
+        }
     }
 
     private fun saveDurablePreferences() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("is_glass", isGlass).apply()
         if (bookId.isNotEmpty()) {
             val typoJson = prefs.getString("readium_typography_$bookId", null)
                 ?: prefs.getString("readium_typography", "{}")
@@ -945,7 +1046,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
     }
 
-    fun applyExternalSettings(fontSize: Double?, themeStr: String?, isScroll: Boolean?) {
+    fun applyExternalSettings(fontSize: Double?, themeStr: String?, isScroll: Boolean?, isGlassMode: Boolean? = null) {
         if (fontSize != null) currentFontSize = fontSize
         if (themeStr != null) {
             currentPreset = themeStr.lowercase().takeIf {
@@ -953,6 +1054,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
             } ?: currentPreset
         }
         if (isScroll != null) isScrollMode = isScroll
+        if (isGlassMode != null) isGlass = isGlassMode
 
         saveDurablePreferences()
 
@@ -977,8 +1079,13 @@ class ReadiumReaderActivity : AppCompatActivity() {
             "baskerville" -> FontFamily("Libre Baskerville")
             else -> FontFamily("Newsreader")
         }
+        val brightnessVal = typography.optDouble("brightness", -1.0)
         window.attributes = window.attributes.apply {
-            screenBrightness = typography.optDouble("brightness", 0.85).coerceIn(0.1, 1.0).toFloat()
+            screenBrightness = if (brightnessVal < 0) {
+                WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            } else {
+                brightnessVal.coerceIn(0.05, 1.0).toFloat()
+            }
         }
         return EpubPreferences(
                 fontFamily = font,
@@ -1044,6 +1151,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun showBottomSheet(dialog: Dialog, content: View, height: Int? = null) {
+        applyDialogGlassEffect(dialog, content)
         dialog.setContentView(content)
         dialog.show()
         dialog.window?.apply {
@@ -1250,6 +1358,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
             background = makeCardDrawable(getBarBackgroundColor(), 22f, getDividerColor(), 1)
             setPadding(0, dp(4), 0, dp(4))
         }
+        applyDialogGlassEffect(dialog, menu)
         fun item(label: String, glyph: String, action: () -> Unit) {
             menu.addView(TextView(this).apply {
                 text = "$label    $glyph"; textSize = 15f; setTextColor(getPrimaryTextColor())
@@ -1563,7 +1672,18 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     setLineSpacing(0f, values.optDouble("lineHeight", 1.65).toFloat())
                 }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
                 label("Brightness")
-                slider("brightness", "Brightness", .1, 1.0, .85)
+                val curBrightness = values.optDouble("brightness", -1.0)
+                val isSystem = curBrightness < 0
+                val sysBtn = button(if (isSystem) "System Brightness: ON" else "Use System Brightness", "System Brightness") {
+                    val next = if (values.optDouble("brightness", -1.0) < 0) 0.85 else -1.0
+                    store("brightness", next)
+                    window.attributes = window.attributes.apply {
+                        screenBrightness = if (next < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else next.toFloat()
+                    }
+                    render()
+                }
+                layout.addView(sysBtn, LinearLayout.LayoutParams(-1, dp(40)).apply { bottomMargin = dp(8) })
+                slider("brightness", "Brightness", .1, 1.0, if (isSystem) 0.85 else curBrightness)
                 val themes = listOf(
                     listOf("Original", "original", "#FFFFFF", "#1A1A1A"),
                     listOf("Quiet", "quiet", "#2C2C2E", "#E5E5EA"),
@@ -1722,6 +1842,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     override fun finish() {
         notifyReaderClosed()
+        window.attributes = window.attributes.apply {
+            screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
         super.finish()
     }
 
@@ -1741,6 +1864,16 @@ class ReadiumReaderActivity : AppCompatActivity() {
         continuousReader?.dispose(removeFragments = false)
         continuousReader = null
         navigator = null
+        try {
+            unregisterReceiver(powerSaveReceiver)
+        } catch (_: Exception) {}
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurEnabledListener != null) {
+            try {
+                windowManager.removeCrossWindowBlurEnabledListener(blurEnabledListener)
+            } catch (_: Exception) {}
+        }
+        (getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager)
+            ?.removeTouchExplorationStateChangeListener(touchExplorationListener)
         super.onDestroy()
     }
 }

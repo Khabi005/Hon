@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.util.zip.ZipFile
+import android.view.WindowManager
 
 class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
     private val channel = MethodChannel(messenger, "com.hon.reader/readium_reader")
@@ -246,7 +247,13 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                 val brightness = call.argument<Double>("brightness") ?: -1.0
                 val activity = context as? android.app.Activity
                 if (activity != null) {
-                    activity.window.attributes = activity.window.attributes.apply { screenBrightness = brightness.toFloat() }
+                    activity.window.attributes = activity.window.attributes.apply {
+                        screenBrightness = if (brightness < 0) {
+                            WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        } else {
+                            brightness.toFloat().coerceIn(0.05f, 1.0f)
+                        }
+                    }
                 }
                 result.success(true)
             }
@@ -344,6 +351,7 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                 val fontSize = call.argument<Double>("fontSize")
                 val theme = call.argument<String>("theme")
                 val isScroll = call.argument<Boolean>("isScroll")
+                val isGlass = call.argument<Boolean>("isGlass")
                 val typography = call.argument<Map<String, Any?>>("typography")
 
                 // Durably save settings to SharedPreferences so subsequent reader opens use them
@@ -352,6 +360,7 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                 if (fontSize != null) editor.putFloat("readium_font_size", fontSize.toFloat())
                 if (theme != null) editor.putString("readium_theme", theme.lowercase())
                 if (isScroll != null) editor.putBoolean("readium_scroll_mode", isScroll)
+                if (isGlass != null) editor.putBoolean("is_glass", isGlass)
                 if (typography != null) {
                     val merged = try { org.json.JSONObject(prefs.getString("readium_typography", "{}") ?: "{}") } catch (_: Exception) { org.json.JSONObject() }
                     typography.forEach { (key, value) -> merged.put(key, value) }
@@ -361,7 +370,7 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
 
                 val active = ReadiumReaderActivity.activeInstance
                 if (active != null) {
-                    active.applyExternalSettings(fontSize, theme, isScroll)
+                    active.applyExternalSettings(fontSize, theme, isScroll, isGlass)
                     result.success(mapOf(
                         "applied" to true,
                         "activeReader" to true,
@@ -389,6 +398,54 @@ class HonReaderBridge(private val context: Context, messenger: BinaryMessenger) 
                     "finalLocator" to finalLocator,
                     "finalChapterIndex" to finalChapter
                 ))
+            }
+            "shareFile" -> {
+                val filePath = call.argument<String>("filePath")
+                val mimeType = call.argument<String>("mimeType") ?: "application/epub+zip"
+                val title = call.argument<String>("title") ?: "Share File"
+                if (filePath == null) {
+                    result.error("INVALID_ARGUMENT", "filePath is required", null)
+                    return
+                }
+                val file = File(filePath)
+                if (!file.exists()) {
+                    result.error("FILE_NOT_FOUND", "File does not exist: $filePath", null)
+                    return
+                }
+                try {
+                    val shareFile = try {
+                        androidx.core.content.FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            file
+                        )
+                        file
+                    } catch (_: Exception) {
+                        val exportCacheDir = File(context.cacheDir, "exports").apply { mkdirs() }
+                        val cachedFile = File(exportCacheDir, file.name)
+                        file.copyTo(cachedFile, overwrite = true)
+                        cachedFile
+                    }
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        shareFile
+                    )
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = mimeType
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val chooser = Intent.createChooser(shareIntent, title).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(chooser)
+                    result.success(true)
+                } catch (e: Exception) {
+                    Log.e("HonReaderBridge", "Failed to share file: ${e.message}", e)
+                    result.error("SHARE_FAILED", e.message ?: "Failed to share file", null)
+                }
             }
             else -> {
                 result.notImplemented()

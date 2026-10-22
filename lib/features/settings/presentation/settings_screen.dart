@@ -12,6 +12,7 @@ import '../../reader/sheets/themes_settings_sheet.dart';
 import 'extension_repositories_screen.dart';
 import 'backup_restore_screen.dart';
 import '../../../core/downloads/hon_download_manager.dart';
+import '../../../core/updates/background_update_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -25,14 +26,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isCleaning = false;
   bool _wifiOnly = false;
   bool _changingNetwork = false;
+  BackgroundUpdateSettings _updateSettings = const BackgroundUpdateSettings();
+  bool _triggeringUpdate = false;
 
   @override
   void initState() {
     super.initState();
     _loadStorageInfo();
+    _loadUpdateSettings();
     HonDownloadManager.instance.wifiOnly.then((value) {
       if (mounted) setState(() => _wifiOnly = value);
     });
+  }
+
+  Future<void> _loadUpdateSettings() async {
+    final settings = await BackgroundUpdateService.instance.getSettings();
+    if (mounted) {
+      setState(() => _updateSettings = settings);
+    }
+  }
+
+  String _formatDateTime(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inDays < 1) return '${diff.inHours}h ago';
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
   Future<void> _loadStorageInfo() async {
@@ -280,7 +300,125 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () =>
                 showLicensePage(context: context, applicationName: 'Hon'),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
+
+          Text(
+            'AUTOMATIC UPDATES',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+              color: isDark
+                  ? HonColors.darkTextSecondary
+                  : HonColors.lightTextSecondary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          GlassSurface(
+            radius: 14,
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Check for updates in background'),
+                  subtitle: const Text(
+                    'Periodically check ongoing library novels for new chapters',
+                  ),
+                  value: _updateSettings.enabled,
+                  onChanged: (val) async {
+                    await BackgroundUpdateService.instance.saveSettings(
+                      enabled: val,
+                    );
+                    await _loadUpdateSettings();
+                  },
+                ),
+                if (_updateSettings.enabled) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    title: const Text('Check frequency'),
+                    trailing: DropdownButton<int>(
+                      value: _updateSettings.intervalHours,
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: 6, child: Text('Every 6 hours')),
+                        DropdownMenuItem(value: 12, child: Text('Every 12 hours')),
+                        DropdownMenuItem(value: 24, child: Text('Daily (24 hours)')),
+                      ],
+                      onChanged: (hours) async {
+                        if (hours != null) {
+                          await BackgroundUpdateService.instance.saveSettings(
+                            intervalHours: hours,
+                          );
+                          await _loadUpdateSettings();
+                        }
+                      },
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('Wi-Fi only'),
+                    subtitle: const Text(
+                      'Only check when connected to unmetered network',
+                    ),
+                    value: _updateSettings.unmeteredOnly,
+                    onChanged: (val) async {
+                      await BackgroundUpdateService.instance.saveSettings(
+                        unmeteredOnly: val,
+                      );
+                      await _loadUpdateSettings();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('Requires battery not low'),
+                    subtitle: const Text('Wait if device battery is low'),
+                    value: _updateSettings.requiresBatteryNotLow,
+                    onChanged: (val) async {
+                      await BackgroundUpdateService.instance.saveSettings(
+                        requiresBatteryNotLow: val,
+                      );
+                      await _loadUpdateSettings();
+                    },
+                  ),
+                ],
+                const Divider(height: 1),
+                ListTile(
+                  title: const Text('Last check'),
+                  subtitle: Text(
+                    _updateSettings.lastCheckTime == null
+                        ? 'Never checked'
+                        : '${_formatDateTime(_updateSettings.lastCheckTime!)}\n${_updateSettings.lastCheckStatus ?? "Up to date"}',
+                  ),
+                  isThreeLine: _updateSettings.lastCheckTime != null,
+                  trailing: _triggeringUpdate
+                      ? const CupertinoActivityIndicator()
+                      : TextButton(
+                          onPressed: () async {
+                            setState(() => _triggeringUpdate = true);
+                            try {
+                              await BackgroundUpdateService.instance
+                                  .triggerImmediateCheck();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Update check started in background',
+                                    ),
+                                  ),
+                                );
+                              }
+                            } finally {
+                              if (mounted) {
+                                setState(() => _triggeringUpdate = false);
+                              }
+                            }
+                          },
+                          child: const Text('Check now'),
+                        ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
 
           // Section: Reader & Behavior
           Text(
@@ -341,11 +479,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             title: const Text('Hon'),
-            subtitle: const Text('Version 1.1.2 • Local-first reading'),
+            subtitle: const Text('Version 0.0.2 • Local-first reading'),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'Hon',
-              applicationVersion: '1.1.2',
+              applicationVersion: '0.0.2',
               applicationIcon: Image.asset(
                 'assets/branding/hon_master_logo.jpg',
                 width: 48,

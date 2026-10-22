@@ -568,6 +568,7 @@ class ReadiumReaderService {
     required double fontSize,
     required String theme,
     required bool isScroll,
+    bool? isGlass,
     Map<String, dynamic>? typography,
   }) async {
     if (!Platform.isAndroid) return;
@@ -576,6 +577,7 @@ class ReadiumReaderService {
         'fontSize': fontSize,
         'theme': theme,
         'isScroll': isScroll,
+        'isGlass': ?isGlass,
         'typography': ?typography,
       });
     } catch (_) {}

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/database/database_service.dart';
 import '../core/native/readium_reader_service.dart';
 import 'bootstrap/providers.dart';
@@ -53,7 +54,10 @@ class _HonAppState extends ConsumerState<HonApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      DatabaseService.instance.refreshAllChapters();
+      SharedPreferences.getInstance()
+          .then((prefs) => prefs.reload())
+          .catchError((_) {});
+      DatabaseService.instance.reloadFromDatabase();
       DatabaseService.instance.refreshAllDownloads();
     }
   }

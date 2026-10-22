@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/installed_extension_service.dart';
 import '../../../core/sources/source_preferences.dart';
+import '../../../core/sources/source_health_service.dart';
 
 class SourceControlsScreen extends StatefulWidget {
   final String sourceId, name;
@@ -22,6 +23,40 @@ class _SourceControlsScreenState extends State<SourceControlsScreen> {
   bool _loading = true, _saving = false;
   int _revision = 0;
   String? _loadError;
+  SourceHealthResult? _healthResult;
+  bool _testingHealth = false;
+
+  Future<void> _testHealth() async {
+    setState(() => _testingHealth = true);
+    try {
+      final res = await SourceHealthService.testSource(widget.sourceId);
+      if (mounted) setState(() => _healthResult = res);
+    } finally {
+      if (mounted) setState(() => _testingHealth = false);
+    }
+  }
+
+  Future<void> _addBlockedHost(String host) async {
+    final clean = host.trim().toLowerCase();
+    if (clean.isEmpty) return;
+    final updated = {..._allowedHosts, clean}.toList()..sort();
+    setState(() {
+      _allowedHosts = updated;
+    });
+    if (InstalledExtensionService.instance.find(widget.sourceId) != null) {
+      await InstalledExtensionService.instance.updateAllowedHosts(
+        widget.sourceId,
+        updated,
+      );
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added $clean to allowed hosts')),
+      );
+    }
+    await _testHealth();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -291,6 +326,87 @@ class _SourceControlsScreenState extends State<SourceControlsScreen> {
     }
   }
 
+  Widget _buildHealthBadge(SourceHealthResult res) {
+    Color bg;
+    Color fg;
+    IconData icon;
+    switch (res.state) {
+      case SourceHealthState.ok:
+        bg = Colors.green.withOpacity(0.15);
+        fg = Colors.green;
+        icon = Icons.check_circle_outline;
+        break;
+      case SourceHealthState.needsLogin:
+        bg = Colors.amber.withOpacity(0.15);
+        fg = Colors.amber.shade800;
+        icon = Icons.lock_outline;
+        break;
+      case SourceHealthState.blockedByPolicy:
+        bg = Colors.red.withOpacity(0.15);
+        fg = Colors.redAccent;
+        icon = Icons.security;
+        break;
+      case SourceHealthState.failing:
+        bg = Colors.red.withOpacity(0.15);
+        fg = Colors.redAccent;
+        icon = Icons.error_outline;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: fg.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: fg, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  res.label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: fg,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (res.details != null && res.details != res.label) ...[
+            const SizedBox(height: 6),
+            Text(
+              res.details!,
+              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+          ],
+          if (res.state == SourceHealthState.blockedByPolicy && res.blockedHost != null) ...[
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              icon: const Icon(Icons.add_moderator, size: 16),
+              label: Text('Add ${res.blockedHost} to allowed hosts'),
+              onPressed: () => _addBlockedHost(res.blockedHost!),
+            ),
+          ],
+          if (res.state == SourceHealthState.needsLogin) ...[
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              icon: const Icon(Icons.open_in_new, size: 16),
+              label: const Text('Open website / Sign In'),
+              onPressed: _website,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final website = Uri.tryParse(widget.info.baseUrl);
@@ -326,6 +442,47 @@ class _SourceControlsScreenState extends State<SourceControlsScreen> {
                     onTap: _website,
                   ),
                 ),
+                SliverToBoxAdapter(
+                  child: Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Source Health',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              OutlinedButton.icon(
+                                icon: _testingHealth
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.network_check, size: 16),
+                                label: Text(_testingHealth ? 'Testing…' : 'Test source'),
+                                onPressed: _testingHealth ? null : _testHealth,
+                              ),
+                            ],
+                          ),
+                          if (_healthResult != null) ...[
+                            const SizedBox(height: 12),
+                            _buildHealthBadge(_healthResult!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
                 const SliverToBoxAdapter(
                   child: Padding(
                     padding: EdgeInsets.all(16),

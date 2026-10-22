@@ -12,13 +12,21 @@ class DownloadNotificationReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
-        val jobId = intent?.getStringExtra(EXTRA_JOB_ID) ?: return
-        when (intent.action) {
+        val jobId = intent?.getStringExtra(EXTRA_JOB_ID)
+        when (intent?.action) {
             ACTION_PAUSE -> {
-                HonDownloadManagerBridge.requestJobStopped(context, jobId, "paused")
+                if (jobId == null || jobId == "ALL") {
+                    HonDownloadManagerBridge.requestAllJobsStopped(context, "paused")
+                } else {
+                    HonDownloadManagerBridge.requestJobStopped(context, jobId, "paused")
+                }
             }
             ACTION_CANCEL -> {
-                HonDownloadManagerBridge.requestJobStopped(context, jobId, "cancelled")
+                if (jobId == null || jobId == "ALL") {
+                    HonDownloadManagerBridge.requestAllJobsStopped(context, "cancelled")
+                } else {
+                    HonDownloadManagerBridge.requestJobStopped(context, jobId, "cancelled")
+                }
             }
         }
     }

@@ -1,7 +1,10 @@
+import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/bootstrap/providers.dart';
+import '../../../app/theme/glass_surface.dart';
 import '../../../app/theme/hon_theme.dart';
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
@@ -22,18 +25,21 @@ class ThemesSettingsSheet extends ConsumerWidget {
     bool supportsTypography = true,
     Widget? layoutControl,
     String? bookId,
-  }) => showModalBottomSheet(
-    context: context,
-    backgroundColor: Colors.transparent,
-    showDragHandle: false,
-    isScrollControlled: true,
-    useSafeArea: true,
-    builder: (_) => ThemesSettingsSheet(
-      supportsTypography: supportsTypography,
-      layoutControl: layoutControl,
-      bookId: bookId,
-    ),
-  );
+  }) {
+    SemanticsService.announce('Themes and settings opened', TextDirection.ltr);
+    return showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      showDragHandle: false,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => ThemesSettingsSheet(
+        supportsTypography: supportsTypography,
+        layoutControl: layoutControl,
+        bookId: bookId,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -43,18 +49,25 @@ class ThemesSettingsSheet extends ConsumerWidget {
       notifier.setActiveBookId(bookId);
     }
     final cfg = prefs.themeConfig;
-    return Theme(
-      data: cfg.systemBrightness == Brightness.dark
-          ? HonTheme.darkTheme
-          : HonTheme.lightTheme,
-      child: Material(
-        color: cfg.uiControlsBackground,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * .85,
-            maxWidth: 600,
-          ),
+    final rich = GlassStyle.richOf(context);
+    final baseTheme = cfg.systemBrightness == Brightness.dark
+        ? HonTheme.darkTheme
+        : HonTheme.lightTheme;
+    final themeData = baseTheme.copyWith(
+      extensions: Theme.of(context).extensions.values,
+    );
+    final bg = rich
+        ? cfg.uiControlsBackground.withValues(alpha: 0.78)
+        : cfg.uiControlsBackground;
+
+    final sheetContent = Material(
+      color: bg,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .85,
+          maxWidth: 600,
+        ),
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(
               20,
@@ -76,21 +89,30 @@ class ThemesSettingsSheet extends ConsumerWidget {
                           children: [
                             Expanded(
                               child: SizedBox(
-                                height: 38,
-                                child: OutlinedButton(
-                                  style: OutlinedButton.styleFrom(
-                                    padding: EdgeInsets.zero,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10),
+                                height: 48,
+                                child: Tooltip(
+                                  message: 'Decrease font size',
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
                                     ),
-                                  ),
-                                  onPressed: prefs.fontSize > 12
-                                      ? notifier.decreaseFontSize
-                                      : null,
-                                  child: const Text(
-                                    'A',
-                                    semanticsLabel: 'Decrease font size',
-                                    style: TextStyle(fontSize: 15),
+                                    onPressed: prefs.fontSize > 12
+                                        ? () {
+                                            notifier.decreaseFontSize();
+                                            SemanticsService.announce(
+                                              'Font size ${(prefs.fontSize - 1).round()}',
+                                              TextDirection.ltr,
+                                            );
+                                          }
+                                        : null,
+                                    child: const Text(
+                                      'A',
+                                      semanticsLabel: 'Decrease font size',
+                                      style: TextStyle(fontSize: 15),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -110,21 +132,30 @@ class ThemesSettingsSheet extends ConsumerWidget {
                             ),
                             Expanded(
                               child: SizedBox(
-                                height: 38,
-                                child: OutlinedButton(
-                                  style: OutlinedButton.styleFrom(
-                                    padding: EdgeInsets.zero,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10),
+                                height: 48,
+                                child: Tooltip(
+                                  message: 'Increase font size',
+                                  child: OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      padding: EdgeInsets.zero,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
                                     ),
-                                  ),
-                                  onPressed: prefs.fontSize < 32
-                                      ? notifier.increaseFontSize
-                                      : null,
-                                  child: const Text(
-                                    'A',
-                                    semanticsLabel: 'Increase font size',
-                                    style: TextStyle(fontSize: 20),
+                                    onPressed: prefs.fontSize < 32
+                                        ? () {
+                                            notifier.increaseFontSize();
+                                            SemanticsService.announce(
+                                              'Font size ${(prefs.fontSize + 1).round()}',
+                                              TextDirection.ltr,
+                                            );
+                                          }
+                                        : null,
+                                    child: const Text(
+                                      'A',
+                                      semanticsLabel: 'Increase font size',
+                                      style: TextStyle(fontSize: 20),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -141,7 +172,7 @@ class ThemesSettingsSheet extends ConsumerWidget {
                             ? 'Switch to scrolling'
                             : 'Switch to pages',
                         child: SizedBox(
-                          height: 38,
+                          height: 48,
                           child: OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -194,15 +225,38 @@ class ThemesSettingsSheet extends ConsumerWidget {
                     ),
                   ),
                 const SizedBox(height: 10),
-                _SettingSlider(
-                  label: 'Brightness',
-                  value: prefs.brightness,
-                  min: .1,
-                  max: 1,
-                  format: (value) => '${(value * 100).round()}%',
-                  onChanged: notifier.setBrightness,
-                  onCommitted: notifier.setBrightness,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Use system brightness',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: cfg.textColor,
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: prefs.isSystemBrightness,
+                        onChanged: (useSystem) {
+                          notifier.setBrightness(useSystem ? -1.0 : 0.85);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
+                if (!prefs.isSystemBrightness)
+                  _SettingSlider(
+                    label: 'Brightness',
+                    value: prefs.brightness.clamp(0.1, 1.0),
+                    min: .1,
+                    max: 1,
+                    format: (value) => '${(value * 100).round()}%',
+                    onChanged: notifier.setBrightness,
+                    onCommitted: notifier.setBrightness,
+                  ),
                 const SizedBox(height: 8),
                 GridView.builder(
                   shrinkWrap: true,
@@ -295,6 +349,18 @@ class ThemesSettingsSheet extends ConsumerWidget {
             ),
           ),
         ),
+      );
+
+    return Theme(
+      data: themeData,
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: rich
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: sheetContent,
+              )
+            : sheetContent,
       ),
     );
   }
@@ -337,13 +403,21 @@ class ThemesSettingsSheet extends ConsumerWidget {
         final prefs = ref.watch(readerPreferencesProvider);
         final notifier = ref.read(readerPreferencesProvider.notifier);
         final cfg = prefs.themeConfig;
-        return Theme(
-          data: cfg.systemBrightness == Brightness.dark
-              ? HonTheme.darkTheme
-              : HonTheme.lightTheme,
-          child: Material(
-            color: cfg.uiControlsBackground,
-            child: ConstrainedBox(
+        final rich = GlassStyle.richOf(context);
+        final baseTheme = cfg.systemBrightness == Brightness.dark
+            ? HonTheme.darkTheme
+            : HonTheme.lightTheme;
+        final themeData = baseTheme.copyWith(
+          extensions: Theme.of(context).extensions.values,
+        );
+        final bg = rich
+            ? cfg.uiControlsBackground.withValues(alpha: 0.78)
+            : cfg.uiControlsBackground;
+
+        final customizeContent = Material(
+          color: bg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: MediaQuery.sizeOf(context).height * .9,
                 maxWidth: 640,
@@ -361,20 +435,89 @@ class ThemesSettingsSheet extends ConsumerWidget {
                   children: [
                     _header(context, 'Fonts & Spacing', cfg),
                     const SizedBox(height: 12),
-                    ...ReaderFontFamily.values.map(
-                      (font) => RadioListTile<ReaderFontFamily>(
-                        value: font,
-                        groupValue: prefs.fontFamily,
-                        title: Text(
-                          font.displayName,
-                          style: TextStyle(
-                            fontFamily: font.fontFamily,
-                            fontSize: 19,
-                          ),
-                        ),
-                        contentPadding: EdgeInsets.zero,
-                        onChanged: (_) => notifier.setFontFamily(font),
+                    Text(
+                      'Font Family',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: cfg.textColor,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: ReaderFontFamily.values.length,
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        mainAxisExtent: 52,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      itemBuilder: (context, index) {
+                        final font = ReaderFontFamily.values[index];
+                        final selected = prefs.fontFamily == font;
+                        return Semantics(
+                          button: true,
+                          selected: selected,
+                          label: '${font.displayName} font',
+                          child: Material(
+                            color: selected
+                                ? cfg.textColor.withValues(alpha: 0.12)
+                                : cfg.backgroundColor,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              side: BorderSide(
+                                color: selected
+                                    ? cfg.textColor
+                                    : cfg.textColor.withValues(alpha: 0.16),
+                                width: selected ? 2 : 1,
+                              ),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: InkWell(
+                              onTap: () {
+                                notifier.setFontFamily(font);
+                                SemanticsService.announce(
+                                  'Font set to ${font.displayName}',
+                                  TextDirection.ltr,
+                                );
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        font.displayName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontFamily: font.fontFamily,
+                                          fontSize: 14,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                          color: cfg.textColor,
+                                        ),
+                                      ),
+                                    ),
+                                    if (selected)
+                                      Icon(
+                                        CupertinoIcons.checkmark_alt,
+                                        size: 16,
+                                        color: cfg.textColor,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     const Divider(height: 28),
                     _SettingSlider(
@@ -465,6 +608,18 @@ class ThemesSettingsSheet extends ConsumerWidget {
                 ),
               ),
             ),
+          );
+
+        return Theme(
+          data: themeData,
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: rich
+                ? BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    child: customizeContent,
+                  )
+                : customizeContent,
           ),
         );
       },

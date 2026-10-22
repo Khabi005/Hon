@@ -7,6 +7,14 @@ enum SourceHealthState {
   blockedByPolicy,
 }
 
+enum CapabilityStatus {
+  notTested,
+  working,
+  empty,
+  failed,
+  unsupported,
+}
+
 class SourceHealthResult {
   final SourceHealthState state;
   final String label;
@@ -114,4 +122,133 @@ class SourceHealthService {
       );
     }
   }
+
+  /// Evaluates full source capabilities and produces a diagnostic matrix.
+  static Future<SourceDiagnosticsMatrix> diagnoseSource(String sourceId) async {
+    final health = await testSource(sourceId);
+    bool supportsSearch = false;
+    bool supportsListings = false;
+    final listings = <String>[];
+    final capabilities = <SourceDiagnosticsCapability>[];
+
+    try {
+      final info = await SourceRegistry.instance.getCatalogInfo(sourceId);
+      supportsSearch = info.hasSearch;
+      supportsListings = info.listings.isNotEmpty;
+      for (final l in info.listings) {
+        listings.add(l.name);
+      }
+    } catch (_) {}
+
+    CapabilityStatus searchStatus;
+    String searchMessage;
+    if (!supportsSearch) {
+      searchStatus = CapabilityStatus.unsupported;
+      searchMessage = 'Not supported by source';
+    } else {
+      try {
+        final searchResults = await SourceRegistry.instance.searchSource(sourceId, 'a', listing: null);
+        if (searchResults.isNotEmpty) {
+          searchStatus = CapabilityStatus.working;
+          searchMessage = 'Operational (${searchResults.length} found)';
+        } else {
+          searchStatus = CapabilityStatus.empty;
+          searchMessage = 'No results for test query';
+        }
+      } catch (e) {
+        final msg = e.toString().split('\n').first.replaceAll(RegExp(r'^(Exception|PlatformException):\s*'), '');
+        searchStatus = CapabilityStatus.failed;
+        searchMessage = 'Search failed: $msg';
+      }
+    }
+
+    capabilities.add(SourceDiagnosticsCapability(
+      name: 'Search',
+      isSupported: supportsSearch,
+      status: searchStatus,
+      message: searchMessage,
+    ));
+
+    CapabilityStatus listingsStatus;
+    String listingsMessage;
+    if (!supportsListings) {
+      listingsStatus = CapabilityStatus.unsupported;
+      listingsMessage = 'No listings supported';
+    } else if (listings.isEmpty) {
+      listingsStatus = CapabilityStatus.empty;
+      listingsMessage = 'No listings configured';
+    } else if (!health.isOk) {
+      listingsStatus = CapabilityStatus.failed;
+      listingsMessage = 'Listing 0 failed: ${health.label}';
+    } else {
+      listingsStatus = CapabilityStatus.working;
+      listingsMessage = '${listings.length} listings available';
+    }
+
+    capabilities.add(SourceDiagnosticsCapability(
+      name: 'Catalog Listings',
+      isSupported: supportsListings,
+      status: listingsStatus,
+      message: listingsMessage,
+    ));
+
+    // Finding 10: truthfully report Novel Parsing and Passage Fetching as notTested
+    // unless explicitly verified with real novel/passage probes.
+    capabilities.add(const SourceDiagnosticsCapability(
+      name: 'Novel Parsing',
+      isSupported: true,
+      status: CapabilityStatus.notTested,
+      message: 'Not tested (requires novel inspection)',
+    ));
+
+    capabilities.add(const SourceDiagnosticsCapability(
+      name: 'Passage Fetching',
+      isSupported: true,
+      status: CapabilityStatus.notTested,
+      message: 'Not tested (requires passage inspection)',
+    ));
+
+    return SourceDiagnosticsMatrix(
+      sourceId: sourceId,
+      health: health,
+      supportsSearch: supportsSearch,
+      supportsListings: supportsListings,
+      availableListings: listings,
+      capabilities: capabilities,
+    );
+  }
+}
+
+class SourceDiagnosticsCapability {
+  final String name;
+  final bool isSupported;
+  final CapabilityStatus status;
+  final String? message;
+
+  const SourceDiagnosticsCapability({
+    required this.name,
+    required this.isSupported,
+    required this.status,
+    this.message,
+  });
+
+  bool get isWorking => status == CapabilityStatus.working;
+}
+
+class SourceDiagnosticsMatrix {
+  final String sourceId;
+  final SourceHealthResult health;
+  final bool supportsSearch;
+  final bool supportsListings;
+  final List<String> availableListings;
+  final List<SourceDiagnosticsCapability> capabilities;
+
+  const SourceDiagnosticsMatrix({
+    required this.sourceId,
+    required this.health,
+    this.supportsSearch = false,
+    this.supportsListings = false,
+    this.availableListings = const [],
+    this.capabilities = const [],
+  });
 }

@@ -72,12 +72,19 @@ class HonDownloadWorker(
             return@withContext Result.failure()
         }
 
-        try {
-            setForeground(DownloadNotifications.foreground(context, jobId, inputData.getString("chapterTitle") ?: "Downloading chapter"))
-        } catch (error: Exception) {
-            if (error is CancellationException) throw error
-            // Background foreground service restrictions on Android 12+/14+ should not fail download execution
+        val wifiOnly = inputData.getBoolean("wifiOnly", false)
+        if (wifiOnly) {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val active = cm?.activeNetwork
+            val caps = cm?.getNetworkCapabilities(active)
+            val isUnmetered = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+            if (!isUnmetered) {
+                updateJobStatusInDb(jobId, "retryWaiting", 0.0, "Waiting for Wi-Fi network")
+                HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "retryWaiting", 0.0)
+                return@withContext Result.retry()
+            }
         }
+
         return@withContext locks.getOrPut(jobId) { Mutex() }.withLock {
             if (!isCurrentAttempt(jobId)) Result.failure()
             else DownloadRequestGate.run(sourceId) {
@@ -111,6 +118,13 @@ class HonDownloadWorker(
                 return Result.retry()
             }
             retryPrefs.edit().remove(sourceId).apply()
+            val chTitle = inputData.getString("chapterTitle") ?: "Downloading chapter"
+            try {
+                setForeground(DownloadNotifications.foreground(context, jobId, chTitle, "Downloading passage"))
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                DownloadNotifications.onJobStarted(context, jobId, chTitle, "Downloading passage")
+            }
             updateJobStatusInDb(jobId, "running", 0.1)
             HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "running", 0.1)
             val managedRoot = File(context.filesDir.parentFile, "app_flutter/chapters").canonicalFile
@@ -144,6 +158,7 @@ class HonDownloadWorker(
                 throw IllegalStateException("The source engine could not load. Please update Hon. ${error.message}", error)
             }
             val imagesDir = File(context.filesDir.parentFile, "app_flutter/images")
+            DownloadNotifications.onJobPhase(context, jobId, chTitle, "Extracting illustrations")
             val passageContent = OfflineChapterImages.embed(passage, url, client, imagesDir) { isStopped }
 
             if (passageContent.isBlank()) {
@@ -225,7 +240,10 @@ class HonDownloadWorker(
                 } catch (_: Exception) {}
                 Result.failure()
             }
-        } finally { activeCalls.remove(jobId, trackedCalls) }
+        } finally {
+            activeCalls.remove(jobId, trackedCalls)
+            DownloadNotifications.onJobFinished(context, jobId)
+        }
     }
 
     private fun getSourceScript(sourceId: String): String? {

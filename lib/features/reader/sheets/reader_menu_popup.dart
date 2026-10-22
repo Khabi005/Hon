@@ -1,5 +1,8 @@
+import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import '../../../app/theme/glass_surface.dart';
 import '../../../app/theme/reader_theme.dart';
 
 class ReaderMenuPopup extends StatelessWidget {
@@ -50,6 +53,7 @@ class ReaderMenuPopup extends StatelessWidget {
     required bool isBookmarked,
     required bool isContinuousScroll,
   }) {
+    SemanticsService.announce('Reader menu opened', TextDirection.ltr);
     return showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -137,16 +141,16 @@ class ReaderMenuPopup extends StatelessWidget {
     final isDark =
         theme?.systemBrightness == Brightness.dark ||
         theme == null && Theme.of(context).brightness == Brightness.dark;
-    final pillBg =
+    final rich = GlassStyle.richOf(context);
+    final rawPillBg =
         theme?.uiControlsBackground ??
         (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7));
+    final pillBg = rich ? rawPillBg.withValues(alpha: 0.78) : rawPillBg;
     final textColor =
         theme?.textColor ?? (isDark ? Colors.white : Colors.black);
     final iconColor = textColor;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: Container(
+    final content = Container(
         width: 250,
         decoration: BoxDecoration(
           color: pillBg,
@@ -248,7 +252,16 @@ class ReaderMenuPopup extends StatelessWidget {
             ),
           ],
         ),
-      ),
+      );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: rich
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: content,
+            )
+          : content,
     );
   }
 

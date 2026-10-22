@@ -92,3 +92,25 @@
   - Tap **Add Host**, enter the hostname or domain (e.g., `images.contentcdn.com`), and tap **Add**.
   - Tap **Save** to persist the updated host allowlist.
 
+## ADR-011: Root CA Trust & Intermediate Bundling (ISRG Root YR)
+- **Decision:** Embed both self-signed `ISRG Root YR` root anchor and cross-signed certificate into Hon's custom TrustManager bundle, hardcoded via code PEM constants in `SourceHttpClient.kt` and bundled as resource CRT.
+- **Rationale:** 
+  - Sources like 1stKissNovel use TLS certificates issued by `YR2`, chaining to Let's Encrypt's 2025 root `Root YR`. Older Android systems lack this root in their system trust store.
+  - Supplying only the cross-signed cert failed Android PKIX validator because it lacked a self-signed trust anchor.
+  - Hardcoded code constants guarantee availability even if APK resource stripping occurs during release builds.
+
+## ADR-012: WorkManager vs Flutter Lifecycle in Downloads & Update Checks
+- **Decision:** Treat WorkManager as the durable out-of-process authority for download jobs and periodic update checks.
+- **Rationale:**
+  - When Flutter restarts or recovers downloads, active running jobs retain `DownloadStatus.running` and use `ExistingWorkPolicy.KEEP` so in-flight WorkManager workers are not killed and restarted from 0%.
+  - Background update checks run via `HonUpdateCheckWorker` (CoroutineWorker) with configurable periodic constraints (clamped $\ge 1\text{h}$, Wi-Fi only, battery not low), using an abstract `UpdateCheckDatabase` interface that operates directly on SQLite without Flutter engine instantiation.
+  - Chapter reconciliation is strictly additive: existing chapter IDs are preserved with their local download states, and brand new upstream chapters are inserted with `notDownloaded`.
+
+## ADR-013: Reader Preference Isolation (Global Defaults vs Book Overrides)
+- **Decision:** Every preference write operation explicitly carries its destination scope (global vs `bookId`), captured immutably at invocation time.
+- **Rationale:**
+  - Reading a mutable `_activeBookId` at execution time caused asynchronous preference writes to bleed book-specific styles into global preferences.
+  - Per-book overrides are strictly stored in `book_reader_settings_table`.
+  - "Reset to Defaults" clears the book override record from SQLite and reverts the active reader session to global defaults without writing book settings to global preferences.
+
+

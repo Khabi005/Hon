@@ -187,7 +187,8 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
       _set(state.copyWith(textIndent: value.clamp(0.0, 64.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
 
   void setBrightness(double b, {String? targetBookId, bool explicitGlobal = false}) {
-    _set(state.copyWith(brightness: b.clamp(0.1, 1.0)), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
+    final value = b < 0 ? -1.0 : b.clamp(0.05, 1.0);
+    _set(state.copyWith(brightness: value), targetBookId: targetBookId, explicitGlobal: explicitGlobal);
   }
 
   void toggleJustified({String? targetBookId, bool explicitGlobal = false}) {
@@ -236,7 +237,11 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
             .clamp(0.0, 32.0),
         textIndent: (values['indent'] as num?)?.toDouble().clamp(0.0, 64.0),
         isJustified: values['justified'] as bool?,
-        brightness: (values['brightness'] as num?)?.toDouble().clamp(0.1, 1.0),
+        brightness: () {
+          final b = (values['brightness'] as num?)?.toDouble();
+          if (b == null) return null;
+          return b < 0 ? -1.0 : b.clamp(0.1, 1.0);
+        }(),
         publisherStyles: values['publisherStyles'] as bool?,
       ),
       targetBookId: targetId,
