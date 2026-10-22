@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,7 +44,8 @@ internal object DownloadNotifications {
     data class PendingReservation(
         val jobId: String,
         val attemptToken: String,
-        val generation: Long
+        val generation: Long,
+        val createdAt: Long = System.currentTimeMillis()
     )
 
     sealed class ClaimResult {
@@ -51,12 +53,18 @@ internal object DownloadNotifications {
         object Secondary : ClaimResult()
     }
 
+    sealed class PromotionOutcome {
+        object Confirmed : PromotionOutcome()
+        object FailedAndTerminated : PromotionOutcome()
+        object Unresolved : PromotionOutcome()
+    }
+
     // Tracks currently executing jobs: jobId -> ActiveJob(attemptToken, "$title · $phase")
     private val activeJobs = ConcurrentHashMap<String, ActiveJob>()
 
     // Promotion listeners registered by secondary concurrent workers:
-    // jobId -> suspend (Long) -> Boolean (returns true if setForeground succeeded and confirmed)
-    private val workerPromoters = ConcurrentHashMap<String, suspend (Long) -> Boolean>()
+    // jobId -> suspend (Long) -> PromotionOutcome
+    private val workerPromoters = ConcurrentHashMap<String, suspend (Long) -> PromotionOutcome>()
 
     // Confirmed primary foreground worker jobId (only non-null if elevation was confirmed!)
     private var confirmedPrimaryJobId: String? = null
@@ -102,7 +110,7 @@ internal object DownloadNotifications {
         attemptToken: String,
         title: String,
         phase: String = "Downloading",
-        promoter: suspend (Long) -> Boolean
+        promoter: suspend (Long) -> PromotionOutcome
     ): ClaimResult = synchronized(foregroundLock) {
         activeJobs[jobId] = ActiveJob(attemptToken, "$title · $phase")
         if (confirmedPrimaryJobId == jobId) {
@@ -237,7 +245,7 @@ internal object DownloadNotifications {
 
     private suspend fun promoteNextWorker(context: Context): Boolean = promotionMutex.withLock {
         while (true) {
-            val nextCandidate: Pair<String, suspend (Long) -> Boolean>? = synchronized(foregroundLock) {
+            val nextCandidate: Pair<String, suspend (Long) -> PromotionOutcome>? = synchronized(foregroundLock) {
                 if (confirmedPrimaryJobId != null) {
                     return@withLock true
                 }
@@ -271,27 +279,42 @@ internal object DownloadNotifications {
 
             Log.i(TAG, "Promoting next worker candidate $candJobId at generation $gen")
 
-            val elevated = try {
+            val outcome = try {
                 withTimeoutOrNull(3000) {
                     promoter.invoke(gen)
-                } == true
+                } ?: PromotionOutcome.Unresolved
             } catch (e: Exception) {
                 Log.w(TAG, "Promoter invocation threw for job $candJobId: ${e.message}")
-                false
+                PromotionOutcome.FailedAndTerminated
             }
 
-            if (elevated) {
-                val confirmed = synchronized(foregroundLock) { confirmedPrimaryJobId == candJobId }
-                if (confirmed) {
-                    Log.i(TAG, "Acknowledged foreground handoff to $candJobId at generation $gen")
-                    return@withLock true
+            when (outcome) {
+                is PromotionOutcome.Confirmed -> {
+                    val confirmed = synchronized(foregroundLock) { confirmedPrimaryJobId == candJobId }
+                    if (confirmed) {
+                        Log.i(TAG, "Acknowledged foreground handoff to $candJobId at generation $gen")
+                        return@withLock true
+                    } else {
+                        Log.w(TAG, "Promotion reported confirmed for $candJobId (gen $gen) but confirmedPrimaryJobId is $confirmedPrimaryJobId")
+                        synchronized(foregroundLock) {
+                            if (pendingReservation?.generation == gen) {
+                                pendingReservation = null
+                            }
+                        }
+                    }
                 }
-            }
-
-            synchronized(foregroundLock) {
-                if (pendingReservation?.generation == gen) {
-                    Log.w(TAG, "Promotion timed out or failed for $candJobId (gen $gen); invalidating reservation")
-                    pendingReservation = null
+                is PromotionOutcome.FailedAndTerminated -> {
+                    synchronized(foregroundLock) {
+                        if (pendingReservation?.generation == gen) {
+                            Log.w(TAG, "Promotion failed and terminated for $candJobId (gen $gen); clearing reservation")
+                            pendingReservation = null
+                        }
+                    }
+                }
+                is PromotionOutcome.Unresolved -> {
+                    Log.w(TAG, "Promotion termination unconfirmed for $candJobId (gen $gen); retaining unresolved reservation and deferring to reconciliation")
+                    scheduleReconciliation(context, 1500L)
+                    return@withLock false
                 }
             }
         }
@@ -302,6 +325,18 @@ internal object DownloadNotifications {
     fun reconcileSurvivingJobs(context: Context) {
         var needPromotion = false
         synchronized(foregroundLock) {
+            val res = pendingReservation
+            if (res != null) {
+                val job = activeJobs[res.jobId]
+                if (job == null || job.attemptToken != res.attemptToken || System.currentTimeMillis() - res.createdAt > 10000) {
+                    Log.w(TAG, "Reconciliation clearing stale/dead pending reservation for ${res.jobId} (gen ${res.generation})")
+                    pendingReservation = null
+                }
+            }
+            if (confirmedPrimaryJobId != null && !activeJobs.containsKey(confirmedPrimaryJobId)) {
+                Log.w(TAG, "Reconciliation clearing primary worker $confirmedPrimaryJobId as it is no longer active")
+                confirmedPrimaryJobId = null
+            }
             if (confirmedPrimaryJobId == null && pendingReservation == null && activeJobs.isNotEmpty()) {
                 needPromotion = true
             }
@@ -318,11 +353,26 @@ internal object DownloadNotifications {
      * Non-blocking reconciliation scheduled on an independent background scope.
      * Prevents timeout fallbacks from blocking execution outside their bounded deadline.
      */
-    fun scheduleReconciliation(context: Context) {
+    fun scheduleReconciliation(context: Context, delayMs: Long = 0L) {
         reconciliationScope.launch {
             try {
+                if (delayMs > 0) {
+                    delay(delayMs)
+                }
                 var needPromotion = false
                 synchronized(foregroundLock) {
+                    val res = pendingReservation
+                    if (res != null) {
+                        val job = activeJobs[res.jobId]
+                        if (job == null || job.attemptToken != res.attemptToken || System.currentTimeMillis() - res.createdAt > 10000) {
+                            Log.w(TAG, "Schedule reconciliation clearing stale/dead pending reservation for ${res.jobId} (gen ${res.generation})")
+                            pendingReservation = null
+                        }
+                    }
+                    if (confirmedPrimaryJobId != null && !activeJobs.containsKey(confirmedPrimaryJobId)) {
+                        Log.w(TAG, "Schedule reconciliation clearing primary worker $confirmedPrimaryJobId as it is no longer active")
+                        confirmedPrimaryJobId = null
+                    }
                     if (confirmedPrimaryJobId == null && pendingReservation == null && activeJobs.isNotEmpty()) {
                         needPromotion = true
                     }

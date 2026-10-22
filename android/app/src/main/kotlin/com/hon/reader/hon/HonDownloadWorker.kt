@@ -45,6 +45,7 @@ class HonDownloadWorker(
         }
     }
     private val trackedCalls = ConcurrentHashMap.newKeySet<Call>()
+    @Volatile private var activeElevationJob: kotlinx.coroutines.Job? = null
     private fun isCurrentAttempt(jobId: String): Boolean = !isStopped &&
         context.getSharedPreferences("hon_download_tokens", Context.MODE_PRIVATE).getString(jobId, null) == id.toString()
 
@@ -130,9 +131,9 @@ class HonDownloadWorker(
             val chTitle = inputData.getString("chapterTitle") ?: "Downloading chapter"
             val currentPhase = java.util.concurrent.atomic.AtomicReference("Downloading passage")
 
-            val promoter: suspend (Long) -> Boolean = { gen ->
+            val promoter: suspend (Long) -> DownloadNotifications.PromotionOutcome = { gen ->
                 if (isStopped) {
-                    false
+                    DownloadNotifications.PromotionOutcome.FailedAndTerminated
                 } else {
                     val elevationSuccess = java.util.concurrent.atomic.AtomicBoolean(false)
                     val elevationJob = promotionScope.launch {
@@ -157,23 +158,44 @@ class HonDownloadWorker(
                             elevationSuccess.set(confirmed)
                         }
                     }
+                    activeElevationJob = elevationJob
 
-                    try {
+                    val completedNormally = try {
                         elevationJob.join()
-                        elevationSuccess.get()
-                    } catch (ce: CancellationException) {
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
+
+                    if (completedNormally) {
+                        if (elevationSuccess.get()) {
+                            DownloadNotifications.PromotionOutcome.Confirmed
+                        } else {
+                            DownloadNotifications.PromotionOutcome.FailedAndTerminated
+                        }
+                    } else {
                         // Promotion caller timed out or was cancelled: coordinate completion before transferring ownership
                         withContext(NonCancellable) {
                             elevationJob.cancel()
-                            try {
+                            val terminated = try {
                                 withTimeoutOrNull(1000) {
                                     elevationJob.join()
-                                }
-                            } catch (_: Exception) {}
-                            elevationSuccess.get()
+                                } != null
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (elevationSuccess.get()) {
+                                DownloadNotifications.PromotionOutcome.Confirmed
+                            } else if (terminated && !elevationJob.isActive) {
+                                DownloadNotifications.PromotionOutcome.FailedAndTerminated
+                            } else {
+                                android.util.Log.w(
+                                    "HonDownloadWorker",
+                                    "Elevation termination unconfirmed for $jobId (gen $gen); retaining unresolved reservation"
+                                )
+                                DownloadNotifications.PromotionOutcome.Unresolved
+                            }
                         }
-                    } catch (_: Exception) {
-                        false
                     }
                 }
             }
@@ -327,15 +349,41 @@ class HonDownloadWorker(
         } finally {
             withContext(NonCancellable) {
                 withTimeoutOrNull(5000) {
+                    var elevationTerminated = true
                     try {
-                        promotionScope.cancel()
+                        val job = activeElevationJob
+                        if (job != null && job.isActive) {
+                            job.cancel()
+                            val joined = try {
+                                withTimeoutOrNull(1000) { job.join() } != null
+                            } catch (_: Exception) {
+                                false
+                            }
+                            if (!joined || job.isActive) {
+                                elevationTerminated = false
+                                android.util.Log.w(
+                                    "HonDownloadWorker",
+                                    "Active elevation job for $jobId did not terminate within 1000ms join window"
+                                )
+                            }
+                        }
                     } catch (e: Exception) {
-                        android.util.Log.w("HonDownloadWorker", "Error cancelling promotionScope for $jobId: ${e.message}")
+                        android.util.Log.w("HonDownloadWorker", "Error joining active elevation job for $jobId: ${e.message}")
+                        elevationTerminated = false
+                    } finally {
+                        promotionScope.cancel()
                     }
                     activeCalls.remove(jobId, trackedCalls)
-                    DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
+                    if (elevationTerminated) {
+                        DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
+                    } else {
+                        // Unfinished elevation: do not transfer ownership immediately while elevation is still in flight!
+                        // Remove worker registration and defer safe promotion to background reconciliation.
+                        DownloadNotifications.removeActiveJob(jobId, attemptToken)
+                        DownloadNotifications.scheduleReconciliation(context)
+                    }
                 } ?: run {
-                    android.util.Log.w("HonDownloadWorker", "Cleanup timed out for $jobId; forcing non-blocking safe removal")
+                    android.util.Log.w("HonDownloadWorker", "Cleanup target budget (5000ms) exceeded for $jobId; forcing non-blocking safe removal")
                     promotionScope.cancel()
                     activeCalls.remove(jobId, trackedCalls)
                     DownloadNotifications.removeActiveJob(jobId, attemptToken)
