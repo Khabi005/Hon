@@ -14,20 +14,18 @@ import androidx.work.ForegroundInfo
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal object DownloadNotifications {
     private const val TAG = "DownloadNotifications"
     private const val CHANNEL_ID = "hon_downloads"
     const val NOTIFICATION_ID = 4001
 
-    // Tracks currently executing jobs and their sub-phases
-    private val activeJobs = ConcurrentHashMap<String, String>()
-
-    // Promotion listeners registered by secondary concurrent workers
-    private val workerPromoters = ConcurrentHashMap<String, () -> Unit>()
-
-    // Atomic reference to the designated primary foreground worker
-    private val primaryWorkerJobId = AtomicReference<String?>(null)
+    data class ActiveJob(
+        val attemptToken: String,
+        val display: String
+    )
 
     data class QueueStatus(
         val queued: Int,
@@ -37,26 +35,42 @@ internal object DownloadNotifications {
         val totalPending: Int get() = queued + running + retryWaiting
     }
 
+    // Tracks currently executing jobs: jobId -> ActiveJob(attemptToken, "$title · $phase")
+    private val activeJobs = ConcurrentHashMap<String, ActiveJob>()
+
+    // Promotion listeners registered by secondary concurrent workers:
+    // jobId -> suspend () -> Boolean (returns true if setForeground succeeded)
+    private val workerPromoters = ConcurrentHashMap<String, suspend () -> Boolean>()
+
+    // Atomic reference to the designated primary foreground worker (jobId)
+    // Only non-null if that worker has SUCCEEDED in foreground elevation!
+    private val primaryWorkerJobId = AtomicReference<String?>(null)
+
+    // Lock for coordinating foreground ownership and promotion state
+    private val foregroundLock = Any()
+
     /**
-     * Atomically claims foreground ownership for [jobId] if no primary worker currently
+     * Atomically claims foreground candidacy for [jobId] with [attemptToken] if no primary worker currently
      * holds foreground execution, or registers [promoter] if another worker is already primary.
      *
-     * @return true if this worker is designated as the primary foreground worker and must
-     * call [HonDownloadWorker.setForeground].
+     * @return true if this worker is granted permission to attempt primary foreground elevation
+     * and must call [HonDownloadWorker.setForeground]. Note: primary status is NOT confirmed until
+     * [confirmPrimaryElevation] is called upon elevation success.
      * @return false if this worker is designated as secondary; its [promoter] will be invoked
      * if foreground ownership transfers to it upon completion, retry or cancellation of previous workers.
      */
-    @Synchronized
     fun claimOrRegisterForeground(
         jobId: String,
+        attemptToken: String,
         title: String,
         phase: String = "Downloading",
-        promoter: () -> Unit
-    ): Boolean {
-        activeJobs[jobId] = "$title · $phase"
+        promoter: suspend () -> Boolean
+    ): Boolean = synchronized(foregroundLock) {
+        activeJobs[jobId] = ActiveJob(attemptToken, "$title · $phase")
         val currentPrimary = primaryWorkerJobId.get()
-        return if (currentPrimary == null || currentPrimary == jobId) {
-            primaryWorkerJobId.set(jobId)
+        if (currentPrimary == null) {
+            true
+        } else if (currentPrimary == jobId) {
             true
         } else {
             workerPromoters[jobId] = promoter
@@ -65,70 +79,138 @@ internal object DownloadNotifications {
     }
 
     /**
-     * Called if elevation to foreground service fails (e.g., due to background execution
-     * restrictions on Android 12+). Falls back to standard notification updates.
+     * Confirms that [jobId] with [attemptToken] has successfully elevated to foreground service.
      */
-    @Synchronized
-    fun onForegroundElevationFailed(context: Context, jobId: String) {
-        updateQueueNotification(context)
-    }
-
-    @Synchronized
-    fun onJobStarted(context: Context, jobId: String, title: String, phase: String = "Downloading") {
-        activeJobs[jobId] = "$title · $phase"
-        if (primaryWorkerJobId.get() == null) {
+    fun confirmPrimaryElevation(jobId: String, attemptToken: String) = synchronized(foregroundLock) {
+        val current = activeJobs[jobId]
+        if (current != null && current.attemptToken == attemptToken) {
             primaryWorkerJobId.set(jobId)
+            workerPromoters.remove(jobId)
+            Log.i(TAG, "Worker $jobId (attempt $attemptToken) confirmed as primary foreground owner")
+        }
+    }
+
+    /**
+     * Called if elevation to foreground service fails (e.g., due to background execution
+     * restrictions on Android 12+). Ensures the failed worker is not recorded as primary,
+     * attempts promotion of the next candidate worker, and falls back to standard notification.
+     */
+    fun onForegroundElevationFailed(context: Context, jobId: String, attemptToken: String) {
+        var needPromotion = false
+        synchronized(foregroundLock) {
+            val current = activeJobs[jobId]
+            if (current != null && current.attemptToken == attemptToken) {
+                workerPromoters.remove(jobId)
+                if (primaryWorkerJobId.get() == jobId) {
+                    primaryWorkerJobId.set(null)
+                    needPromotion = true
+                }
+            }
+        }
+        if (needPromotion) {
+            runBlocking {
+                promoteNextWorkerLocked(context)
+            }
         }
         updateQueueNotification(context)
     }
 
-    @Synchronized
-    fun onJobPhase(context: Context, jobId: String, title: String, phase: String) {
-        activeJobs[jobId] = "$title · $phase"
-        updateQueueNotification(context)
-    }
-
-    @Synchronized
-    fun removeActiveJob(jobId: String) {
-        activeJobs.remove(jobId)
-        workerPromoters.remove(jobId)
-        if (primaryWorkerJobId.get() == jobId) {
-            promoteNextWorker()
-        }
-    }
-
-    @Synchronized
-    fun onJobFinished(context: Context, jobId: String) {
-        activeJobs.remove(jobId)
-        workerPromoters.remove(jobId)
-        if (primaryWorkerJobId.get() == jobId) {
-            promoteNextWorker()
+    fun onJobStarted(context: Context, jobId: String, attemptToken: String, title: String, phase: String = "Downloading") {
+        synchronized(foregroundLock) {
+            activeJobs[jobId] = ActiveJob(attemptToken, "$title · $phase")
         }
         updateQueueNotification(context)
     }
 
-    private fun promoteNextWorker() {
-        val nextJobId = activeJobs.keys.firstOrNull()
-        primaryWorkerJobId.set(nextJobId)
-        if (nextJobId != null) {
-            val promoter = workerPromoters.remove(nextJobId)
-            try {
-                promoter?.invoke()
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to invoke promotion callback for job $nextJobId: ${e.message}")
+    fun onJobPhase(context: Context, jobId: String, attemptToken: String, title: String, phase: String) {
+        val current = activeJobs[jobId]
+        if (current == null || current.attemptToken == attemptToken) {
+            activeJobs[jobId] = ActiveJob(attemptToken, "$title · $phase")
+            updateQueueNotification(context)
+        }
+    }
+
+    fun removeActiveJob(jobId: String, attemptToken: String?) = synchronized(foregroundLock) {
+        val current = activeJobs[jobId]
+        if (attemptToken == null || current?.attemptToken == attemptToken) {
+            activeJobs.remove(jobId)
+            workerPromoters.remove(jobId)
+            if (primaryWorkerJobId.get() == jobId) {
+                primaryWorkerJobId.set(null)
             }
         }
     }
 
-    @Synchronized
-    fun reconcileAfterBatchStop(context: Context, stoppedJobIds: Collection<String>) {
-        for (jobId in stoppedJobIds) {
-            activeJobs.remove(jobId)
+    /**
+     * Acknowledged foreground handoff: outgoing worker unregisters, transfers foreground
+     * ownership to the next candidate worker, and waits for the promoted worker's
+     * setForeground elevation to succeed before returning.
+     */
+    suspend fun handoffForegroundAndFinish(context: Context, jobId: String, attemptToken: String) {
+        var needPromotion = false
+        synchronized(foregroundLock) {
+            val current = activeJobs[jobId]
+            if (current != null && current.attemptToken == attemptToken) {
+                activeJobs.remove(jobId)
+            }
             workerPromoters.remove(jobId)
+            if (primaryWorkerJobId.get() == jobId) {
+                primaryWorkerJobId.set(null)
+                needPromotion = true
+            }
         }
-        val currentPrimary = primaryWorkerJobId.get()
-        if (currentPrimary != null && stoppedJobIds.contains(currentPrimary)) {
-            promoteNextWorker()
+        if (needPromotion) {
+            promoteNextWorkerLocked(context)
+        }
+        updateQueueNotification(context)
+    }
+
+    private suspend fun promoteNextWorkerLocked(context: Context): Boolean {
+        val candidates = activeJobs.entries.toList()
+        for (entry in candidates) {
+            val candJobId = entry.key
+            val candAttemptToken = entry.value.attemptToken
+            if (primaryWorkerJobId.get() == candJobId) continue
+
+            val promoter = synchronized(foregroundLock) {
+                workerPromoters.remove(candJobId)
+            } ?: continue
+
+            val elevated = try {
+                withTimeoutOrNull(3000) {
+                    promoter.invoke()
+                } == true
+            } catch (e: Exception) {
+                Log.w(TAG, "Promoter invocation threw for job $candJobId: ${e.message}")
+                false
+            }
+            if (elevated) {
+                synchronized(foregroundLock) {
+                    if (activeJobs[candJobId]?.attemptToken == candAttemptToken) {
+                        primaryWorkerJobId.set(candJobId)
+                        Log.i(TAG, "Acknowledged foreground handoff to $candJobId (attempt $candAttemptToken)")
+                        return true
+                    }
+                }
+            } else {
+                Log.w(TAG, "Promotion failed or timed out for $candJobId (attempt $candAttemptToken)")
+            }
+        }
+        primaryWorkerJobId.set(null)
+        return false
+    }
+
+    fun reconcileSurvivingJobs(context: Context) {
+        var needPromotion = false
+        synchronized(foregroundLock) {
+            if (primaryWorkerJobId.get() == null && activeJobs.isNotEmpty()) {
+                needPromotion = true
+            }
+        }
+        if (needPromotion) {
+            runBlocking {
+                promoteNextWorkerLocked(context)
+            }
         }
         updateQueueNotification(context)
     }
@@ -136,8 +218,7 @@ internal object DownloadNotifications {
     fun getPrimaryWorkerJobId(): String? = primaryWorkerJobId.get()
     fun getActiveJobCount(): Int = activeJobs.size
 
-    @Synchronized
-    fun cancelAll(context: Context) {
+    fun cancelAll(context: Context) = synchronized(foregroundLock) {
         activeJobs.clear()
         workerPromoters.clear()
         primaryWorkerJobId.set(null)
@@ -204,11 +285,16 @@ internal object DownloadNotifications {
         }
     }
 
-    @Synchronized
-    fun foreground(context: Context, job: String, title: String, phase: String = "Downloading"): ForegroundInfo {
-        activeJobs[job] = "$title · $phase"
-        primaryWorkerJobId.set(job)
-        workerPromoters.remove(job)
+    fun foreground(
+        context: Context,
+        job: String,
+        attemptToken: String,
+        title: String,
+        phase: String = "Downloading"
+    ): ForegroundInfo {
+        synchronized(foregroundLock) {
+            activeJobs[job] = ActiveJob(attemptToken, "$title · $phase")
+        }
         val status = queryQueueStatus(context)
         val notification = buildNotification(context, status)
         return if (Build.VERSION.SDK_INT >= 29) {
@@ -250,7 +336,7 @@ internal object DownloadNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val activeList = activeJobs.values.toList()
+        val activeList = activeJobs.values.map { it.display }
         val isActivelyExecuting = activeList.isNotEmpty()
         val isWaitingRetryOnly = !isActivelyExecuting && status.retryWaiting > 0 && status.queued == 0 && status.running == 0
 

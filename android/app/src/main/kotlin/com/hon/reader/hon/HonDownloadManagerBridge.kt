@@ -48,9 +48,11 @@ class HonDownloadManagerBridge(
 
         fun stopJobDurableAndAwait(context: Context, jobId: String, status: String) {
             synchronized(schedulingLocks.getOrPut(jobId) { Any() }) {
+                val token = context.getSharedPreferences("hon_download_tokens", Context.MODE_PRIVATE).getString(jobId, null)
                 context.getSharedPreferences("hon_download_tokens", Context.MODE_PRIVATE).edit().remove(jobId).commit()
                 WorkManager.getInstance(context).cancelUniqueWork(jobId)
                 HonDownloadWorker.stopAndAwait(jobId)
+                DownloadNotifications.removeActiveJob(jobId, token)
 
                 val file = File(context.filesDir.parentFile, "app_flutter/hon.sqlite")
                 if (file.exists()) {
@@ -75,7 +77,7 @@ class HonDownloadManagerBridge(
                         }
                     }
                 }
-                DownloadNotifications.onJobFinished(context, jobId)
+                DownloadNotifications.reconcileSurvivingJobs(context)
             }
         }
 
@@ -133,7 +135,7 @@ class HonDownloadManagerBridge(
                             wm.cancelUniqueWork(target.jobId)
                             // Stop worker without holding any database transaction
                             HonDownloadWorker.stopAndAwait(target.jobId)
-                            DownloadNotifications.removeActiveJob(target.jobId)
+                            DownloadNotifications.removeActiveJob(target.jobId, target.token)
 
                             // Short database transaction to update conditional state under this job's scheduling lock
                             if (file.exists()) {
@@ -179,7 +181,7 @@ class HonDownloadManagerBridge(
             }
 
             // 6. Dismiss/update queue notification by reconciling surviving jobs
-            DownloadNotifications.reconcileAfterBatchStop(context, stoppedJobIds)
+            DownloadNotifications.reconcileSurvivingJobs(context)
 
             // 7. Surface partial batch failures if any target failed
             if (stopFailures.isNotEmpty()) {
