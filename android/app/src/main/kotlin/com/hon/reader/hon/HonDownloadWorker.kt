@@ -22,20 +22,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
-
-private data class PromotionRequest(
-    val generation: Long,
-    val ack: CompletableDeferred<Boolean>
-)
 
 class HonDownloadWorker(
     private val context: Context,
@@ -122,9 +115,7 @@ class HonDownloadWorker(
 
         val attemptToken = id.toString()
         activeCalls[jobId] = trackedCalls
-        val promoteChannel = Channel<PromotionRequest>(Channel.CONFLATED)
         val promotionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        var promotionJob: kotlinx.coroutines.Job? = null
 
         return try {
             val retryPrefs = context.getSharedPreferences("hon_download_retry_after", Context.MODE_PRIVATE)
@@ -139,42 +130,49 @@ class HonDownloadWorker(
             val chTitle = inputData.getString("chapterTitle") ?: "Downloading chapter"
             val currentPhase = java.util.concurrent.atomic.AtomicReference("Downloading passage")
 
-            promotionJob = promotionScope.launch {
-                for (req in promoteChannel) {
-                    if (isStopped) {
-                        req.ack.complete(false)
-                        break
-                    }
-                    val success = try {
-                        setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
-                        DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, req.generation)
-                    } catch (error: Exception) {
-                        if (error is CancellationException) {
-                            req.ack.complete(false)
-                            throw error
-                        }
-                        android.util.Log.w(
-                            "HonDownloadWorker",
-                            "Could not elevate promoted worker $jobId to foreground service: ${error.message}"
-                        )
-                        false
-                    }
-                    req.ack.complete(success)
-                }
-            }
-
             val promoter: suspend (Long) -> Boolean = { gen ->
                 if (isStopped) {
                     false
                 } else {
-                    val ack = CompletableDeferred<Boolean>()
-                    if (promoteChannel.trySend(PromotionRequest(gen, ack)).isSuccess) {
-                        try {
-                            ack.await()
-                        } catch (_: Exception) {
+                    val elevationSuccess = java.util.concurrent.atomic.AtomicBoolean(false)
+                    val elevationJob = promotionScope.launch {
+                        // 1. Verify reservation is still valid at lifecycle level before calling setForeground
+                        if (!DownloadNotifications.isReservationValid(jobId, attemptToken, gen)) {
+                            return@launch
+                        }
+                        val elevated = try {
+                            setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
+                            true
+                        } catch (error: Exception) {
+                            if (error !is CancellationException) {
+                                android.util.Log.w(
+                                    "HonDownloadWorker",
+                                    "Could not elevate promoted worker $jobId to foreground service: ${error.message}"
+                                )
+                            }
                             false
                         }
-                    } else {
+                        if (elevated) {
+                            val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, gen)
+                            elevationSuccess.set(confirmed)
+                        }
+                    }
+
+                    try {
+                        elevationJob.join()
+                        elevationSuccess.get()
+                    } catch (ce: CancellationException) {
+                        // Promotion caller timed out or was cancelled: coordinate completion before transferring ownership
+                        withContext(NonCancellable) {
+                            elevationJob.cancel()
+                            try {
+                                withTimeoutOrNull(1000) {
+                                    elevationJob.join()
+                                }
+                            } catch (_: Exception) {}
+                            elevationSuccess.get()
+                        }
+                    } catch (_: Exception) {
                         false
                     }
                 }
@@ -182,26 +180,30 @@ class HonDownloadWorker(
 
             val claimResult = DownloadNotifications.claimOrRegisterForeground(jobId, attemptToken, chTitle, currentPhase.get(), promoter)
             if (claimResult is DownloadNotifications.ClaimResult.PrimaryCandidate) {
-                val elevated = try {
-                    setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
-                    true
-                } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    android.util.Log.w(
-                        "HonDownloadWorker",
-                        "Could not elevate primary worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
-                        "Continuing execution under standard WorkManager background constraints; posting informational notification only."
-                    )
-                    false
-                }
-                if (elevated) {
-                    val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, claimResult.generation)
-                    if (!confirmed) {
-                        android.util.Log.w("HonDownloadWorker", "Primary elevation confirmation failed for $jobId (gen ${claimResult.generation})")
+                if (!DownloadNotifications.isReservationValid(jobId, attemptToken, claimResult.generation)) {
+                    DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
+                } else {
+                    val elevated = try {
+                        setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
+                        true
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        android.util.Log.w(
+                            "HonDownloadWorker",
+                            "Could not elevate primary worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
+                            "Continuing execution under standard WorkManager background constraints; posting informational notification only."
+                        )
+                        false
+                    }
+                    if (elevated) {
+                        val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, claimResult.generation)
+                        if (!confirmed) {
+                            android.util.Log.w("HonDownloadWorker", "Primary elevation confirmation failed for $jobId (gen ${claimResult.generation})")
+                            DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
+                        }
+                    } else {
                         DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
                     }
-                } else {
-                    DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
                 }
             } else {
                 DownloadNotifications.updateQueueNotification(context)
@@ -326,22 +328,18 @@ class HonDownloadWorker(
             withContext(NonCancellable) {
                 withTimeoutOrNull(5000) {
                     try {
-                        promoteChannel.close()
-                        promotionJob?.cancel()
-                        promotionJob?.join()
-                    } catch (e: Exception) {
-                        android.util.Log.w("HonDownloadWorker", "Error stopping promotion coroutine for $jobId: ${e.message}")
-                    } finally {
                         promotionScope.cancel()
+                    } catch (e: Exception) {
+                        android.util.Log.w("HonDownloadWorker", "Error cancelling promotionScope for $jobId: ${e.message}")
                     }
                     activeCalls.remove(jobId, trackedCalls)
                     DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
                 } ?: run {
-                    android.util.Log.w("HonDownloadWorker", "Cleanup timed out for $jobId; forcing removal")
+                    android.util.Log.w("HonDownloadWorker", "Cleanup timed out for $jobId; forcing non-blocking safe removal")
                     promotionScope.cancel()
                     activeCalls.remove(jobId, trackedCalls)
                     DownloadNotifications.removeActiveJob(jobId, attemptToken)
-                    DownloadNotifications.reconcileSurvivingJobs(context)
+                    DownloadNotifications.scheduleReconciliation(context)
                 }
             }
         }

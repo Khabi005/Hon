@@ -13,6 +13,10 @@ import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -68,6 +72,19 @@ internal object DownloadNotifications {
 
     // Mutex to serialize async handoff and promotion loops
     private val promotionMutex = Mutex()
+
+    // Background scope for non-blocking scheduled reconciliation
+    private val reconciliationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Checks if the pending reservation for [jobId] with [attemptToken] at [generation]
+     * is still valid before calling setForeground.
+     */
+    fun isReservationValid(jobId: String, attemptToken: String, generation: Long): Boolean = synchronized(foregroundLock) {
+        pendingReservation?.generation == generation &&
+        pendingReservation?.jobId == jobId &&
+        pendingReservation?.attemptToken == attemptToken
+    }
 
     /**
      * Atomically claims foreground candidacy for [jobId] with [attemptToken] if no primary worker currently
@@ -295,6 +312,29 @@ internal object DownloadNotifications {
             }
         }
         updateQueueNotification(context)
+    }
+
+    /**
+     * Non-blocking reconciliation scheduled on an independent background scope.
+     * Prevents timeout fallbacks from blocking execution outside their bounded deadline.
+     */
+    fun scheduleReconciliation(context: Context) {
+        reconciliationScope.launch {
+            try {
+                var needPromotion = false
+                synchronized(foregroundLock) {
+                    if (confirmedPrimaryJobId == null && pendingReservation == null && activeJobs.isNotEmpty()) {
+                        needPromotion = true
+                    }
+                }
+                if (needPromotion) {
+                    promoteNextWorker(context)
+                }
+                updateQueueNotification(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "Asynchronous scheduled reconciliation failed: ${e.message}")
+            }
+        }
     }
 
     fun getPrimaryWorkerJobId(): String? = synchronized(foregroundLock) { confirmedPrimaryJobId }

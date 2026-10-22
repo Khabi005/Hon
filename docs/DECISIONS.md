@@ -120,11 +120,12 @@
     - If neither confirmed primary nor pending reservation exists, the worker atomically claims initial candidacy (`ClaimResult.PrimaryCandidate(gen)`) and records its pending reservation under `foregroundLock`.
     - Any concurrent worker starting while an initial elevation or handoff is pending receives `ClaimResult.Secondary` and registers its promoter callback.
     - Confirmation (`confirmPrimaryElevation`) strictly verifies that `pendingReservation` matches the worker's attempt token and generation. Only then is `confirmedPrimaryJobId` set and the pending reservation cleared.
-  - **Acknowledged Promotion with Generation Validation & Timeout Rejection:** Secondary concurrent workers do not invoke `setForeground` unconditionally; instead, they register a suspendable promotion callback using a `PromotionRequest(generation, ack)` channel. If the primary worker finishes, retries, or is cancelled, `DownloadNotifications.handoffForegroundAndFinish` transfers primary ownership to the next active candidate:
-    - Serialized under `promotionMutex.withLock`, handoff assigns the next candidate a new incremented generation in `pendingReservation` and invokes its promoter with a 3000ms bound.
-    - If promotion succeeds within 3000ms and generation matches, elevation is confirmed.
-    - If promotion times out or fails, `pendingReservation` is cleared (invalidating that generation) and the loop advances to the next candidate. Any late elevation completion by a timed-out worker is rejected by `confirmPrimaryElevation`.
-  - **Non-Cancellable Coroutine Cleanup & Handoff:** In `HonDownloadWorker`, suspending calls in `finally` are wrapped in `withContext(NonCancellable)` with a 5000ms bound. When a worker coroutine is cancelled, cancellation cannot abort cleanup or skip the handoff wait. The worker closes its promotion channel, cancels and joins its promotion coroutine, cancels its promotion scope, removes its active HTTP calls, and executes `handoffForegroundAndFinish` under its attempt token. If cleanup exceeds 5000ms, fallback unregisters the active job and triggers reconciliation.
+  - **Acknowledged Promotion with Lifecycle Coordination & Reservation Validation:** Secondary concurrent workers do not invoke `setForeground` unconditionally; instead, they register a suspendable promotion callback. When promotion occurs:
+    - Serialized under `promotionMutex.withLock`, handoff assigns the next candidate an incremented generation in `pendingReservation` and invokes its promoter with a 3000ms bound.
+    - Before calling `setForeground`, the promoted worker verifies `isReservationValid(jobId, attemptToken, gen)`. If invalidated, elevation is aborted without invoking `setForeground`.
+    - If the handoff caller times out (3000ms), the promoter catches `CancellationException`, cancels the elevation job, and awaits its termination inside `withContext(NonCancellable)` before returning. This guarantees that `promoteNextWorker` does not transfer ownership to another candidate while a timed-out worker is still executing `setForeground()`, preventing split-brain foreground elevations in WorkManager.
+    - If promotion succeeds and generation matches, elevation is confirmed (`confirmPrimaryElevation`). If promotion times out or fails, `pendingReservation` is cleared and the handoff loop safely advances to the next candidate.
+  - **Strictly Bounded Non-Cancellable Cleanup & Non-Blocking Fallback:** In `HonDownloadWorker`, suspending calls in `finally` are wrapped in `withContext(NonCancellable)` with a 5000ms bound. When a worker coroutine is cancelled, cancellation cannot abort cleanup or skip the handoff wait. The worker cancels its promotion scope, removes its active HTTP calls, and executes `handoffForegroundAndFinish` under its attempt token. If cleanup exceeds 5000ms, the fallback safely cancels the scope, removes active calls, unregisters the active job, and dispatches asynchronous background reconciliation via `DownloadNotifications.scheduleReconciliation(context)`. Blocking `runBlocking` promotion calls are strictly excluded from the fallback, guaranteeing the entire cleanup path completes within the 5-second boundary.
   - **Attempt-Aware Batch Cancellation Reconciliation:** Every active registration is keyed by its unique worker attempt token (`id.toString()`). In `stopAllJobsDurableAndAwait`, worker stops and active-job removals (`removeActiveJob(target.jobId, target.token)`) occur strictly under the target's scheduling lock matching `target.token`. Old stopped attempts never remove a newer attempt with the same job ID. After the loop, `reconcileSurvivingJobs` promotes a surviving worker if primary was vacated and queries SQLite to keep surviving jobs accurately displayed. Notification 4001 cancels if and only if zero active and pending jobs remain.
   - **Retry & Backoff Transitions:** When all active workers halt due to rate-limiting (HTTP 429) and remaining jobs enter `retryWaiting`:
     - The notification transitions from an ongoing foreground state (`setOngoing(true)` with indeterminate spinner) to a dismissable status notification (`setOngoing(false)` without spinner): *"Hon · Downloads waiting to retry — Waiting for source cooldown (N chapters remaining)"*.
@@ -139,5 +140,20 @@
     - If blur is allowed: sets translucent background + border stroke, enables `FLAG_BLUR_BEHIND`, and sets `blurBehindRadius = 25`.
     - If blur is disallowed: immediately updates card background to 100% opaque solid theme color, explicitly clears `FLAG_BLUR_BEHIND`, and sets `blurBehindRadius = 0`.
   - **Parity Status:** Native reader bars utilize translucent drawable styling rather than Flutter-like backdrop material; reader glass parity is explicitly documented as partial pending deeper native shader/backdrop rendering.
+
+## ADR-016: APK ABI Split & Universal Version Code Hierarchy
+- **Decision:** Standardize release version code offsets across APK packaging formats and document Android Package Manager upgrade/downgrade constraints.
+- **Version Code Architecture:**
+  - Base version code is defined in `pubspec.yaml` (`0.0.3+6` -> base `versionCode = 6`).
+  - When building split-per-ABI APKs (`flutter build apk --release --split-per-abi`), Android Gradle Plugin applies standard ABI offset multipliers (`splits.abi.isEnable = true`):
+    - `armeabi-v7a`: `1000 + 6 = 1006`
+    - `arm64-v8a`: `2000 + 6 = 2006`
+    - `x86_64`: `3000 + 6 = 3006`
+  - When building the complete universal APK (`flutter build apk --release`), the APK contains all native libraries across all architectures and retains the base `versionCode = 6`.
+- **Package Downgrade & Upgrade Rules:**
+  - Android OS Package Manager forbids installing an APK with a lower version code over an existing package with a higher version code (`INSTALL_FAILED_VERSION_DOWNGRADE`).
+  - Upgrading from universal (`Hon-v0.0.3-complete.apk`, vc 6) to ARM64 split (`Hon-v0.0.3-arm64-v8a.apk`, vc 2006) succeeds without error.
+  - Switching from ARM64 split (`Hon-v0.0.3-arm64-v8a.apk`, vc 2006) back to universal (`Hon-v0.0.3-complete.apk`, vc 6) is treated by the OS as a version downgrade and requires uninstalling the existing application first.
+  - Release artifacts explicitly document this distinction; primary recommendation for 64-bit devices is the optimized `arm64-v8a` split APK (~31MB vs ~76MB universal).
 
 
