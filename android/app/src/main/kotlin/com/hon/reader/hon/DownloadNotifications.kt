@@ -23,6 +23,9 @@ internal object DownloadNotifications {
     // Tracks currently executing jobs and their sub-phases
     private val activeJobs = ConcurrentHashMap<String, String>()
 
+    // Promotion listeners registered by secondary concurrent workers
+    private val workerPromoters = ConcurrentHashMap<String, () -> Unit>()
+
     // Atomic reference to the designated primary foreground worker
     private val primaryWorkerJobId = AtomicReference<String?>(null)
 
@@ -34,35 +37,109 @@ internal object DownloadNotifications {
         val totalPending: Int get() = queued + running + retryWaiting
     }
 
-    fun onJobStarted(context: Context, jobId: String, title: String, phase: String = "Downloading") {
+    /**
+     * Atomically claims foreground ownership for [jobId] if no primary worker currently
+     * holds foreground execution, or registers [promoter] if another worker is already primary.
+     *
+     * @return true if this worker is designated as the primary foreground worker and must
+     * call [HonDownloadWorker.setForeground].
+     * @return false if this worker is designated as secondary; its [promoter] will be invoked
+     * if foreground ownership transfers to it upon completion, retry or cancellation of previous workers.
+     */
+    @Synchronized
+    fun claimOrRegisterForeground(
+        jobId: String,
+        title: String,
+        phase: String = "Downloading",
+        promoter: () -> Unit
+    ): Boolean {
         activeJobs[jobId] = "$title · $phase"
-        primaryWorkerJobId.compareAndSet(null, jobId)
-        updateQueueNotification(context)
-    }
-
-    fun onJobPhase(context: Context, jobId: String, title: String, phase: String) {
-        activeJobs[jobId] = "$title · $phase"
-        updateQueueNotification(context)
-    }
-
-    fun removeActiveJob(jobId: String) {
-        activeJobs.remove(jobId)
-        if (primaryWorkerJobId.get() == jobId) {
-            primaryWorkerJobId.set(activeJobs.keys.firstOrNull())
+        val currentPrimary = primaryWorkerJobId.get()
+        return if (currentPrimary == null || currentPrimary == jobId) {
+            primaryWorkerJobId.set(jobId)
+            true
+        } else {
+            workerPromoters[jobId] = promoter
+            false
         }
     }
 
-    fun onJobFinished(context: Context, jobId: String) {
-        activeJobs.remove(jobId)
-        if (primaryWorkerJobId.get() == jobId) {
-            primaryWorkerJobId.set(activeJobs.keys.firstOrNull())
+    /**
+     * Called if elevation to foreground service fails (e.g., due to background execution
+     * restrictions on Android 12+). Falls back to standard notification updates.
+     */
+    @Synchronized
+    fun onForegroundElevationFailed(context: Context, jobId: String) {
+        updateQueueNotification(context)
+    }
+
+    @Synchronized
+    fun onJobStarted(context: Context, jobId: String, title: String, phase: String = "Downloading") {
+        activeJobs[jobId] = "$title · $phase"
+        if (primaryWorkerJobId.get() == null) {
+            primaryWorkerJobId.set(jobId)
         }
         updateQueueNotification(context)
     }
 
     @Synchronized
+    fun onJobPhase(context: Context, jobId: String, title: String, phase: String) {
+        activeJobs[jobId] = "$title · $phase"
+        updateQueueNotification(context)
+    }
+
+    @Synchronized
+    fun removeActiveJob(jobId: String) {
+        activeJobs.remove(jobId)
+        workerPromoters.remove(jobId)
+        if (primaryWorkerJobId.get() == jobId) {
+            promoteNextWorker()
+        }
+    }
+
+    @Synchronized
+    fun onJobFinished(context: Context, jobId: String) {
+        activeJobs.remove(jobId)
+        workerPromoters.remove(jobId)
+        if (primaryWorkerJobId.get() == jobId) {
+            promoteNextWorker()
+        }
+        updateQueueNotification(context)
+    }
+
+    private fun promoteNextWorker() {
+        val nextJobId = activeJobs.keys.firstOrNull()
+        primaryWorkerJobId.set(nextJobId)
+        if (nextJobId != null) {
+            val promoter = workerPromoters.remove(nextJobId)
+            try {
+                promoter?.invoke()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to invoke promotion callback for job $nextJobId: ${e.message}")
+            }
+        }
+    }
+
+    @Synchronized
+    fun reconcileAfterBatchStop(context: Context, stoppedJobIds: Collection<String>) {
+        for (jobId in stoppedJobIds) {
+            activeJobs.remove(jobId)
+            workerPromoters.remove(jobId)
+        }
+        val currentPrimary = primaryWorkerJobId.get()
+        if (currentPrimary != null && stoppedJobIds.contains(currentPrimary)) {
+            promoteNextWorker()
+        }
+        updateQueueNotification(context)
+    }
+
+    fun getPrimaryWorkerJobId(): String? = primaryWorkerJobId.get()
+    fun getActiveJobCount(): Int = activeJobs.size
+
+    @Synchronized
     fun cancelAll(context: Context) {
         activeJobs.clear()
+        workerPromoters.clear()
         primaryWorkerJobId.set(null)
         try {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -84,6 +161,7 @@ internal object DownloadNotifications {
         if (dbFile.exists()) {
             try {
                 SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                    db.rawQuery("PRAGMA busy_timeout = 3000", null).use { it.moveToFirst() }
                     db.rawQuery(
                         "SELECT status, COUNT(*) FROM download_jobs_table WHERE status IN ('queued', 'running', 'retryWaiting') GROUP BY status",
                         null
@@ -126,9 +204,11 @@ internal object DownloadNotifications {
         }
     }
 
+    @Synchronized
     fun foreground(context: Context, job: String, title: String, phase: String = "Downloading"): ForegroundInfo {
         activeJobs[job] = "$title · $phase"
-        primaryWorkerJobId.compareAndSet(null, job)
+        primaryWorkerJobId.set(job)
+        workerPromoters.remove(job)
         val status = queryQueueStatus(context)
         val notification = buildNotification(context, status)
         return if (Build.VERSION.SDK_INT >= 29) {

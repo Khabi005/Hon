@@ -19,6 +19,10 @@ import okhttp3.EventListener
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileOutputStream
@@ -108,6 +112,10 @@ class HonDownloadWorker(
         var replacingTarget = false
 
         activeCalls[jobId] = trackedCalls
+        val promoteChannel = Channel<Unit>(Channel.CONFLATED)
+        val promotionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        var promotionJob: kotlinx.coroutines.Job? = null
+
         return try {
             val retryPrefs = context.getSharedPreferences("hon_download_retry_after", Context.MODE_PRIVATE)
             val retryAt = retryPrefs.getLong(sourceId, 0)
@@ -119,16 +127,41 @@ class HonDownloadWorker(
             }
             retryPrefs.edit().remove(sourceId).apply()
             val chTitle = inputData.getString("chapterTitle") ?: "Downloading chapter"
-            try {
-                setForeground(DownloadNotifications.foreground(context, jobId, chTitle, "Downloading passage"))
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                android.util.Log.w(
-                    "HonDownloadWorker",
-                    "Could not elevate worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
-                    "Continuing execution under standard WorkManager background constraints; posting informational notification only."
-                )
-                DownloadNotifications.onJobStarted(context, jobId, chTitle, "Downloading passage")
+            val currentPhase = java.util.concurrent.atomic.AtomicReference("Downloading passage")
+
+            promotionJob = promotionScope.launch {
+                for (unit in promoteChannel) {
+                    if (isStopped) break
+                    try {
+                        setForeground(DownloadNotifications.foreground(context, jobId, chTitle, currentPhase.get()))
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        android.util.Log.w(
+                            "HonDownloadWorker",
+                            "Could not elevate promoted worker $jobId to foreground service: ${error.message}"
+                        )
+                        DownloadNotifications.onForegroundElevationFailed(context, jobId)
+                    }
+                }
+            }
+
+            val isPrimary = DownloadNotifications.claimOrRegisterForeground(jobId, chTitle, currentPhase.get()) {
+                promoteChannel.trySend(Unit)
+            }
+            if (isPrimary) {
+                try {
+                    setForeground(DownloadNotifications.foreground(context, jobId, chTitle, currentPhase.get()))
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    android.util.Log.w(
+                        "HonDownloadWorker",
+                        "Could not elevate primary worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
+                        "Continuing execution under standard WorkManager background constraints; posting informational notification only."
+                    )
+                    DownloadNotifications.onForegroundElevationFailed(context, jobId)
+                }
+            } else {
+                DownloadNotifications.updateQueueNotification(context)
             }
             updateJobStatusInDb(jobId, "running", 0.1)
             HonDownloadManagerBridge.notifyStateChanged(bookId, jobId, "running", 0.1)
@@ -163,7 +196,8 @@ class HonDownloadWorker(
                 throw IllegalStateException("The source engine could not load. Please update Hon. ${error.message}", error)
             }
             val imagesDir = File(context.filesDir.parentFile, "app_flutter/images")
-            DownloadNotifications.onJobPhase(context, jobId, chTitle, "Extracting illustrations")
+            currentPhase.set("Extracting illustrations")
+            DownloadNotifications.onJobPhase(context, jobId, chTitle, currentPhase.get())
             val passageContent = OfflineChapterImages.embed(passage, url, client, imagesDir) { isStopped }
 
             if (passageContent.isBlank()) {
@@ -246,6 +280,8 @@ class HonDownloadWorker(
                 Result.failure()
             }
         } finally {
+            promotionJob?.cancel()
+            promoteChannel.close()
             activeCalls.remove(jobId, trackedCalls)
             DownloadNotifications.onJobFinished(context, jobId)
         }

@@ -479,11 +479,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             title: const Text('Hon'),
-            subtitle: const Text('Version 0.0.2 • Local-first reading'),
+            subtitle: const Text('Version 0.0.3 • Local-first reading'),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'Hon',
-              applicationVersion: '0.0.2',
+              applicationVersion: '0.0.3',
               applicationIcon: Image.asset(
                 'assets/branding/hon_master_logo.jpg',
                 width: 48,

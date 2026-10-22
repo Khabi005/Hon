@@ -1,7 +1,7 @@
 name: hon
 description: "Hon — A quiet, elegant reading app for novels, EPUBs, and PDFs."
 publish_to: 'none'
-version: 0.0.2+5
+version: 0.0.3+6
 
 environment:
   sdk: ^3.11.0

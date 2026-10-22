@@ -178,12 +178,8 @@ class HonDownloadManagerBridge(
                 notifyStateChanged(null, null, status, 0.0)
             }
 
-            // 6. Dismiss/update queue notification
-            if (status == "paused" || status == "cancelled") {
-                DownloadNotifications.cancelAll(context)
-            } else {
-                DownloadNotifications.updateQueueNotification(context)
-            }
+            // 6. Dismiss/update queue notification by reconciling surviving jobs
+            DownloadNotifications.reconcileAfterBatchStop(context, stoppedJobIds)
 
             // 7. Surface partial batch failures if any target failed
             if (stopFailures.isNotEmpty()) {
