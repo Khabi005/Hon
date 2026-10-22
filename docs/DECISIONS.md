@@ -113,4 +113,28 @@
   - Per-book overrides are strictly stored in `book_reader_settings_table`.
   - "Reset to Defaults" clears the book override record from SQLite and reverts the active reader session to global defaults without writing book settings to global preferences.
 
+## ADR-014: Download Queue Notification Lifecycle & Aggregate Foreground Ownership
+- **Decision:** Coordinate download queue notifications through a centralized lifecycle state machine (`RUNNING`, `RETRY_WAITING`, `IDLE`) with atomic primary worker ownership, rather than uncoordinated per-worker notification churn.
+- **Lifecycle & Architecture:**
+  - **WorkManager Architecture:** WorkManager manages execution via `SystemForegroundService`. When concurrent download workers start, the first worker is atomically designated the **Primary Foreground Owner** (`primaryWorkerJobId`), establishing the single foreground notification under ID `4001`.
+  - **Concurrent State Aggregation:** Additional concurrent workers register their active chapter titles and sub-phases ("Downloading passage", "Fetching illustration 2/5") into a thread-safe `activeJobs` registry. The notification displays active task descriptions (or `N downloading simultaneously`) with a durable SQLite-backed queue subtext (`N in queue`).
+  - **Inter-Worker & Completion Lifecycle:** When a worker finishes a chapter:
+    - It unregisters from `activeJobs`.
+    - If it was the primary owner, ownership is transferred atomically to the next active worker in the registry.
+    - If all active workers have finished and the SQLite queue is empty, the notification is immediately cancelled.
+  - **Retry & Backoff Transitions:** When all active workers halt due to rate-limiting (HTTP 429) and remaining jobs enter `retryWaiting`:
+    - The notification transitions from an ongoing foreground state (`setOngoing(true)` with indeterminate spinner) to a dismissable status notification (`setOngoing(false)` without spinner): *"Hon · Downloads waiting to retry — Waiting for source cooldown (N chapters remaining)"*.
+  - **Explicit Cancellation & Pause:** When pause or cancel all is requested via notification action or UI, `DownloadNotifications.cancelAll(context)` cancels notification `4001` immediately.
+  - **Background Elevation Fallback Boundary:** If `setForeground` fails (e.g. Android 12+ `ForegroundServiceStartNotAllowedException` when triggered from deep background without exemption), it is caught and logged. The task continues executing under standard WorkManager background constraints rather than crashing; posting an informational notification in this state does *not* grant foreground service priority.
+
+## ADR-015: Native Reader Glass Capability, Runtime Observers & Solid Fallback
+- **Decision:** Restrict native glass mode to Android 12+ (API 31+) with hardware blur support; enforce 100% opaque solid themes on older Android releases or when performance/accessibility constraints are active; dynamically update open dialogs on runtime system events.
+- **Capability & Fallback Policy:**
+  - **Platform Requirement:** Native dialog `blurBehindRadius` requires Android 12+ (API 31 / S). On Android 8.0–11 (APIs 26–30), `isBlurAllowed()` strictly returns `false`, preventing transparent windows without blur.
+  - **System Constraints:** `isBlurAllowed()` returns `false` whenever Battery Saver mode is enabled (`PowerManager.isPowerSaveMode`), Accessibility Touch Exploration is active (`AccessibilityManager.isTouchExplorationEnabled`), or cross-window blur is disabled (`windowManager.isCrossWindowBlurEnabled`).
+  - **Active Dialog Material Tracking:** `ReadiumReaderActivity` tracks currently open dialogs (`activeDialog`) and their content card (`activeDialogCard`). When runtime observers (`ACTION_POWER_SAVE_MODE_CHANGED`, `crossWindowBlurEnabledListener`, `TouchExplorationStateChangeListener`) fire or appearance settings change:
+    - If blur is allowed: sets translucent background + border stroke, enables `FLAG_BLUR_BEHIND`, and sets `blurBehindRadius = 25`.
+    - If blur is disallowed: immediately updates card background to 100% opaque solid theme color, explicitly clears `FLAG_BLUR_BEHIND`, and sets `blurBehindRadius = 0`.
+  - **Parity Status:** Native reader bars utilize translucent drawable styling rather than Flutter-like backdrop material; reader glass parity is explicitly documented as partial pending deeper native shader/backdrop rendering.
+
 

@@ -235,24 +235,37 @@ class ReadiumReaderActivity : AppCompatActivity() {
         }
     }
 
+    private var activeDialog: Dialog? = null
+    private var activeDialogCard: View? = null
+
     private fun isBlurAllowed(): Boolean {
         if (!isGlass) return false
+        // Native window blurBehindRadius requires Android 12+ (API 31 / S).
+        // On older Android releases, the native cross-window blur capability is unavailable.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
         val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as? android.view.accessibility.AccessibilityManager
         if (am?.isTouchExplorationEnabled == true) return false
         val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         if (pm?.isPowerSaveMode == true) return false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                if (!windowManager.isCrossWindowBlurEnabled()) return false
-            } catch (_: Exception) {}
+        try {
+            if (!windowManager.isCrossWindowBlurEnabled()) return false
+        } catch (_: Exception) {
+            return false
         }
         return true
     }
 
     private fun applyDialogGlassEffect(dialog: Dialog, cardLayout: View? = null) {
+        activeDialog = dialog
+        activeDialogCard = cardLayout
+        refreshDialogStyling(dialog, cardLayout)
+    }
+
+    private fun refreshDialogStyling(dialog: Dialog, cardLayout: View?) {
+        val blurAllowed = isBlurAllowed()
         val isLight = androidx.core.graphics.ColorUtils.calculateLuminance(getThemeBackgroundColor()) > 0.5
         val strokeColor = if (isLight) Color.argb(25, 0, 0, 0) else Color.argb(35, 255, 255, 255)
-        if (isGlass && isBlurAllowed()) {
+        if (isGlass && blurAllowed) {
             if (cardLayout != null) {
                 cardLayout.background = makeCardDrawable(getBarBackgroundColor(), 22f, strokeColor, 1)
             }
@@ -261,11 +274,16 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 cardLayout.background = makeCardDrawable(getBarBackgroundColor(), 22f)
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isBlurAllowed()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
                 dialog.window?.let { w ->
-                    w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                    w.attributes = w.attributes.apply { blurBehindRadius = 25 }
+                    if (isGlass && blurAllowed) {
+                        w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                        w.attributes = w.attributes.apply { blurBehindRadius = 25 }
+                    } else {
+                        w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                        w.attributes = w.attributes.apply { blurBehindRadius = 0 }
+                    }
                 }
             } catch (_: Exception) {}
         }
@@ -508,8 +526,15 @@ class ReadiumReaderActivity : AppCompatActivity() {
         prevBtn.setTextColor(secondaryText)
         progressPill.background = null
         progressText.setTextColor(secondaryText)
-
         updateSystemBars()
+
+        val d = activeDialog
+        if (d != null && d.isShowing) {
+            refreshDialogStyling(d, activeDialogCard)
+        } else {
+            activeDialog = null
+            activeDialogCard = null
+        }
     }
 
     private fun resolveInitialLocator(
@@ -1150,8 +1175,9 @@ class ReadiumReaderActivity : AppCompatActivity() {
         return chapterIndices[locator?.href?.toString()?.substringBefore('#')] ?: 0
     }
 
-    private fun showBottomSheet(dialog: Dialog, content: View, height: Int? = null) {
-        applyDialogGlassEffect(dialog, content)
+    private fun showBottomSheet(dialog: Dialog, content: View, height: Int? = null, cardLayout: View? = null) {
+        val card = cardLayout ?: content
+        applyDialogGlassEffect(dialog, card)
         dialog.setContentView(content)
         dialog.show()
         dialog.window?.apply {
@@ -1766,7 +1792,12 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 }
             }.apply { addView(layout) }
             previousScroll = scroll
-            if (!dialog.isShowing) showBottomSheet(dialog, scroll) else dialog.setContentView(scroll)
+            if (!dialog.isShowing) {
+                showBottomSheet(dialog, scroll, cardLayout = layout)
+            } else {
+                applyDialogGlassEffect(dialog, layout)
+                dialog.setContentView(scroll)
+            }
             scroll.post { scroll.scrollTo(0, offset.coerceAtMost(scroll.getChildAt(0).height)) }
         }
         render()

@@ -123,6 +123,11 @@ class HonDownloadWorker(
                 setForeground(DownloadNotifications.foreground(context, jobId, chTitle, "Downloading passage"))
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
+                android.util.Log.w(
+                    "HonDownloadWorker",
+                    "Could not elevate worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
+                    "Continuing execution under standard WorkManager background constraints; posting informational notification only."
+                )
                 DownloadNotifications.onJobStarted(context, jobId, chTitle, "Downloading passage")
             }
             updateJobStatusInDb(jobId, "running", 0.1)
