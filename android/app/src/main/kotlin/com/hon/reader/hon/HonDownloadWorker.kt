@@ -19,6 +19,9 @@ import okhttp3.EventListener
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +31,11 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
+
+private data class PromotionRequest(
+    val generation: Long,
+    val ack: CompletableDeferred<Boolean>
+)
 
 class HonDownloadWorker(
     private val context: Context,
@@ -114,7 +122,7 @@ class HonDownloadWorker(
 
         val attemptToken = id.toString()
         activeCalls[jobId] = trackedCalls
-        val promoteChannel = Channel<CompletableDeferred<Boolean>>(Channel.CONFLATED)
+        val promoteChannel = Channel<PromotionRequest>(Channel.CONFLATED)
         val promotionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         var promotionJob: kotlinx.coroutines.Job? = null
 
@@ -132,17 +140,17 @@ class HonDownloadWorker(
             val currentPhase = java.util.concurrent.atomic.AtomicReference("Downloading passage")
 
             promotionJob = promotionScope.launch {
-                for (ack in promoteChannel) {
+                for (req in promoteChannel) {
                     if (isStopped) {
-                        ack.complete(false)
+                        req.ack.complete(false)
                         break
                     }
                     val success = try {
                         setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
-                        true
+                        DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, req.generation)
                     } catch (error: Exception) {
                         if (error is CancellationException) {
-                            ack.complete(false)
+                            req.ack.complete(false)
                             throw error
                         }
                         android.util.Log.w(
@@ -151,16 +159,16 @@ class HonDownloadWorker(
                         )
                         false
                     }
-                    ack.complete(success)
+                    req.ack.complete(success)
                 }
             }
 
-            val promoter: suspend () -> Boolean = {
+            val promoter: suspend (Long) -> Boolean = { gen ->
                 if (isStopped) {
                     false
                 } else {
                     val ack = CompletableDeferred<Boolean>()
-                    if (promoteChannel.trySend(ack).isSuccess) {
+                    if (promoteChannel.trySend(PromotionRequest(gen, ack)).isSuccess) {
                         try {
                             ack.await()
                         } catch (_: Exception) {
@@ -172,8 +180,8 @@ class HonDownloadWorker(
                 }
             }
 
-            val isPrimaryCandidate = DownloadNotifications.claimOrRegisterForeground(jobId, attemptToken, chTitle, currentPhase.get(), promoter)
-            if (isPrimaryCandidate) {
+            val claimResult = DownloadNotifications.claimOrRegisterForeground(jobId, attemptToken, chTitle, currentPhase.get(), promoter)
+            if (claimResult is DownloadNotifications.ClaimResult.PrimaryCandidate) {
                 val elevated = try {
                     setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
                     true
@@ -187,9 +195,13 @@ class HonDownloadWorker(
                     false
                 }
                 if (elevated) {
-                    DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken)
+                    val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, claimResult.generation)
+                    if (!confirmed) {
+                        android.util.Log.w("HonDownloadWorker", "Primary elevation confirmation failed for $jobId (gen ${claimResult.generation})")
+                        DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
+                    }
                 } else {
-                    DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken)
+                    DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
                 }
             } else {
                 DownloadNotifications.updateQueueNotification(context)
@@ -311,13 +323,27 @@ class HonDownloadWorker(
                 Result.failure()
             }
         } finally {
-            try {
-                promoteChannel.close()
-                promotionJob?.cancel()
-                promotionJob?.join()
-            } catch (_: Exception) {}
-            activeCalls.remove(jobId, trackedCalls)
-            DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
+            withContext(NonCancellable) {
+                withTimeoutOrNull(5000) {
+                    try {
+                        promoteChannel.close()
+                        promotionJob?.cancel()
+                        promotionJob?.join()
+                    } catch (e: Exception) {
+                        android.util.Log.w("HonDownloadWorker", "Error stopping promotion coroutine for $jobId: ${e.message}")
+                    } finally {
+                        promotionScope.cancel()
+                    }
+                    activeCalls.remove(jobId, trackedCalls)
+                    DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
+                } ?: run {
+                    android.util.Log.w("HonDownloadWorker", "Cleanup timed out for $jobId; forcing removal")
+                    promotionScope.cancel()
+                    activeCalls.remove(jobId, trackedCalls)
+                    DownloadNotifications.removeActiveJob(jobId, attemptToken)
+                    DownloadNotifications.reconcileSurvivingJobs(context)
+                }
+            }
         }
     }
 
