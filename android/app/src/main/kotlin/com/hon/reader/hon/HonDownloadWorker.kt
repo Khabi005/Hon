@@ -159,6 +159,7 @@ class HonDownloadWorker(
                         }
                     }
                     activeElevationJob = elevationJob
+                    DownloadNotifications.registerElevationJob(context, jobId, attemptToken, gen, elevationJob)
 
                     val completedNormally = try {
                         elevationJob.join()
@@ -177,16 +178,14 @@ class HonDownloadWorker(
                         // Promotion caller timed out or was cancelled: coordinate completion before transferring ownership
                         withContext(NonCancellable) {
                             elevationJob.cancel()
-                            val terminated = try {
+                            try {
                                 withTimeoutOrNull(1000) {
                                     elevationJob.join()
-                                } != null
-                            } catch (_: Exception) {
-                                false
-                            }
+                                }
+                            } catch (_: Exception) {}
                             if (elevationSuccess.get()) {
                                 DownloadNotifications.PromotionOutcome.Confirmed
-                            } else if (terminated && !elevationJob.isActive) {
+                            } else if (elevationJob.isCompleted) {
                                 DownloadNotifications.PromotionOutcome.FailedAndTerminated
                             } else {
                                 android.util.Log.w(
@@ -205,26 +204,36 @@ class HonDownloadWorker(
                 if (!DownloadNotifications.isReservationValid(jobId, attemptToken, claimResult.generation)) {
                     DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
                 } else {
-                    val elevated = try {
-                        setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
-                        true
-                    } catch (error: Exception) {
-                        if (error is CancellationException) throw error
-                        android.util.Log.w(
-                            "HonDownloadWorker",
-                            "Could not elevate primary worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
-                            "Continuing execution under standard WorkManager background constraints; posting informational notification only."
-                        )
-                        false
-                    }
-                    if (elevated) {
-                        val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, claimResult.generation)
-                        if (!confirmed) {
-                            android.util.Log.w("HonDownloadWorker", "Primary elevation confirmation failed for $jobId (gen ${claimResult.generation})")
+                    val initialElevationJob = promotionScope.launch {
+                        val elevated = try {
+                            setForeground(DownloadNotifications.foreground(context, jobId, attemptToken, chTitle, currentPhase.get()))
+                            true
+                        } catch (error: Exception) {
+                            if (error !is CancellationException) {
+                                android.util.Log.w(
+                                    "HonDownloadWorker",
+                                    "Could not elevate primary worker $jobId to foreground service (${error.javaClass.simpleName}: ${error.message}). " +
+                                    "Continuing execution under standard WorkManager background constraints; posting informational notification only."
+                                )
+                            }
+                            false
+                        }
+                        if (elevated) {
+                            val confirmed = DownloadNotifications.confirmPrimaryElevation(jobId, attemptToken, claimResult.generation)
+                            if (!confirmed) {
+                                android.util.Log.w("HonDownloadWorker", "Primary elevation confirmation failed for $jobId (gen ${claimResult.generation})")
+                                DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
+                            }
+                        } else {
                             DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
                         }
-                    } else {
-                        DownloadNotifications.onForegroundElevationFailed(context, jobId, attemptToken, claimResult.generation)
+                    }
+                    activeElevationJob = initialElevationJob
+                    DownloadNotifications.registerElevationJob(context, jobId, attemptToken, claimResult.generation, initialElevationJob)
+                    try {
+                        initialElevationJob.join()
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
                     }
                 }
             } else {
@@ -352,14 +361,12 @@ class HonDownloadWorker(
                     var elevationTerminated = true
                     try {
                         val job = activeElevationJob
-                        if (job != null && job.isActive) {
+                        if (job != null && !job.isCompleted) {
                             job.cancel()
-                            val joined = try {
-                                withTimeoutOrNull(1000) { job.join() } != null
-                            } catch (_: Exception) {
-                                false
-                            }
-                            if (!joined || job.isActive) {
+                            try {
+                                withTimeoutOrNull(1000) { job.join() }
+                            } catch (_: Exception) {}
+                            if (!job.isCompleted) {
                                 elevationTerminated = false
                                 android.util.Log.w(
                                     "HonDownloadWorker",
@@ -378,16 +385,14 @@ class HonDownloadWorker(
                         DownloadNotifications.handoffForegroundAndFinish(context, jobId, attemptToken)
                     } else {
                         // Unfinished elevation: do not transfer ownership immediately while elevation is still in flight!
-                        // Remove worker registration and defer safe promotion to background reconciliation.
+                        // Remove worker registration without clearing pendingReservation, transferring responsibility to reconciliation.
                         DownloadNotifications.removeActiveJob(jobId, attemptToken)
-                        DownloadNotifications.scheduleReconciliation(context)
                     }
                 } ?: run {
                     android.util.Log.w("HonDownloadWorker", "Cleanup target budget (5000ms) exceeded for $jobId; forcing non-blocking safe removal")
                     promotionScope.cancel()
                     activeCalls.remove(jobId, trackedCalls)
                     DownloadNotifications.removeActiveJob(jobId, attemptToken)
-                    DownloadNotifications.scheduleReconciliation(context)
                 }
             }
         }

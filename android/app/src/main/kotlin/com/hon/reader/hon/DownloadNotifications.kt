@@ -15,9 +15,10 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -45,7 +46,8 @@ internal object DownloadNotifications {
         val jobId: String,
         val attemptToken: String,
         val generation: Long,
-        val createdAt: Long = System.currentTimeMillis()
+        @Volatile var elevationJob: Job? = null,
+        @Volatile var isUnresolved: Boolean = false
     )
 
     sealed class ClaimResult {
@@ -83,6 +85,62 @@ internal object DownloadNotifications {
 
     // Background scope for non-blocking scheduled reconciliation
     private val reconciliationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Application context saved for async reconciliation callbacks
+    private var appContext: Context? = null
+
+    /**
+     * Registers the underlying elevation [Job] executing setForeground for [jobId] at [generation].
+     * Hooks up an invokeOnCompletion callback to ensure unconfirmed/unresolved elevations
+     * trigger reconciliation only when the job has genuinely finished executing.
+     */
+    fun registerElevationJob(
+        context: Context,
+        jobId: String,
+        attemptToken: String,
+        generation: Long,
+        job: Job
+    ) = synchronized(foregroundLock) {
+        if (appContext == null) appContext = context.applicationContext
+        val res = pendingReservation
+        if (res != null && res.generation == generation && res.jobId == jobId && res.attemptToken == attemptToken) {
+            res.elevationJob = job
+            Log.i(TAG, "Registered elevation job for $jobId (attempt $attemptToken, gen $generation)")
+            job.invokeOnCompletion { cause ->
+                onElevationJobCompleted(jobId, attemptToken, generation, cause)
+            }
+        }
+    }
+
+    private fun onElevationJobCompleted(
+        jobId: String,
+        attemptToken: String,
+        generation: Long,
+        cause: Throwable?
+    ) {
+        Log.i(TAG, "Elevation job completed for $jobId (gen $generation, cause: ${cause?.message})")
+        var shouldReconcile = false
+        synchronized(foregroundLock) {
+            val res = pendingReservation
+            if (res != null && res.generation == generation && res.jobId == jobId && res.attemptToken == attemptToken) {
+                if (confirmedPrimaryJobId == jobId) {
+                    pendingReservation = null
+                } else {
+                    Log.i(
+                        TAG,
+                        "Confirmed termination of unconfirmed elevation for $jobId (gen $generation, was unresolved: ${res.isUnresolved}); clearing reservation"
+                    )
+                    pendingReservation = null
+                    if (confirmedPrimaryJobId == null && activeJobs.isNotEmpty()) {
+                        shouldReconcile = true
+                    }
+                }
+            }
+        }
+        if (shouldReconcile) {
+            appContext?.let { scheduleReconciliation(it) }
+        }
+    }
 
     /**
      * Checks if the pending reservation for [jobId] with [attemptToken] at [generation]
@@ -164,15 +222,26 @@ internal object DownloadNotifications {
     ) {
         var needPromotion = false
         synchronized(foregroundLock) {
+            if (appContext == null) appContext = context.applicationContext
             val current = activeJobs[jobId]
             if (current != null && current.attemptToken == attemptToken) {
                 workerPromoters.remove(jobId)
-                if (pendingReservation?.generation == generation &&
-                    pendingReservation?.jobId == jobId &&
-                    pendingReservation?.attemptToken == attemptToken
+                val res = pendingReservation
+                if (res != null && res.generation == generation &&
+                    res.jobId == jobId &&
+                    res.attemptToken == attemptToken
                 ) {
-                    pendingReservation = null
-                    needPromotion = true
+                    val job = res.elevationJob
+                    if (job == null || job.isCompleted) {
+                        pendingReservation = null
+                        needPromotion = true
+                    } else {
+                        Log.w(
+                            TAG,
+                            "onForegroundElevationFailed retaining unresolved reservation for $jobId (gen $generation) because elevation job is still in flight"
+                        )
+                        res.isUnresolved = true
+                    }
                 }
                 if (confirmedPrimaryJobId == jobId) {
                     confirmedPrimaryJobId = null
@@ -206,8 +275,19 @@ internal object DownloadNotifications {
         if (attemptToken == null || current?.attemptToken == attemptToken) {
             activeJobs.remove(jobId)
             workerPromoters.remove(jobId)
-            if (pendingReservation?.jobId == jobId && (attemptToken == null || pendingReservation?.attemptToken == attemptToken)) {
-                pendingReservation = null
+            val res = pendingReservation
+            if (res != null && res.jobId == jobId && (attemptToken == null || res.attemptToken == attemptToken)) {
+                val job = res.elevationJob
+                if (job == null || job.isCompleted) {
+                    Log.i(TAG, "removeActiveJob clearing completed reservation for $jobId (gen ${res.generation})")
+                    pendingReservation = null
+                } else {
+                    Log.w(
+                        TAG,
+                        "removeActiveJob retaining unresolved reservation for $jobId (gen ${res.generation}) because elevation job is still in flight"
+                    )
+                    res.isUnresolved = true
+                }
             }
             if (confirmedPrimaryJobId == jobId) {
                 confirmedPrimaryJobId = null
@@ -223,14 +303,25 @@ internal object DownloadNotifications {
     suspend fun handoffForegroundAndFinish(context: Context, jobId: String, attemptToken: String) {
         var needPromotion = false
         synchronized(foregroundLock) {
+            if (appContext == null) appContext = context.applicationContext
             val current = activeJobs[jobId]
             if (current != null && current.attemptToken == attemptToken) {
                 activeJobs.remove(jobId)
             }
             workerPromoters.remove(jobId)
-            if (pendingReservation?.jobId == jobId && pendingReservation?.attemptToken == attemptToken) {
-                pendingReservation = null
-                needPromotion = true
+            val res = pendingReservation
+            if (res != null && res.jobId == jobId && res.attemptToken == attemptToken) {
+                val job = res.elevationJob
+                if (job == null || job.isCompleted) {
+                    pendingReservation = null
+                    needPromotion = true
+                } else {
+                    Log.w(
+                        TAG,
+                        "handoffForegroundAndFinish retaining unresolved reservation for $jobId (gen ${res.generation}) because elevation job is still in flight"
+                    )
+                    res.isUnresolved = true
+                }
             }
             if (confirmedPrimaryJobId == jobId) {
                 confirmedPrimaryJobId = null
@@ -297,23 +388,46 @@ internal object DownloadNotifications {
                     } else {
                         Log.w(TAG, "Promotion reported confirmed for $candJobId (gen $gen) but confirmedPrimaryJobId is $confirmedPrimaryJobId")
                         synchronized(foregroundLock) {
-                            if (pendingReservation?.generation == gen) {
-                                pendingReservation = null
+                            val res = pendingReservation
+                            if (res?.generation == gen) {
+                                val job = res.elevationJob
+                                if (job == null || job.isCompleted) {
+                                    pendingReservation = null
+                                } else {
+                                    res.isUnresolved = true
+                                }
                             }
                         }
                     }
                 }
                 is PromotionOutcome.FailedAndTerminated -> {
+                    var cleared = false
                     synchronized(foregroundLock) {
-                        if (pendingReservation?.generation == gen) {
-                            Log.w(TAG, "Promotion failed and terminated for $candJobId (gen $gen); clearing reservation")
-                            pendingReservation = null
+                        val res = pendingReservation
+                        if (res?.generation == gen) {
+                            val job = res.elevationJob
+                            if (job == null || job.isCompleted) {
+                                Log.i(TAG, "Promotion failed and terminated for $candJobId (gen $gen); clearing reservation")
+                                pendingReservation = null
+                                cleared = true
+                            } else {
+                                Log.w(TAG, "Promotion reported FailedAndTerminated for $candJobId (gen $gen) but elevationJob is not completed; retaining reservation")
+                                res.isUnresolved = true
+                            }
                         }
+                    }
+                    if (!cleared) {
+                        return@withLock false
                     }
                 }
                 is PromotionOutcome.Unresolved -> {
+                    synchronized(foregroundLock) {
+                        val res = pendingReservation
+                        if (res?.generation == gen) {
+                            res.isUnresolved = true
+                        }
+                    }
                     Log.w(TAG, "Promotion termination unconfirmed for $candJobId (gen $gen); retaining unresolved reservation and deferring to reconciliation")
-                    scheduleReconciliation(context, 1500L)
                     return@withLock false
                 }
             }
@@ -325,12 +439,21 @@ internal object DownloadNotifications {
     fun reconcileSurvivingJobs(context: Context) {
         var needPromotion = false
         synchronized(foregroundLock) {
+            if (appContext == null) appContext = context.applicationContext
             val res = pendingReservation
             if (res != null) {
-                val job = activeJobs[res.jobId]
-                if (job == null || job.attemptToken != res.attemptToken || System.currentTimeMillis() - res.createdAt > 10000) {
-                    Log.w(TAG, "Reconciliation clearing stale/dead pending reservation for ${res.jobId} (gen ${res.generation})")
+                val job = res.elevationJob
+                if (job != null && !job.isCompleted) {
+                    Log.i(TAG, "Reconciliation observing in-flight elevation job for ${res.jobId} (gen ${res.generation}); retaining reservation")
+                    return
+                } else if (job != null && job.isCompleted) {
+                    Log.i(TAG, "Reconciliation clearing confirmed terminated elevation for ${res.jobId} (gen ${res.generation})")
                     pendingReservation = null
+                } else if (job == null) {
+                    if (!activeJobs.containsKey(res.jobId)) {
+                        Log.w(TAG, "Reconciliation clearing pending reservation for ${res.jobId} (no elevation job registered and worker not in active jobs)")
+                        pendingReservation = null
+                    }
                 }
             }
             if (confirmedPrimaryJobId != null && !activeJobs.containsKey(confirmedPrimaryJobId)) {
@@ -354,6 +477,7 @@ internal object DownloadNotifications {
      * Prevents timeout fallbacks from blocking execution outside their bounded deadline.
      */
     fun scheduleReconciliation(context: Context, delayMs: Long = 0L) {
+        if (appContext == null) appContext = context.applicationContext
         reconciliationScope.launch {
             try {
                 if (delayMs > 0) {
@@ -363,14 +487,22 @@ internal object DownloadNotifications {
                 synchronized(foregroundLock) {
                     val res = pendingReservation
                     if (res != null) {
-                        val job = activeJobs[res.jobId]
-                        if (job == null || job.attemptToken != res.attemptToken || System.currentTimeMillis() - res.createdAt > 10000) {
-                            Log.w(TAG, "Schedule reconciliation clearing stale/dead pending reservation for ${res.jobId} (gen ${res.generation})")
+                        val job = res.elevationJob
+                        if (job != null && !job.isCompleted) {
+                            Log.i(TAG, "Scheduled reconciliation observing in-flight elevation job for ${res.jobId} (gen ${res.generation}); retaining reservation")
+                            return@launch
+                        } else if (job != null && job.isCompleted) {
+                            Log.i(TAG, "Scheduled reconciliation clearing confirmed terminated elevation for ${res.jobId} (gen ${res.generation})")
                             pendingReservation = null
+                        } else if (job == null) {
+                            if (!activeJobs.containsKey(res.jobId)) {
+                                Log.w(TAG, "Scheduled reconciliation clearing pending reservation for ${res.jobId} (no elevation job registered and worker not in active jobs)")
+                                pendingReservation = null
+                            }
                         }
                     }
                     if (confirmedPrimaryJobId != null && !activeJobs.containsKey(confirmedPrimaryJobId)) {
-                        Log.w(TAG, "Schedule reconciliation clearing primary worker $confirmedPrimaryJobId as it is no longer active")
+                        Log.w(TAG, "Scheduled reconciliation clearing primary worker $confirmedPrimaryJobId as it is no longer active")
                         confirmedPrimaryJobId = null
                     }
                     if (confirmedPrimaryJobId == null && pendingReservation == null && activeJobs.isNotEmpty()) {
@@ -392,9 +524,20 @@ internal object DownloadNotifications {
     fun getActiveJobCount(): Int = activeJobs.size
 
     fun cancelAll(context: Context) = synchronized(foregroundLock) {
+        if (appContext == null) appContext = context.applicationContext
         activeJobs.clear()
         workerPromoters.clear()
-        pendingReservation = null
+        val res = pendingReservation
+        if (res != null) {
+            val job = res.elevationJob
+            if (job != null && !job.isCompleted) {
+                Log.i(TAG, "cancelAll cancelling in-flight elevation job for ${res.jobId} (gen ${res.generation}); retaining reservation until completion")
+                res.isUnresolved = true
+                job.cancel()
+            } else {
+                pendingReservation = null
+            }
+        }
         confirmedPrimaryJobId = null
         try {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -442,17 +585,23 @@ internal object DownloadNotifications {
     @Synchronized
     fun updateQueueNotification(context: Context) {
         try {
+            if (appContext == null) appContext = context.applicationContext
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
             val status = queryQueueStatus(context)
 
             // State A: Queue is empty and no workers are active -> cancel notification
             if (status.totalPending <= 0 && activeJobs.isEmpty()) {
                 synchronized(foregroundLock) {
-                    confirmedPrimaryJobId = null
-                    pendingReservation = null
+                    val res = pendingReservation
+                    if (res != null && res.elevationJob != null && !res.elevationJob!!.isCompleted) {
+                        Log.i(TAG, "Queue empty but elevation job for ${res.jobId} is still in flight; retaining reservation and notification")
+                    } else {
+                        confirmedPrimaryJobId = null
+                        pendingReservation = null
+                        manager.cancel(NOTIFICATION_ID)
+                        return
+                    }
                 }
-                manager.cancel(NOTIFICATION_ID)
-                return
             }
 
             val notification = buildNotification(context, status)
