@@ -71,8 +71,11 @@ class ChapterUpdateService extends ChangeNotifier {
           ..limit(2000))
         .get();
 
+    // Typed explicitly: an inferred List<Map<String, String>> rejects the
+    // Map<String, dynamic> entries a later check inserts, which failed every
+    // in-app check that found new chapters once any history existed.
     history = rows
-        .map((r) => {
+        .map<Map<String, dynamic>>((r) => {
               'bookId': r.bookId,
               'chapterId': r.chapterId,
               'title': r.title,
