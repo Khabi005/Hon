@@ -1,0 +1,4 @@
+# Keep LF everywhere: bundled Lua sources are verified by hash, so CRLF
+# conversion on Windows checkouts breaks them.
+* text=auto eol=lf
+*.bat text eol=crlf
