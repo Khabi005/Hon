@@ -6,7 +6,9 @@ import 'package:hon/app/bootstrap/providers.dart';
 import 'package:hon/app/theme/reader_theme.dart';
 import 'package:hon/core/database/app_database.dart';
 import 'package:hon/core/database/database_service.dart';
+import 'package:hon/core/downloads/download_preferences.dart';
 import 'package:hon/core/models/book.dart';
+import 'package:hon/core/files/storage_service.dart';
 import 'package:hon/core/models/chapter.dart';
 import 'package:hon/features/reader/presentation/reader_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -135,6 +137,9 @@ void main() {
       addTearDown(() {
         if (folder.existsSync()) folder.deleteSync(recursive: true);
       });
+      StorageService.instance.setBaseDirForTesting(folder);
+      final chaptersDir = Directory('${folder.path}/chapters')
+        ..createSync(recursive: true);
       final now = DateTime.now();
       final book = Book(
         id: 'reader_prepend',
@@ -146,7 +151,7 @@ void main() {
       );
       final chapters = <Chapter>[];
       for (final (i, word) in ['Alpha', 'Beta'].indexed) {
-        final file = File('${folder.path}/$i.html')
+        final file = File('${chaptersDir.path}/$i.html')
           ..writeAsStringSync(
             '<p>${List.filled(120, '$word chapter text.').join(' ')}</p>',
           );
@@ -210,6 +215,93 @@ void main() {
       }
       expect(find.text('Chapter 1 of 2'), findsOneWidget);
       expect(find.text('Alpha Chapter', findRichText: true), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'reading on deletes the finished chapter when the setting is on',
+    (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        DownloadPreferences.deleteAfterReadingKey: true,
+      });
+      final db = DatabaseService.instance;
+      await db.init(AppDatabase.inMemory());
+      final folder = Directory.systemTemp.createTempSync('hon_reader_delete_');
+      addTearDown(() {
+        if (folder.existsSync()) folder.deleteSync(recursive: true);
+      });
+      StorageService.instance.setBaseDirForTesting(folder);
+      final chaptersDir = Directory('${folder.path}/chapters')
+        ..createSync(recursive: true);
+      final now = DateTime.now();
+      final book = Book(
+        id: 'reader_delete',
+        title: 'Delete Test',
+        format: BookFormat.webNovel,
+        totalChapters: 2,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final files = <File>[];
+      final chapters = <Chapter>[];
+      for (final (i, word) in ['Alpha', 'Beta'].indexed) {
+        final file = File('${chaptersDir.path}/$i.html')
+          ..writeAsStringSync(
+            '<p>${List.filled(150, '$word chapter text.').join(' ')}</p>',
+          );
+        files.add(file);
+        chapters.add(
+          Chapter(
+            id: 'd$i',
+            bookId: book.id,
+            sourceChapterId: 'd$i',
+            title: '$word Chapter',
+            chapterIndex: i.toDouble(),
+            localFilePath: file.path,
+            downloadState: ChapterDownloadState.downloaded,
+            updatedAt: now,
+          ),
+        );
+      }
+      await db.saveBook(book);
+      await db.saveChapters(book.id, chapters);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: ReaderScreen(book: book, restoreSavedProgress: false),
+          ),
+        ),
+      );
+      Future<void> settle() async {
+        for (var i = 0; i < 6; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+          await tester.pump(const Duration(milliseconds: 200));
+        }
+      }
+
+      await settle();
+      final element = tester.element(find.byType(ReaderScreen));
+      ProviderScope.containerOf(element)
+          .read(readerPreferencesProvider.notifier)
+          .setLayoutMode(ReaderLayoutMode.verticalScroll);
+      await settle();
+      expect(files[0].existsSync(), isTrue);
+      for (var i = 0; i < 30; i++) {
+        if (find.text('Chapter 2 of 2').evaluate().isNotEmpty) break;
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
+        await settle();
+      }
+      expect(find.text('Chapter 2 of 2'), findsOneWidget);
+      await settle();
+      expect(files[0].existsSync(), isFalse);
+      expect(files[1].existsSync(), isTrue);
+      expect(
+        db.getChapters(book.id).first.downloadState,
+        isNot(ChapterDownloadState.downloaded),
+      );
     },
   );
 }

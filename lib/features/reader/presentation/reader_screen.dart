@@ -28,6 +28,8 @@ import '../sheets/reader_search_dialog.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/chapter_content_sanitizer.dart';
 import '../../../core/utils/reading_time.dart';
+import '../../../core/downloads/download_preferences.dart';
+import '../../../core/models/chapter.dart';
 import '../../browse/presentation/source_catalog_screen.dart';
 import '../../../core/utils/log_ignored.dart';
 
@@ -1826,6 +1828,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       }
     }
     if (visible != null && visible != _currentChapterIndex) {
+      if (visible == _currentChapterIndex + 1) {
+        unawaited(_finishedChapter(_currentChapterIndex));
+      }
       setState(() {
         _pauseReadingSession();
         _currentChapterIndex = visible!;
@@ -1837,6 +1842,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         );
       });
     }
+  }
+
+  /// With "Delete chapters after reading" on, reading on into the next
+  /// chapter removes the finished one's offline file. Its text stays loaded,
+  /// so scrolling back this session still shows it.
+  Future<void> _finishedChapter(int index) async {
+    if (widget.book.format != BookFormat.webNovel) return;
+    if (index < 0 || index >= _chapters.length) return;
+    if (!await DownloadPreferences.deleteAfterReading()) return;
+    final id = _chapters[index].id;
+    final db = DatabaseService.instance;
+    final chapter = db
+        .getChapters(widget.book.id)
+        .where((c) => c.id == id)
+        .firstOrNull;
+    if (chapter == null ||
+        chapter.downloadState != ChapterDownloadState.downloaded) {
+      return;
+    }
+    await db.deleteDownloadedChapters(widget.book.id, [chapter]);
   }
 
   Widget _buildPagedView(
@@ -2005,6 +2030,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _changePagedChapter(int index, {bool atEnd = false}) {
     if (index < 0 || index >= _chapters.length) return;
+    if (index == _currentChapterIndex + 1) {
+      unawaited(_finishedChapter(_currentChapterIndex));
+    }
     _changingPagedChapter = true;
     _pendingPagedEnd = atEnd;
     if (_pageController.hasClients) _pageController.jumpToPage(1);
