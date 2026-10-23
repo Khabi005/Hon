@@ -11,6 +11,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import '../../../app/bootstrap/providers.dart';
 import 'reader_auto_scroll.dart';
+import 'reader_tts.dart';
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/sources/source_registry.dart';
@@ -44,6 +45,10 @@ class ReaderScreen extends ConsumerStatefulWidget {
   final String? initialChapterContent;
   final bool fromCatalogue;
 
+  /// Replaces the platform voice in tests.
+  @visibleForTesting
+  final SpeechEngine? speechEngine;
+
   const ReaderScreen({
     super.key,
     required this.book,
@@ -54,6 +59,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
     this.initialLocator,
     this.initialChapterContent,
     this.fromCatalogue = false,
+    this.speechEngine,
   });
 
   @override
@@ -66,6 +72,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   bool _showControls = true;
   late final ReaderAutoScroller _autoScroller;
+  late final ReaderTts _tts;
   bool _volumeKeyPaging = false;
   bool _isLoading = true;
   String? _errorMessage;
@@ -469,12 +476,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       child: richText,
     );
 
+    final spoken =
+        _tts.active &&
+        _tts.position?.chapter == chapter &&
+        _tts.position?.block == index;
+    // Always wrapped, so starting and stopping speech never changes the
+    // tree shape around the text and its selection notifier.
+    final marked = DecoratedBox(
+      decoration: BoxDecoration(
+        color: spoken
+            ? prefs.themeConfig.textColor.withValues(alpha: 0.08)
+            : const Color(0x00000000),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: selectableRichText,
+    );
     final contentWidget = block.heading
         ? Padding(
             padding: const EdgeInsets.only(top: 28, bottom: 18),
-            child: selectableRichText,
+            child: marked,
           )
-        : selectableRichText;
+        : marked;
 
     if (blockNotes.isEmpty) return contentWidget;
 
@@ -571,6 +593,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         if (mounted) setState(() {});
       },
     );
+    _tts = ReaderTts(
+      engine: widget.speechEngine ?? PlatformSpeechEngine(),
+      blocksOf: _speechBlocks,
+      chapterCount: () => _chapters.length,
+      onPosition: _showSpokenBlock,
+    )..addListener(_onTtsChanged);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     ReaderInputPreferences.volumeKeys().then((on) => _volumeKeyPaging = on);
     _loadBookContent();
@@ -639,6 +667,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _prepaginateTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _autoScroller.dispose();
+    _tts
+      ..removeListener(_onTtsChanged)
+      ..dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     for (final recognizer in _linkRecognizers.values) {
@@ -1522,6 +1553,151 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     DatabaseService.instance.saveProgress(progress);
   }
 
+  void _onTtsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<List<String>?> _speechBlocks(int chapter) async {
+    if (chapter < 0 || chapter >= _chapters.length) return null;
+    if (_chapters[chapter].htmlContent.isEmpty) {
+      await _ensureChapterContent(chapter);
+    }
+    if (!mounted || _chapters[chapter].htmlContent.isEmpty) return null;
+    return [
+      for (final block in _document(chapter).blocks)
+        block.image != null || block.divider ? '' : block.text,
+    ];
+  }
+
+  /// Keeps the paragraph being read on screen, turning to its chapter or
+  /// page when needed.
+  void _showSpokenBlock(SpeechPosition position) {
+    if (!mounted) return;
+    _noteReadingActivity();
+    final scrollMode =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.verticalScroll;
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 300);
+    if (scrollMode) {
+      bool reveal() {
+        final box = _blockKeys['${position.chapter}:${position.block}']
+            ?.currentContext
+            ?.findRenderObject();
+        if (box is! RenderBox || !box.attached || !box.hasSize) return false;
+        final top = box.localToGlobal(Offset.zero).dy;
+        final screen = MediaQuery.sizeOf(context).height;
+        final visibleTop = MediaQuery.paddingOf(context).top + 68;
+        if (top < visibleTop || top + 40 > screen - 140) {
+          Scrollable.ensureVisible(
+            box.paintBounds.isEmpty ? context : _blockKeys['${position.chapter}:${position.block}']!.currentContext!,
+            alignment: 0.2,
+            duration: duration,
+            curve: Curves.easeOut,
+          );
+        }
+        return true;
+      }
+
+      if (!reveal()) {
+        if (position.chapter != _currentChapterIndex) {
+          _jumpToChapter(position.chapter);
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) reveal();
+        });
+      }
+      return;
+    }
+    if (position.chapter != _currentChapterIndex) {
+      _changePagedChapter(position.chapter);
+      return;
+    }
+    final page = _pagedPages.indexWhere(
+      (fragments) => fragments.any((f) => f.block == position.block),
+    );
+    if (page >= 0 && page != _currentPageIndex && _pageController.hasClients) {
+      _pageController.animateToPage(
+        page + 1,
+        duration: duration,
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _toggleListening() {
+    if (_tts.active) {
+      _tts.stop();
+      return;
+    }
+    _captureAnchor();
+    _autoScroller.stop();
+    _tts.play(_currentChapterIndex, _anchor.block);
+    setState(() => _showControls = false);
+  }
+
+  Widget _buildSpeechControls(ReaderThemeConfig themeConfig) {
+    Widget button(String tooltip, IconData icon, VoidCallback onTap) =>
+        IconButton(
+          tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, size: 20, color: themeConfig.textColor),
+          onPressed: onTap,
+        );
+    final rate = _tts.rate;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: themeConfig.uiControlsBackground.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 14,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            button(
+              'Previous paragraph',
+              CupertinoIcons.backward_fill,
+              () => _tts.skip(-1),
+            ),
+            button(
+              _tts.playing ? 'Pause' : 'Play',
+              _tts.playing
+                  ? CupertinoIcons.pause_fill
+                  : CupertinoIcons.play_fill,
+              () => _tts.playing ? _tts.pause() : _tts.resume(),
+            ),
+            button(
+              'Next paragraph',
+              CupertinoIcons.forward_fill,
+              () => _tts.skip(1),
+            ),
+            TextButton(
+              onPressed: _tts.cycleRate,
+              child: Text(
+                '${rate == rate.roundToDouble() ? rate.toStringAsFixed(0) : rate}×',
+                semanticsLabel: 'Speed $rate times',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: themeConfig.textColor,
+                ),
+              ),
+            ),
+            button('Stop listening', CupertinoIcons.xmark, _tts.stop),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// With "Volume keys turn pages" on, volume down goes forward and volume
   /// up goes back, a page in paged mode or a screen in scroll mode.
   bool _onHardwareKey(KeyEvent event) {
@@ -1764,6 +1940,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                   ),
                 ),
 
+                if (_tts.active)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom:
+                        MediaQuery.paddingOf(context).bottom +
+                        (_showControls ? 66 : 16),
+                    child: Center(child: _buildSpeechControls(themeConfig)),
+                  ),
                 if (_autoScroller.running && _showControls)
                   Positioned(
                     left: 0,
@@ -2361,6 +2546,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           onOpenSearch: () {
             _showBookSearch();
           },
+          isListening: _tts.active,
+          onToggleListen: _toggleListening,
           isAutoScrolling: _autoScroller.running,
           onToggleAutoScroll:
               ref.read(readerPreferencesProvider).layoutMode ==

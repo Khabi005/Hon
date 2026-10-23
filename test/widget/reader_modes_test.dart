@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'package:hon/core/files/storage_service.dart';
 import 'package:hon/core/models/chapter.dart';
 import 'package:hon/features/reader/presentation/reader_auto_scroll.dart';
 import 'package:hon/features/reader/presentation/reader_screen.dart';
+import 'package:hon/features/reader/presentation/reader_tts.dart';
 import 'package:hon/features/reader/widgets/reader_chrome.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -412,4 +414,107 @@ void main() {
     await tester.pumpAndSettle();
     expect(scroll.offset, greaterThan(stopped + 300));
   });
+
+  testWidgets('Listen reads aloud and highlights the paragraph', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = DatabaseService.instance;
+    await db.init(AppDatabase.inMemory());
+    final folder = Directory.systemTemp.createTempSync('hon_reader_tts_');
+    addTearDown(() {
+      if (folder.existsSync()) folder.deleteSync(recursive: true);
+    });
+    final file = File('${folder.path}/one.html')
+      ..writeAsStringSync(
+        [for (var i = 1; i <= 6; i++) '<p>Paragraph number $i.</p>'].join(),
+      );
+    final now = DateTime.now();
+    final book = Book(
+      id: 'reader_tts',
+      title: 'Listen Test',
+      format: BookFormat.webNovel,
+      totalChapters: 1,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await db.saveBook(book);
+    await db.saveChapters(book.id, [
+      Chapter(
+        id: 't1',
+        bookId: book.id,
+        sourceChapterId: 't1',
+        title: 'Chapter One',
+        chapterIndex: 0,
+        localFilePath: file.path,
+        updatedAt: now,
+      ),
+    ]);
+    final engine = _HeldSpeech();
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: ReaderScreen(
+            book: book,
+            restoreSavedProgress: false,
+            speechEngine: engine,
+          ),
+        ),
+      ),
+    );
+    Future<void> settle() async {
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+    }
+
+    await settle();
+    await tester.tap(find.byTooltip('Reader menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Listen'));
+    await settle();
+    // The chapter heading is read first, then the text.
+    expect(engine.spoken, ['Chapter One']);
+    expect(find.byTooltip('Pause'), findsOneWidget);
+
+    final first = engine.spoken.length;
+    await tester.tap(find.byTooltip('Next paragraph'));
+    await settle();
+    expect(engine.spoken.length, first + 1);
+    expect(engine.spoken.last, 'Paragraph number 1.');
+
+    await tester.tap(find.byTooltip('Pause'));
+    await settle();
+    expect(find.byTooltip('Play'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Stop listening'));
+    await settle();
+    expect(find.byTooltip('Play'), findsNothing);
+    expect(find.byTooltip('Pause'), findsNothing);
+  });
+}
+
+/// Holds each utterance until stopped, like a voice still talking.
+class _HeldSpeech implements SpeechEngine {
+  final spoken = <String>[];
+  Completer<void>? _current;
+
+  @override
+  Future<void> speak(String text) {
+    spoken.add(text);
+    return (_current = Completer<void>()).future;
+  }
+
+  @override
+  Future<void> stop() async {
+    final current = _current;
+    _current = null;
+    if (current != null && !current.isCompleted) current.complete();
+  }
+
+  @override
+  Future<void> setRate(double rate) async {}
 }

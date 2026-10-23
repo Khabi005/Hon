@@ -15,6 +15,8 @@ class ReaderMenuPopup extends StatelessWidget {
   final VoidCallback? onReloadChapter;
   final VoidCallback? onToggleAutoScroll;
   final bool isAutoScrolling;
+  final VoidCallback? onToggleListen;
+  final bool isListening;
   final String searchLabel;
   final ReaderThemeConfig? theme;
   final VoidCallback onToggleOrientationLock;
@@ -33,6 +35,8 @@ class ReaderMenuPopup extends StatelessWidget {
     this.onReloadChapter,
     this.onToggleAutoScroll,
     this.isAutoScrolling = false,
+    this.onToggleListen,
+    this.isListening = false,
     this.searchLabel = 'Search Book',
     this.theme,
     required this.onToggleOrientationLock,
@@ -52,6 +56,8 @@ class ReaderMenuPopup extends StatelessWidget {
     VoidCallback? onReloadChapter,
     VoidCallback? onToggleAutoScroll,
     bool isAutoScrolling = false,
+    VoidCallback? onToggleListen,
+    bool isListening = false,
     String searchLabel = 'Search Book',
     ReaderThemeConfig? theme,
     required VoidCallback onToggleOrientationLock,
@@ -110,6 +116,13 @@ class ReaderMenuPopup extends StatelessWidget {
                         onShareSelected();
                       },
                 isAutoScrolling: isAutoScrolling,
+                isListening: isListening,
+                onToggleListen: onToggleListen == null
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        onToggleListen();
+                      },
                 onToggleAutoScroll: onToggleAutoScroll == null
                     ? null
                     : () {
@@ -213,6 +226,18 @@ class ReaderMenuPopup extends StatelessWidget {
             ),
             _buildDivider(isDark),
 
+            if (onToggleListen != null) ...[
+              _buildMenuItem(
+                title: isListening ? 'Stop Listening' : 'Listen',
+                icon: isListening
+                    ? CupertinoIcons.speaker_slash
+                    : CupertinoIcons.headphones,
+                textColor: textColor,
+                iconColor: iconColor,
+                onTap: onToggleListen!,
+              ),
+              _buildDivider(isDark),
+            ],
             if (onToggleAutoScroll != null) ...[
               _buildMenuItem(
                 title: isAutoScrolling ? 'Stop Auto-Scroll' : 'Auto-Scroll',

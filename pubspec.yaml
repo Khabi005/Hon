@@ -26,6 +26,7 @@ dependencies:
   lua_dardo_plus: ^0.3.1
   drift: ^2.34.4
   sqlite3: ^3.3.0
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:
