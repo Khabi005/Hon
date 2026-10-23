@@ -473,7 +473,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val isLightPage = (currentTheme == Theme.LIGHT || currentTheme == Theme.SEPIA)
 
         if (areControlsVisible) {
-            val barBgColor = getBarBackgroundColor()
+            val barBgColor = getThemeBackgroundColor()
             window.statusBarColor = barBgColor
             window.navigationBarColor = barBgColor
             insetsController.isAppearanceLightStatusBars = isLightPage
@@ -492,7 +492,6 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     private fun updateThemeStyling() {
         val pageBg = getThemeBackgroundColor()
-        val barBg = getBarBackgroundColor()
         val primaryText = getPrimaryTextColor()
         val secondaryText = getSecondaryTextColor()
         val pillBg = getPillBackgroundColor()
@@ -500,18 +499,15 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         rootLayout.setBackgroundColor(pageBg)
 
-        if (isGlass && isBlurAllowed()) {
-            val strokeColor = if (androidx.core.graphics.ColorUtils.calculateLuminance(pageBg) > 0.5) {
-                Color.argb(25, 0, 0, 0)
-            } else {
-                Color.argb(35, 255, 255, 255)
-            }
-            topBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
-            bottomBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
+        // Floating controls like the Flutter readers: the bars blend into the
+        // page and only the buttons and labels sit on small rounded pills.
+        val strokeColor = if (androidx.core.graphics.ColorUtils.calculateLuminance(pageBg) > 0.5) {
+            Color.argb(20, 0, 0, 0)
         } else {
-            topBar.setBackgroundColor(barBg)
-            bottomBar.setBackgroundColor(barBg)
+            Color.argb(36, 255, 255, 255)
         }
+        topBar.setBackgroundColor(pageBg)
+        bottomBar.setBackgroundColor(pageBg)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
                 window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
@@ -520,11 +516,16 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         titleView.setTextColor(primaryText)
         backBtn.setTextColor(primaryText)
-        backBtn.background = makeCardDrawable(pillBg, 18f)
+        backBtn.background = makeCardDrawable(pillBg, 20f, strokeColor, 1)
+        titleView.background = makeCardDrawable(pillBg, 16f, strokeColor, 1)
+        titleView.setTextColor(secondaryText)
+        prevBtn.background = makeCardDrawable(pillBg, 20f, strokeColor, 1)
+        aaBtn.background = makeCardDrawable(pillBg, 24f, strokeColor, 1)
 
         aaBtn.setTextColor(primaryText)
-        prevBtn.setTextColor(secondaryText)
+        prevBtn.setTextColor(primaryText)
         progressPill.background = null
+        progressText.background = makeCardDrawable(pillBg, 16f, strokeColor, 1)
         progressText.setTextColor(secondaryText)
         updateSystemBars()
 
@@ -817,7 +818,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 textSize = 13f
                 gravity = Gravity.CENTER_VERTICAL
                 contentDescription = "Table of contents"
-                layoutParams = LinearLayout.LayoutParams(dp(72), dp(44))
+                setPadding(dp(14), 0, dp(14), 0)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(40))
                 setOnClickListener { showTocDialog() }
             }
             addView(prevBtn)
@@ -828,14 +830,21 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            addView(titleView, LinearLayout.LayoutParams(0, dp(44), 1f))
+            titleView.setPadding(dp(14), dp(8), dp(14), dp(8))
+            // Centre a content-sized title pill in the space between buttons.
+            addView(FrameLayout(this@ReadiumReaderActivity).apply {
+                addView(titleView, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER))
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(8), 0, dp(8), 0) })
             backBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "✕"
                 textSize = 15f
                 gravity = Gravity.CENTER
                 contentDescription = "Close reader"
                 background = makeCardDrawable(getPillBackgroundColor(), 18f)
-                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { setMargins(dp(28), 0, 0, 0) }
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
                 setOnClickListener { finish() }
             }
             addView(backBtn)
@@ -896,6 +905,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
                     setOnClickListener { showTocDialog() }
                 }
                 addView(progressText)
@@ -903,10 +913,10 @@ class ReadiumReaderActivity : AppCompatActivity() {
             addView(progressPill, LinearLayout.LayoutParams(0, dp(44), 1f))
             aaBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "Aa"
-                textSize = 20f
+                textSize = 18f
                 gravity = Gravity.CENTER
                 contentDescription = "Reader menu"
-                layoutParams = LinearLayout.LayoutParams(dp(48), dp(44))
+                layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
                 setOnClickListener { showReaderMenu() }
             }
             addView(aaBtn)

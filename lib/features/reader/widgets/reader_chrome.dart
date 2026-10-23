@@ -1,11 +1,13 @@
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import '../../../app/theme/glass_surface.dart';
 import '../../../app/theme/reader_theme.dart';
+import '../../../shared/widgets/pressable_scale.dart';
 
-/// Common reader framing. EPUB's native equivalent follows the same placement,
-/// spacing and labels while its publication remains in Readium.
+/// Common reader framing: floating frosted buttons over the page instead of
+/// full-width bars, so the text stays visible behind the controls. EPUB's
+/// native equivalent follows the same placement, spacing and labels while its
+/// publication remains in Readium.
 class ReaderHeader extends StatelessWidget {
   final ReaderThemeConfig theme;
   final String location;
@@ -27,115 +29,82 @@ class ReaderHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rich = GlassStyle.richOf(context);
-    final bg = rich
-        ? theme.backgroundColor.withValues(alpha: .75)
-        : theme.backgroundColor;
-
-    final content = Container(
+    Widget? leading;
+    if (onBack != null) {
+      leading = _ReaderGlassButton(
+        theme: theme,
+        tooltip: backLabel ?? 'Catalogue',
+        onTap: onBack!,
+        icon: CupertinoIcons.chevron_left,
+        iconSize: 15,
+        label: backLabel ?? 'Catalogue',
+      );
+    } else if (onPrevious != null) {
+      leading = _ReaderGlassButton(
+        theme: theme,
+        tooltip: 'Previous chapter',
+        onTap: onPrevious!,
+        icon: CupertinoIcons.arrow_counterclockwise,
+        iconSize: 13,
+        label: location.isNotEmpty ? location : 'Prev',
+      );
+    }
+    return Padding(
       padding: EdgeInsets.fromLTRB(
-        16,
-        MediaQuery.paddingOf(context).top + 8,
-        16,
-        8,
+        12,
+        MediaQuery.paddingOf(context).top + 6,
+        12,
+        6,
       ),
-      color: bg,
       child: Row(
         children: [
           SizedBox(
-            width: 88,
+            width: 104,
             child: Align(
               alignment: Alignment.centerLeft,
-              child: onBack != null
-                  ? TextButton.icon(
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              child: leading ?? const SizedBox.shrink(),
+            ),
+          ),
+          Expanded(
+            child: status.isEmpty
+                ? const SizedBox.shrink()
+                : Center(
+                    child: _ReaderGlass(
+                      theme: theme,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
                       ),
-                      onPressed: onBack,
-                      icon: Icon(
-                        CupertinoIcons.chevron_left,
-                        size: 16,
-                        color: theme.secondaryTextColor,
-                      ),
-                      label: Text(
-                        backLabel ?? 'Catalogue',
+                      child: Text(
+                        status,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
                           color: theme.secondaryTextColor,
                         ),
                       ),
-                    )
-                  : onPrevious != null
-                      ? TextButton.icon(
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                          onPressed: onPrevious,
-                          icon: Icon(
-                            CupertinoIcons.arrow_counterclockwise,
-                            size: 13,
-                            color: theme.secondaryTextColor,
-                          ),
-                          label: Text(
-                            location.isNotEmpty ? location : 'Prev',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: theme.secondaryTextColor,
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              status,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 13, color: theme.secondaryTextColor),
-            ),
+                    ),
+                  ),
           ),
           SizedBox(
-            width: 64,
+            width: 104,
             child: Align(
               alignment: Alignment.centerRight,
-              child: IconButton(
+              child: _ReaderGlassButton(
+                theme: theme,
                 tooltip: 'Close reader',
-                onPressed: onClose,
-                icon: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: theme.textColor.withValues(alpha: .08),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    CupertinoIcons.xmark,
-                    size: 15,
-                    color: theme.textColor,
-                  ),
-                ),
+                onTap: onClose,
+                icon: CupertinoIcons.xmark,
+                iconSize: 15,
               ),
             ),
           ),
         ],
       ),
     );
-
-    if (rich) {
-      return ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: content,
-        ),
-      );
-    }
-    return content;
   }
 }
 
@@ -156,80 +125,215 @@ class ReaderFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rich = GlassStyle.richOf(context);
-    final bg = rich
-        ? theme.backgroundColor.withValues(alpha: .75)
-        : theme.backgroundColor;
-
-    final content = Container(
-      color: bg,
+    final label = Text(
+      progress,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w500,
+        color: theme.secondaryTextColor,
+      ),
+    );
+    return Padding(
       padding: EdgeInsets.fromLTRB(
-        20,
-        8,
-        20,
-        MediaQuery.paddingOf(context).bottom + 8,
+        12,
+        6,
+        12,
+        MediaQuery.paddingOf(context).bottom + 10,
       ),
       child: Row(
         children: [
           SizedBox(
-            width: 48,
-            child: onReload != null
-                ? IconButton(
-                    tooltip: 'Reload chapter',
-                    onPressed: onReload,
-                    icon: Icon(
-                      CupertinoIcons.arrow_clockwise,
-                      size: 20,
-                      color: theme.textColor,
-                    ),
-                  )
-                : null,
+            width: 56,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: onReload != null
+                  ? _ReaderGlassButton(
+                      theme: theme,
+                      tooltip: 'Reload chapter',
+                      onTap: onReload!,
+                      icon: CupertinoIcons.arrow_clockwise,
+                      iconSize: 18,
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ),
           Expanded(
-            child: Semantics(
-              button: onProgress != null,
-              label: 'Contents, $progress',
-              child: GestureDetector(
-                onTap: onProgress,
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    progress,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: theme.secondaryTextColor,
-                    ),
-                  ),
-                ),
+            child: Center(
+              child: Semantics(
+                button: onProgress != null,
+                label: 'Contents, $progress',
+                excludeSemantics: true,
+                child: onProgress != null
+                    ? PressableScale(
+                        onTap: onProgress,
+                        child: _ReaderGlass(
+                          theme: theme,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          child: label,
+                        ),
+                      )
+                    : _ReaderGlass(
+                        theme: theme,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        child: label,
+                      ),
               ),
             ),
           ),
-          IconButton(
-            tooltip: 'Reader menu',
-            onPressed: onMenu,
-            icon: Icon(
-              CupertinoIcons.textformat_size,
-              size: 23,
-              color: theme.textColor,
+          SizedBox(
+            width: 56,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: _ReaderGlassButton(
+                theme: theme,
+                tooltip: 'Reader menu',
+                onTap: onMenu,
+                icon: CupertinoIcons.textformat_size,
+                iconSize: 20,
+                size: 48,
+              ),
             ),
           ),
         ],
       ),
     );
+  }
+}
 
-    if (rich) {
-      return ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: content,
+/// Frosted capsule tinted with the page colour, like the floating controls in
+/// Apple Books. High contrast swaps the blur for a solid fill.
+class _ReaderGlass extends StatelessWidget {
+  const _ReaderGlass({
+    required this.theme,
+    required this.child,
+    this.padding = EdgeInsets.zero,
+    this.circle = false,
+  });
+
+  final ReaderThemeConfig theme;
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final bool circle;
+
+  @override
+  Widget build(BuildContext context) {
+    final solid = MediaQuery.highContrastOf(context);
+    final dark = theme.systemBrightness == Brightness.dark;
+    final shape = circle ? const CircleBorder() : const StadiumBorder();
+    final body = DecoratedBox(
+      decoration: ShapeDecoration(
+        shape: shape,
+        color: theme.backgroundColor.withValues(alpha: solid ? 1 : .72),
+      ),
+      child: Padding(padding: padding, child: child),
+    );
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        shape: shape.copyWith(
+          side: BorderSide(
+            color: theme.textColor.withValues(alpha: dark ? .14 : .08),
+            width: .6,
+          ),
         ),
-      );
-    }
-    return content;
+        shadows: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: dark ? .28 : .10),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipPath(
+        clipper: ShapeBorderClipper(shape: shape),
+        child: solid
+            ? body
+            : BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: body,
+              ),
+      ),
+    );
+  }
+}
+
+class _ReaderGlassButton extends StatelessWidget {
+  const _ReaderGlassButton({
+    required this.theme,
+    required this.tooltip,
+    required this.onTap,
+    required this.icon,
+    this.iconSize = 16,
+    this.label,
+    this.size = 40,
+  });
+
+  final ReaderThemeConfig theme;
+  final String tooltip;
+  final VoidCallback onTap;
+  final IconData icon;
+  final double iconSize;
+  final String? label;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconWidget = Icon(icon, size: iconSize, color: theme.textColor);
+    final Widget content = label == null
+        ? SizedBox.square(
+            dimension: size,
+            child: Center(child: iconWidget),
+          )
+        : SizedBox(
+            height: size,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 10, right: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  iconWidget,
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      label!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: theme.textColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        excludeSemantics: true,
+        child: PressableScale(
+          onTap: onTap,
+          pressedScale: .92,
+          child: _ReaderGlass(
+            theme: theme,
+            circle: label == null,
+            child: content,
+          ),
+        ),
+      ),
+    );
   }
 }
 
