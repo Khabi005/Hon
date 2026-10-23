@@ -17,6 +17,7 @@ import 'widgets/reading_week.dart';
 import 'widgets/source_discovery_card.dart';
 import 'reading_history_screen.dart';
 import '../../../shared/widgets/pressable_scale.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -69,78 +70,53 @@ class HomeScreen extends ConsumerWidget {
         child: CustomScrollView(
           key: const PageStorageKey('home-scroll'),
           slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 16, 8),
-              sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat(
-                              'EEEE, d MMMM',
-                            ).format(DateTime.now()).toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 10,
-                              letterSpacing: 1.2,
-                              fontWeight: FontWeight.w600,
-                              color: secondary,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Home',
-                            style: HonTypography.largeTitle(color: primary),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Reading goals',
-                      onPressed: goals,
-                      icon: SizedBox(
-                        width: 30,
-                        height: 30,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            CircularProgressIndicator(
-                              value: goal > 0
-                                  ? (minutes / goal).clamp(0, 1)
-                                  : 0,
-                              strokeWidth: 2.5,
-                              backgroundColor: surface,
-                              color: HonColors.accentBlue,
-                            ),
-                            Text(
-                              '$minutes',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: primary,
-                              ),
-                            ),
-                          ],
+            SliverHonLargeTitle(
+              title: 'Home',
+              eyebrow: DateFormat('EEEE, d MMMM').format(DateTime.now()),
+              actions: [
+                IconButton(
+                  tooltip: 'Reading goals',
+                  onPressed: goals,
+                  icon: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        CircularProgressIndicator(
+                          value: goal > 0 ? (minutes / goal).clamp(0, 1) : 0,
+                          strokeWidth: 2.5,
+                          backgroundColor: surface,
+                          color: HonColors.accentBlue,
                         ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Settings',
-                      icon: Icon(CupertinoIcons.gear_alt, color: primary),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
+                        Text(
+                          '$minutes',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: primary,
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                IconButton(
+                  tooltip: 'Settings',
+                  icon: Icon(CupertinoIcons.gear_alt, color: primary),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
+                ),
+              ],
             ),
             if (continuing.isNotEmpty) ...[
-              _heading('Continue Reading', primary, action: history, compact: true),
+              _heading(
+                'Continue Reading',
+                primary,
+                action: history,
+                compact: true,
+              ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
                 sliver: SliverToBoxAdapter(
@@ -326,34 +302,34 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _heading(String title, Color color, {VoidCallback? action, bool compact = false}) =>
-      SliverPadding(
-        padding: EdgeInsets.fromLTRB(24, compact ? 12 : 20, 20, compact ? 6 : 10),
-        sliver: SliverToBoxAdapter(
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: HonTypography.sectionHeader(color: color).copyWith(
-                    fontSize: compact ? 19 : 21,
-                  ),
-                ),
-              ),
-              if (action != null)
-                IconButton(
-                  tooltip: 'See all $title',
-                  onPressed: action,
-                  icon: Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 16,
-                    color: color,
-                  ),
-                ),
-            ],
+  Widget _heading(
+    String title,
+    Color color, {
+    VoidCallback? action,
+    bool compact = false,
+  }) => SliverPadding(
+    padding: EdgeInsets.fromLTRB(24, compact ? 12 : 20, 20, compact ? 6 : 10),
+    sliver: SliverToBoxAdapter(
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: HonTypography.sectionHeader(
+                color: color,
+              ).copyWith(fontSize: compact ? 19 : 21),
+            ),
           ),
-        ),
-      );
+          if (action != null)
+            IconButton(
+              tooltip: 'See all $title',
+              onPressed: action,
+              icon: Icon(CupertinoIcons.chevron_right, size: 16, color: color),
+            ),
+        ],
+      ),
+    ),
+  );
 
   Widget _shortcut(
     String title,
@@ -363,12 +339,13 @@ class HomeScreen extends ConsumerWidget {
     Color primary,
     Color secondary,
     VoidCallback onTap,
-  ) => Material(
-    color: surface,
-    borderRadius: BorderRadius.circular(16),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
+  ) => PressableScale(
+    onTap: onTap,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(16),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(

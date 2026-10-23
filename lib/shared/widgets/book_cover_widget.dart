@@ -84,14 +84,15 @@ class BookCoverWidget extends StatelessWidget {
           height: height != null && height!.isFinite ? height : null,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(borderRadius),
+            // Soft, wide shadow like Apple Books rather than a hard drop.
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.18),
-                blurRadius: 8,
-                offset: const Offset(1, 4),
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
               BoxShadow(
-                color: Colors.black.withOpacity(0.08),
+                color: Colors.black.withValues(alpha: 0.06),
                 blurRadius: 2,
                 offset: const Offset(0, 1),
               ),
@@ -102,7 +103,8 @@ class BookCoverWidget extends StatelessWidget {
             child: Stack(
               children: [
                 Positioned.fill(child: imageContent),
-                if (showSpineShadow)
+                // The spine sheen reads as noise on small thumbnails.
+                if (showSpineShadow && w >= 120)
                   Positioned(
                     left: 0,
                     top: 0,

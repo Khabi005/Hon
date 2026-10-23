@@ -2,9 +2,10 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/hon_colors.dart';
-import '../../../shared/widgets/hon_screen_header.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 import '../../../app/bootstrap/providers.dart';
 import '../../../shared/widgets/book_grid_layout.dart';
 import '../../../shared/widgets/hon_empty_state.dart';
@@ -276,65 +277,59 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           key: const PageStorageKey('library-scroll'),
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           slivers: [
-            SliverToBoxAdapter(
-              child: HonScreenHeader(
-                title: 'Library',
-                actions: [
-                  IconButton(
-                    tooltip: 'Library updates',
-                    icon: const Icon(Icons.update),
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const LibraryUpdatesScreen(),
-                      ),
+            SliverHonLargeTitle(
+              title: 'Library',
+              actions: [
+                IconButton(
+                  tooltip: 'Library updates',
+                  icon: const Icon(Icons.update),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const LibraryUpdatesScreen(),
                     ),
                   ),
-                  // Sort Button
-                  IconButton(
-                    tooltip: 'Sort library',
-                    icon: Icon(
-                      CupertinoIcons.sort_down,
-                      color: textPrimary,
-                      size: 21,
-                    ),
-                    onPressed: _showSortSheet,
+                ),
+                // Sort Button
+                IconButton(
+                  tooltip: 'Sort library',
+                  icon: Icon(
+                    CupertinoIcons.sort_down,
+                    color: textPrimary,
+                    size: 21,
                   ),
+                  onPressed: _showSortSheet,
+                ),
 
-                  // Grid / List toggle
-                  IconButton(
-                    tooltip: _isGridMode ? 'List view' : 'Grid view',
-                    icon: Icon(
-                      _isGridMode
-                          ? CupertinoIcons.list_bullet
-                          : CupertinoIcons.square_grid_2x2,
-                      color: textPrimary,
-                      size: 21,
-                    ),
-                    onPressed: () {
-                      setState(() => _isGridMode = !_isGridMode);
-                      _saveViewPreferences();
-                    },
+                // Grid / List toggle
+                IconButton(
+                  tooltip: _isGridMode ? 'List view' : 'Grid view',
+                  icon: Icon(
+                    _isGridMode
+                        ? CupertinoIcons.list_bullet
+                        : CupertinoIcons.square_grid_2x2,
+                    color: textPrimary,
+                    size: 21,
                   ),
+                  onPressed: () {
+                    setState(() => _isGridMode = !_isGridMode);
+                    _saveViewPreferences();
+                  },
+                ),
 
-                  // Import EPUB/PDF button (+)
-                  IconButton(
-                    tooltip: 'Import EPUB or PDF',
-                    icon: _isImporting
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CupertinoActivityIndicator(),
-                          )
-                        : Icon(
-                            CupertinoIcons.plus,
-                            color: textPrimary,
-                            size: 24,
-                          ),
-                    onPressed: _isImporting ? null : _handleImportBook,
-                  ),
-                ],
-              ),
+                // Import EPUB/PDF button (+)
+                IconButton(
+                  tooltip: 'Import EPUB or PDF',
+                  icon: _isImporting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CupertinoActivityIndicator(),
+                        )
+                      : Icon(CupertinoIcons.plus, color: textPrimary, size: 24),
+                  onPressed: _isImporting ? null : _handleImportBook,
+                ),
+              ],
             ),
 
             // Filter Chips Bar
@@ -464,9 +459,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       child: Semantics(
         selected: isSelected,
         button: true,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => setState(() => _filter = filter),
+        child: PressableScale(
+          onTap: () {
+            if (_filter != filter) HapticFeedback.selectionClick();
+            setState(() => _filter = filter);
+          },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             decoration: BoxDecoration(
@@ -522,7 +519,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           if (book.format == BookFormat.webNovel) ...[
             CupertinoActionSheetAction(
               child: Text(
-                (DatabaseService.instance.getProgress(book.id)?.chapterIndex ?? 0) > 0
+                (DatabaseService.instance.getProgress(book.id)?.chapterIndex ??
+                            0) >
+                        0
                     ? 'Continue Reading'
                     : 'Start Reading',
               ),
@@ -535,9 +534,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               child: const Text('View Series Catalogue'),
               onPressed: () {
                 Navigator.of(ctx).pop();
-                final sourceId = book.sourceId ??
-                    (book.id.contains(':') ? book.id.split(':').first : 'unknown');
-                final sourceNovelId = book.sourceNovelId ??
+                final sourceId =
+                    book.sourceId ??
+                    (book.id.contains(':')
+                        ? book.id.split(':').first
+                        : 'unknown');
+                final sourceNovelId =
+                    book.sourceNovelId ??
                     (book.id.contains(':')
                         ? book.id.substring(book.id.indexOf(':') + 1)
                         : book.id);
@@ -597,7 +600,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               ),
               onPressed: () async {
                 Navigator.of(ctx).pop();
-                final result = await EpubExportService.exportSeriesAsEpub(book: book);
+                final result = await EpubExportService.exportSeriesAsEpub(
+                  book: book,
+                );
                 if (!context.mounted) return;
                 if (result.success && result.exportedFilePath != null) {
                   showModalBottomSheet(
@@ -610,14 +615,23 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                           children: [
                             Text(
                               'EPUB Exported (${result.chapterCount} chapters)',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
                             ),
                             if (result.omittedImageCount > 0)
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 4,
+                                ),
                                 child: Text(
                                   'Note: ${result.omittedImageCount} remote or missing image${result.omittedImageCount > 1 ? "s" : ""} could not be bundled.',
-                                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.error),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context).colorScheme.error,
+                                  ),
                                   textAlign: TextAlign.center,
                                 ),
                               ),
@@ -625,32 +639,46 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                             ListTile(
                               leading: const Icon(CupertinoIcons.share),
                               title: const Text('Share EPUB'),
-                              subtitle: const Text('Send to another app or device'),
+                              subtitle: const Text(
+                                'Send to another app or device',
+                              ),
                               onTap: () async {
                                 Navigator.of(sheetCtx).pop();
-                                final shareRes = await EpubExportService.shareExportedEpub(result.exportedFilePath!);
-                                if (!shareRes.success && context.mounted && shareRes.errorMessage != null) {
-                                  messenger.showSnackBar(SnackBar(content: Text(shareRes.errorMessage!)));
+                                final shareRes =
+                                    await EpubExportService.shareExportedEpub(
+                                      result.exportedFilePath!,
+                                    );
+                                if (!shareRes.success &&
+                                    context.mounted &&
+                                    shareRes.errorMessage != null) {
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(shareRes.errorMessage!),
+                                    ),
+                                  );
                                 }
                               },
                             ),
                             ListTile(
                               leading: const Icon(CupertinoIcons.folder),
                               title: const Text('Save As...'),
-                              subtitle: const Text('Save to device storage or Downloads'),
+                              subtitle: const Text(
+                                'Save to device storage or Downloads',
+                              ),
                               onTap: () async {
                                 Navigator.of(sheetCtx).pop();
-                                final saveRes = await EpubExportService.saveExportedEpubAs(result.exportedFilePath!);
+                                final saveRes =
+                                    await EpubExportService.saveExportedEpubAs(
+                                      result.exportedFilePath!,
+                                    );
                                 if (context.mounted) {
                                   final message = saveRes.isSaved
                                       ? 'EPUB saved successfully'
                                       : saveRes.isFailed
-                                          ? 'Failed to save EPUB: ${saveRes.errorMessage ?? "Unknown error"}'
-                                          : 'Save cancelled';
+                                      ? 'Failed to save EPUB: ${saveRes.errorMessage ?? "Unknown error"}'
+                                      : 'Save cancelled';
                                   messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(message),
-                                    ),
+                                    SnackBar(content: Text(message)),
                                   );
                                 }
                               },
@@ -807,16 +835,19 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Future<void> _handleBookTap(BuildContext context, Book book) async {
     if (book.format == BookFormat.webNovel) {
       final prefs = await SharedPreferences.getInstance();
-      final mode = prefs.getString('hon_webnovel_library_tap_action') ?? 'catalogue';
+      final mode =
+          prefs.getString('hon_webnovel_library_tap_action') ?? 'catalogue';
       if (mode == 'reader') {
         if (context.mounted) {
           await ReaderNavigator.openBook(context, book);
         }
         return;
       }
-      final sourceId = book.sourceId ??
+      final sourceId =
+          book.sourceId ??
           (book.id.contains(':') ? book.id.split(':').first : 'unknown');
-      final sourceNovelId = book.sourceNovelId ??
+      final sourceNovelId =
+          book.sourceNovelId ??
           (book.id.contains(':')
               ? book.id.substring(book.id.indexOf(':') + 1)
               : book.id);

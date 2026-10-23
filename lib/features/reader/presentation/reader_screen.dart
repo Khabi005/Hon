@@ -1931,14 +1931,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   Widget _buildTopHeader(ReaderThemeConfig themeConfig) {
-    final remaining = _chapters.length - _currentChapterIndex - 1;
     final isWebNovel = widget.book.format == BookFormat.webNovel;
+    final chapterTitle = _chapters.isEmpty
+        ? ''
+        : _chapters[_currentChapterIndex].title.trim();
     return ReaderHeader(
       theme: themeConfig,
       location: '${_currentChapterIndex + 1}',
-      status: remaining > 0
-          ? '$remaining ${remaining == 1 ? 'chapter' : 'chapters'} left'
-          : 'Last chapter',
+      // Like Apple Books: name where you are; the footer carries progress.
+      status: chapterTitle.isNotEmpty ? chapterTitle : widget.book.title,
       onBack: isWebNovel ? _backToCatalogue : null,
       backLabel: 'Catalogue',
       onPrevious: !isWebNovel && _currentChapterIndex > 0

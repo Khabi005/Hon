@@ -949,7 +949,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
         if (prevBtn.text.toString() != "Contents") prevBtn.text = "Contents"
         prevBtn.isEnabled = true
         prevBtn.alpha = 1f
-        val remainingLabel = if (index + 1 < count) "${count - index - 1} chapters left" else "Last chapter"
+        // Like Apple Books: show the book's title; the footer carries progress.
+        val remainingLabel = publication?.metadata?.title?.takeIf { it.isNotBlank() } ?: ""
         if (titleView.text.toString() != remainingLabel) titleView.text = remainingLabel
         val now = android.os.SystemClock.elapsedRealtime()
         val href = loc.href.toString()
