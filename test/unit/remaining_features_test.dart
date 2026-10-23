@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/backup/backup_service.dart';
@@ -553,4 +554,43 @@ void main() {
     );
     expect(checked, isNotEmpty);
   });
+
+  test(
+    'download progress alone does not wake every database listener',
+    () async {
+      await db.saveBook(book('one'));
+      await db.saveChapters('one', [chapter('one:a', 'one', 0)]);
+      final now = DateTime.now();
+      await db.updateDownloadJob(
+        DownloadJob(
+          id: 'job',
+          bookId: 'one',
+          chapterId: 'one:a',
+          chapterTitle: 'Chapter 0',
+          sourceId: 'source',
+          status: DownloadStatus.running,
+          progress: 0.1,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      Future<void> write(DownloadJobsTableCompanion row) async {
+        await (sql.update(
+          sql.downloadJobsTable,
+        )..where((t) => t.id.equals('job'))).write(row);
+        await db.refreshDownloadJob('job');
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+
+      final changes = db.changeNotifier.value;
+      final ticks = db.downloadProgressNotifier.value;
+      await write(const DownloadJobsTableCompanion(progress: Value(0.5)));
+      expect(db.getDownloadJob('job')!.progress, 0.5);
+      expect(db.changeNotifier.value, changes);
+      expect(db.downloadProgressNotifier.value, ticks + 1);
+
+      await write(const DownloadJobsTableCompanion(status: Value('failed')));
+      expect(db.changeNotifier.value, greaterThan(changes));
+    },
+  );
 }

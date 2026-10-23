@@ -879,7 +879,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    DatabaseService.instance.changeNotifier.addListener(_onDbChanged);
+    DatabaseService.instance.addListener(_onDbChanged);
     final bookId = '${widget.sourceId}:${widget.novel.id}';
     final cachedBook = DatabaseService.instance.getBookById(bookId);
     final cachedChapters = DatabaseService.instance.getChapters(bookId);
@@ -939,7 +939,7 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
 
   @override
   void dispose() {
-    DatabaseService.instance.changeNotifier.removeListener(_onDbChanged);
+    DatabaseService.instance.removeListener(_onDbChanged);
     _scrollController.dispose();
     super.dispose();
   }

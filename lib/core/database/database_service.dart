@@ -69,8 +69,21 @@ class DatabaseService {
   final ValueNotifier<int> changeNotifier = ValueNotifier<int>(0);
   final ValueNotifier<int> libraryChangeNotifier = ValueNotifier<int>(0);
 
-  void addListener(VoidCallback listener) => changeNotifier.addListener(listener);
-  void removeListener(VoidCallback listener) => changeNotifier.removeListener(listener);
+  /// Ticks while a download's progress moves without its status or the
+  /// downloaded count changing. Kept off [changeNotifier] so screens that
+  /// don't show progress (Home, Library) don't rebuild every 150 ms.
+  final ValueNotifier<int> downloadProgressNotifier = ValueNotifier<int>(0);
+
+  /// Listens to every change, download progress included.
+  void addListener(VoidCallback listener) {
+    changeNotifier.addListener(listener);
+    downloadProgressNotifier.addListener(listener);
+  }
+
+  void removeListener(VoidCallback listener) {
+    changeNotifier.removeListener(listener);
+    downloadProgressNotifier.removeListener(listener);
+  }
 
   /// Resets in-memory instance and custom DB (useful for tests)
   @visibleForTesting
@@ -108,10 +121,21 @@ class DatabaseService {
 
   /// Native progress events can arrive many times a second per job. Coalesce
   /// them so Home, the tab bar and Downloads rebuild at most ~7 times a second.
-  void _notifyDownloadProgress() {
+  bool _downloadSettled = false;
+
+  /// Coalesces download notifications to one per 150 ms. [settled] marks a
+  /// change beyond progress (a status or the downloaded count), which goes
+  /// to every listener; progress alone only reaches progress listeners.
+  void _notifyDownloadProgress({bool settled = true}) {
+    _downloadSettled |= settled;
     if (_progressNotifyTimer?.isActive ?? false) return;
     _progressNotifyTimer = Timer(const Duration(milliseconds: 150), () {
-      _notify(library: false);
+      if (_downloadSettled) {
+        _notify(library: false);
+      } else if (_notificationBatch == 0) {
+        downloadProgressNotifier.value++;
+      }
+      _downloadSettled = false;
     });
   }
 
@@ -1071,6 +1095,8 @@ class DatabaseService {
     final row = await (database.select(database.downloadJobsTable)
       ..where((t) => t.id.equals(jobId))).getSingleOrNull();
     if (row == null) { _downloadJobs.remove(jobId); _notifyDownloadProgress(); return; }
+    final previousStatus = _downloadJobs[row.id]?.status;
+    final previousDownloaded = _downloadedCounts[row.bookId];
     _downloadJobs[row.id] = DownloadJob(
       id: row.id, bookId: row.bookId, chapterId: row.chapterId,
       chapterTitle: row.chapterTitle, sourceId: row.sourceId,
@@ -1108,7 +1134,11 @@ class DatabaseService {
     } else if (row.status == 'completed') {
       _downloadedCounts[row.bookId] = (_downloadedCounts[row.bookId] ?? 0) + 1;
     }
-    _notifyDownloadProgress();
+    _notifyDownloadProgress(
+      settled:
+          previousStatus != _downloadJobs[row.id]!.status ||
+          previousDownloaded != _downloadedCounts[row.bookId],
+    );
   }
 
   /// Refreshes all download jobs from Drift SQLite database into in-memory cache

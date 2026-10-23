@@ -65,8 +65,28 @@ final continueReadingProvider = Provider<List<Book>>((ref) {
   return DatabaseService.instance.getContinueReadingBooks();
 });
 
+class DownloadProgressNotifier extends StateNotifier<int> {
+  DownloadProgressNotifier() : super(0) {
+    DatabaseService.instance.downloadProgressNotifier.addListener(_onChange);
+  }
+
+  void _onChange() => state++;
+
+  @override
+  void dispose() {
+    DatabaseService.instance.downloadProgressNotifier.removeListener(_onChange);
+    super.dispose();
+  }
+}
+
+final downloadProgressProvider =
+    StateNotifierProvider<DownloadProgressNotifier, int>(
+      (ref) => DownloadProgressNotifier(),
+    );
+
 final allDownloadJobsProvider = Provider<List<DownloadJob>>((ref) {
   ref.watch(databaseChangeProvider);
+  ref.watch(downloadProgressProvider);
   return DatabaseService.instance.getAllDownloadJobs();
 });
 
