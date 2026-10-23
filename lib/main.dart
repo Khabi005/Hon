@@ -29,6 +29,7 @@ void main() async {
 
   LicenseRegistry.addLicense(() async* {
     for (final family in [
+      'inter',
       'newsreader',
       'literata',
       'lora',

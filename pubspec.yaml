@@ -43,6 +43,15 @@ flutter:
     - assets/sources/bundled/
     - assets/legal/
   fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/inter-Regular.ttf
+        - asset: assets/fonts/inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/inter-Bold.ttf
+          weight: 700
     - family: Newsreader
       fonts:
         - asset: assets/fonts/newsreader-Regular.ttf

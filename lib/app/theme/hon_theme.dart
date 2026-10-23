@@ -40,6 +40,8 @@ class HonTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      // Inter is the closest open match to SF Pro; serif stays for titles.
+      fontFamily: 'Inter',
       brightness: brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: dark
@@ -93,7 +95,6 @@ class HonTheme {
           minimumSize: const Size(48, 48),
           shape: const StadiumBorder(),
           textStyle: const TextStyle(
-            fontFamily: 'Roboto',
             fontWeight: FontWeight.w600,
             fontSize: 14,
           ),
@@ -110,7 +111,6 @@ class HonTheme {
         style: TextButton.styleFrom(
           minimumSize: const Size(44, 44),
           textStyle: const TextStyle(
-            fontFamily: 'Roboto',
             fontWeight: FontWeight.w600,
           ),
         ),

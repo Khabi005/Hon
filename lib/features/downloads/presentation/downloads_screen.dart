@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/bootstrap/providers.dart';
 import '../../../app/theme/hon_colors.dart';
-import '../../../shared/widgets/hon_screen_header.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/models/book.dart';
@@ -71,8 +71,9 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
     final imported = offline
         .where((book) => book.format != BookFormat.webNovel)
         .length;
-    final downloading =
-        jobs.where((job) => job.status == DownloadStatus.running).length;
+    final downloading = jobs
+        .where((job) => job.status == DownloadStatus.running)
+        .length;
     final queued = jobs
         .where(
           (job) =>
@@ -80,8 +81,9 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
               job.status == DownloadStatus.retryWaiting,
         )
         .length;
-    final paused =
-        jobs.where((job) => job.status == DownloadStatus.paused).length;
+    final paused = jobs
+        .where((job) => job.status == DownloadStatus.paused)
+        .length;
     String queueLabel;
     if (downloading > 0) {
       queueLabel =
@@ -103,74 +105,69 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
         child: CustomScrollView(
           key: const PageStorageKey('downloads-scroll'),
           slivers: [
-            SliverToBoxAdapter(
-              child: HonScreenHeader(
-                title: 'Downloads',
-                actions: [
-                  IconButton(
-                    tooltip: 'Library updates',
-                    icon: const Icon(Icons.update),
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const LibraryUpdatesScreen(),
-                      ),
+            SliverHonLargeTitle(
+              title: 'Downloads',
+              actions: [
+                IconButton(
+                  tooltip: 'Library updates',
+                  icon: const Icon(Icons.update),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const LibraryUpdatesScreen(),
                     ),
                   ),
-                  PopupMenuButton<String>(
-                    tooltip: 'Queue controls',
-                    onSelected: (value) async {
-                      try {
-                        if (value == 'pause') {
-                          await HonDownloadManager.instance.pauseAll();
-                        } else {
-                          await HonDownloadManager.instance.resumeAll();
-                        }
-                      } catch (error) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(
-                            context,
-                          ).showSnackBar(SnackBar(content: Text('$error')));
-                        }
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Queue controls',
+                  onSelected: (value) async {
+                    try {
+                      if (value == 'pause') {
+                        await HonDownloadManager.instance.pauseAll();
+                      } else {
+                        await HonDownloadManager.instance.resumeAll();
                       }
-                    },
+                    } catch (error) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('$error')));
+                      }
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'pause',
+                      child: Text('Pause all downloads'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'resume',
+                      child: Text('Resume paused downloads'),
+                    ),
+                  ],
+                ),
+                if (_tab == 0 && completed.isNotEmpty)
+                  PopupMenuButton<String>(
+                    tooltip: 'Download queue options',
                     itemBuilder: (_) => [
                       const PopupMenuItem(
-                        value: 'pause',
-                        child: Text('Pause all downloads'),
-                      ),
-                      const PopupMenuItem(
-                        value: 'resume',
-                        child: Text('Resume paused downloads'),
+                        value: 'clear',
+                        child: Text('Clear completed history'),
                       ),
                     ],
+                    onSelected: (_) async {
+                      for (final job in completed) {
+                        await db.removeDownloadJob(job.id);
+                      }
+                    },
                   ),
-                  if (_tab == 0 && completed.isNotEmpty)
-                    PopupMenuButton<String>(
-                      tooltip: 'Download queue options',
-                      itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'clear',
-                          child: Text('Clear completed history'),
-                        ),
-                      ],
-                      onSelected: (_) async {
-                        for (final job in completed) {
-                          await db.removeDownloadJob(job.id);
-                        }
-                      },
-                    ),
-                ],
-              ),
+              ],
             ),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
               sliver: SliverToBoxAdapter(
                 child: HonSegmentedControl(
-                  labels: [
-                    queueLabel,
-                    'Ready Offline',
-                  ],
+                  labels: [queueLabel, 'Ready Offline'],
                   selected: _tab,
                   onChanged: (value) => setState(() => _tab = value),
                 ),
@@ -321,40 +318,40 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> {
             children: [
               switch (job.status) {
                 DownloadStatus.completed => const Icon(
-                    CupertinoIcons.checkmark_circle_fill,
-                    color: HonColors.accentGreen,
-                    size: 24,
-                  ),
+                  CupertinoIcons.checkmark_circle_fill,
+                  color: HonColors.accentGreen,
+                  size: 24,
+                ),
                 DownloadStatus.running => const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CupertinoActivityIndicator(radius: 10),
-                  ),
+                  width: 24,
+                  height: 24,
+                  child: CupertinoActivityIndicator(radius: 10),
+                ),
                 DownloadStatus.queued => Icon(
-                    CupertinoIcons.clock,
-                    color: colors.onSurfaceVariant,
-                    size: 24,
-                  ),
+                  CupertinoIcons.clock,
+                  color: colors.onSurfaceVariant,
+                  size: 24,
+                ),
                 DownloadStatus.retryWaiting => const Icon(
-                    CupertinoIcons.clock_fill,
-                    color: HonColors.accentOrange,
-                    size: 24,
-                  ),
+                  CupertinoIcons.clock_fill,
+                  color: HonColors.accentOrange,
+                  size: 24,
+                ),
                 DownloadStatus.paused => const Icon(
-                    CupertinoIcons.pause_circle_fill,
-                    color: HonColors.accentOrange,
-                    size: 24,
-                  ),
+                  CupertinoIcons.pause_circle_fill,
+                  color: HonColors.accentOrange,
+                  size: 24,
+                ),
                 DownloadStatus.failed => Icon(
-                    CupertinoIcons.exclamationmark_circle_fill,
-                    color: colors.error,
-                    size: 24,
-                  ),
+                  CupertinoIcons.exclamationmark_circle_fill,
+                  color: colors.error,
+                  size: 24,
+                ),
                 DownloadStatus.cancelled => Icon(
-                    CupertinoIcons.xmark_circle,
-                    color: colors.onSurfaceVariant,
-                    size: 24,
-                  ),
+                  CupertinoIcons.xmark_circle,
+                  color: colors.onSurfaceVariant,
+                  size: 24,
+                ),
               },
               const SizedBox(width: 14),
               Expanded(
