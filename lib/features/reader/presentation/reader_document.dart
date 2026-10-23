@@ -354,6 +354,9 @@ class ReaderDocument {
         continue;
       }
       final text = block.text;
+      // Headings render inside Padding(top: 28, bottom: 18) on every page
+      // they appear on; leaving it out made pages overflow by that much.
+      final chrome = block.heading ? 46.0 : 0.0;
       var start = 0;
       while (start < text.length) {
         final painter = TextPainter(
@@ -372,7 +375,8 @@ class ReaderDocument {
         final lines = painter.computeLineMetrics();
         final fits = lines
             .takeWhile(
-              (line) => line.baseline + line.descent <= remaining + 0.01,
+              (line) =>
+                  line.baseline + line.descent + chrome <= remaining + 0.01,
             )
             .toList();
         if (fits.isEmpty && page.isNotEmpty) {
@@ -390,7 +394,7 @@ class ReaderDocument {
         // Include the newline consumed at a page boundary.
         if (start + count < text.length && text[start + count] == '\n') count++;
         if (count <= 0) count = text.length - start;
-        final used = last.baseline + last.descent;
+        final used = last.baseline + last.descent + chrome;
         final end = math.min(text.length, start + count);
         page.add(
           ReaderFragment(index, start, end, used, end == text.length ? gap : 0),

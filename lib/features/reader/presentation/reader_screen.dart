@@ -451,7 +451,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       ),
     );
     final selectableRichText = SelectionListener(
-      selectionNotifier: _selectionNotifierFor(chapter, index),
+      selectionNotifier: _selectionNotifierFor(chapter, index, start),
       child: richText,
     );
 
@@ -521,9 +521,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   late ReaderPreferencesNotifier _prefsNotifier;
   final Map<String, SelectionListenerNotifier> _selectionNotifiers = {};
 
-  SelectionListenerNotifier _selectionNotifierFor(int chapter, int block) {
+  /// One notifier per rendered piece of text. In paged mode a paragraph can
+  /// be split across two pages that are both on screen mid-swipe, and a
+  /// notifier may only listen to one widget, so fragments get their own key.
+  SelectionListenerNotifier _selectionNotifierFor(
+    int chapter,
+    int block, [
+    int start = 0,
+  ]) {
     return _selectionNotifiers.putIfAbsent(
-      '$chapter:$block',
+      start == 0 ? '$chapter:$block' : '$chapter:$block@$start',
       () => SelectionListenerNotifier(),
     );
   }
@@ -631,8 +638,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_isOrientationLocked) {
       SystemChrome.setPreferredOrientations(const []);
     }
-    _prefsNotifier.setActiveBookId(null);
-    _prefsNotifier.reloadDefaults();
+    // Changing provider state while this element unmounts notifies widgets
+    // mid-teardown, so reset after the frame. Skip it if another reader has
+    // already taken over the preferences for its own book.
+    final prefs = _prefsNotifier;
+    final bookId = widget.book.id;
+    Future.microtask(() {
+      if (!prefs.mounted || prefs.activeBookId != bookId) return;
+      prefs.setActiveBookId(null);
+      prefs.reloadDefaults();
+    });
     for (final notifier in _selectionNotifiers.values) {
       notifier.dispose();
     }
@@ -713,14 +728,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     // 0. Primary: Capture the real selection directly from SelectionListenerNotifiers
     final activeSelections = <({int block, int start, int end, String text})>[];
-    for (int i = 0; i < blocks.length; i++) {
-      final notifier = _selectionNotifiers['$_currentChapterIndex:$i'];
-      if (notifier != null && notifier.registered) {
+    for (final entry in _selectionNotifiers.entries) {
+      final key = entry.key.split(':');
+      if (key.length != 2 || key[0] != '$_currentChapterIndex') continue;
+      final part = key[1].split('@');
+      final i = int.tryParse(part[0]) ?? -1;
+      // Paged fragments render from `base`, so their offsets are relative.
+      final base = part.length > 1 ? int.tryParse(part[1]) ?? 0 : 0;
+      if (i < 0 || i >= blocks.length) continue;
+      final notifier = entry.value;
+      if (notifier.registered) {
         try {
           final range = notifier.selection.range;
           if (range != null) {
-            final startOffset = math.min(range.startOffset, range.endOffset);
-            final endOffset = math.max(range.startOffset, range.endOffset);
+            final int low = math.min(range.startOffset, range.endOffset);
+            final int high = math.max(range.startOffset, range.endOffset);
+            final startOffset = base + low;
+            final endOffset = base + high;
             if (endOffset > startOffset) {
               final bText = blocks[i].text;
               final s = startOffset.clamp(0, bText.length);
@@ -741,6 +765,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       }
     }
 
+    activeSelections.sort(
+      (a, b) => a.block != b.block
+          ? a.block.compareTo(b.block)
+          : a.start.compareTo(b.start),
+    );
     if (activeSelections.isNotEmpty) {
       foundBlock = activeSelections.first.block;
       foundStart = activeSelections.first.start;
