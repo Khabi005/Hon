@@ -24,6 +24,7 @@ import '../../../core/updates/chapter_update_service.dart';
 import '../../../core/export/epub_export_service.dart';
 import '../../../shared/widgets/pressable_scale.dart';
 import '../../../core/utils/log_ignored.dart';
+import '../../../shared/widgets/book_open_route.dart';
 
 enum LibraryFilter { all, epubs, pdfs, novels, finished }
 
@@ -835,14 +836,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     );
   }
 
-  Future<void> _handleBookTap(BuildContext context, Book book) async {
+  Future<void> _handleBookTap(
+    BuildContext context,
+    Book book, {
+    CoverOrigin? cover,
+  }) async {
     if (book.format == BookFormat.webNovel) {
       final prefs = await SharedPreferences.getInstance();
       final mode =
           prefs.getString('hon_webnovel_library_tap_action') ?? 'catalogue';
       if (mode == 'reader') {
         if (context.mounted) {
-          await ReaderNavigator.openBook(context, book);
+          await ReaderNavigator.openBook(context, book, origin: cover?.rect);
         }
         return;
       }
@@ -871,7 +876,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         );
       }
     } else {
-      await ReaderNavigator.openBook(context, book);
+      await ReaderNavigator.openBook(context, book, origin: cover?.rect);
     }
   }
 
@@ -879,26 +884,29 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final prog = DatabaseService.instance.getProgress(book.id);
     final pct = prog != null ? (prog.completionPercentage * 100).toInt() : 0;
+    final cover = CoverOrigin();
 
     return Semantics(
       button: true,
       label: 'Read ${book.title}',
       hint: 'Long press for book options',
       child: PressableScale(
-        onTap: () => _handleBookTap(context, book),
+        onTap: () => _handleBookTap(context, book, cover: cover),
         onLongPress: () => _showBookOptionsSheet(context, book),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             AspectRatio(
               aspectRatio: 2 / 3,
-              child: BookCoverWidget(
-                title: book.title,
-                author: book.author,
-                coverPath: book.coverPath,
-                width: double.infinity,
-                height: double.infinity,
-                borderRadius: 6,
+              child: cover.wrap(
+                BookCoverWidget(
+                  title: book.title,
+                  author: book.author,
+                  coverPath: book.coverPath,
+                  width: double.infinity,
+                  height: double.infinity,
+                  borderRadius: 6,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -916,29 +924,44 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
             const SizedBox(height: 2),
 
-            // Reading progress
-            if (pct > 0)
-              Text(
-                '$pct% read',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark
-                      ? HonColors.darkTextSecondary
-                      : HonColors.lightTextSecondary,
+            // Reading progress, with the book's menu beside it as in Apple Books
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    pct > 0 ? '$pct% read' : book.author,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark
+                          ? HonColors.darkTextSecondary
+                          : HonColors.lightTextSecondary,
+                    ),
+                  ),
                 ),
-              )
-            else
-              Text(
-                book.author,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark
-                      ? HonColors.darkTextSecondary
-                      : HonColors.lightTextSecondary,
+                Tooltip(
+                  message: 'Options for ${book.title}',
+                  excludeFromSemantics: true,
+                  child: Semantics(
+                    button: true,
+                    label: 'Options for ${book.title}',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _showBookOptionsSheet(context, book),
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 8, top: 2, bottom: 2),
+                        child: Icon(
+                          CupertinoIcons.ellipsis,
+                          size: 16,
+                          color: isDark ? Colors.white54 : Colors.black45,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+              ],
+            ),
           ],
         ),
       ),
@@ -950,21 +973,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     final prog = DatabaseService.instance.getProgress(book.id);
     final pct = prog != null ? (prog.completionPercentage * 100).toInt() : 0;
 
+    final cover = CoverOrigin();
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: InkWell(
-        onTap: () => _handleBookTap(context, book),
+        onTap: () => _handleBookTap(context, book, cover: cover),
         onLongPress: () => _showBookOptionsSheet(context, book),
         borderRadius: BorderRadius.circular(12),
         child: Row(
           children: [
-            BookCoverWidget(
-              title: book.title,
-              author: book.author,
-              coverPath: book.coverPath,
-              width: 50,
-              height: 75,
-              borderRadius: 4,
+            cover.wrap(
+              BookCoverWidget(
+                title: book.title,
+                author: book.author,
+                coverPath: book.coverPath,
+                width: 50,
+                height: 75,
+                borderRadius: 4,
+              ),
             ),
             const SizedBox(width: 14),
             Expanded(
