@@ -55,12 +55,7 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-enum ChapterLoadResult {
-  refreshedOnline,
-  offlineFallback,
-  skipped,
-  failed,
-}
+enum ChapterLoadResult { refreshedOnline, offlineFallback, skipped, failed }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver {
@@ -89,7 +84,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Set<int> _loadingChapters = {};
   final Map<int, String> _chapterErrors = {};
 
-  Future<ChapterLoadResult> _ensureChapterContent(int index, {bool force = false}) async {
+  Future<ChapterLoadResult> _ensureChapterContent(
+    int index, {
+    bool force = false,
+  }) async {
     if (_loadingChapters.contains(index)) {
       return ChapterLoadResult.skipped;
     }
@@ -141,7 +139,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
       if (!mounted) return ChapterLoadResult.skipped;
       final chapter = _chapters[index];
-      final document = await ReaderDocument.parseAsync(content, title: chapter.title, baseUrl: chapter.contentHref);
+      final document = await ReaderDocument.parseAsync(
+        content,
+        title: chapter.title,
+        baseUrl: chapter.contentHref,
+      );
       if (!mounted) return ChapterLoadResult.skipped;
       setState(() {
         _chapters[index] = EpubChapterItem(
@@ -155,7 +157,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _layoutSignature = null;
       });
       if (index == _currentChapterIndex) _resumeReadingSession();
-      return usedOfflineFallback ? ChapterLoadResult.offlineFallback : ChapterLoadResult.refreshedOnline;
+      return usedOfflineFallback
+          ? ChapterLoadResult.offlineFallback
+          : ChapterLoadResult.refreshedOnline;
     } catch (error) {
       if (mounted) {
         // Only show error in state if chapter had no prior content loaded,
@@ -344,7 +348,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
-    final allHighlights = DatabaseService.instance.getHighlights(widget.book.id);
+    final allHighlights = DatabaseService.instance.getHighlights(
+      widget.book.id,
+    );
     final blockHighlights = <HighlightSpan>[];
     final blockNotes = <Highlight>[];
     for (final h in allHighlights) {
@@ -354,29 +360,43 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final blk = (loc['block'] as num?)?.toInt();
         if (ch == chapter) {
           if (blk == index) {
-            final s = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+            final s =
+                (loc['startOffset'] as num?)?.toInt() ??
+                (loc['offset'] as num?)?.toInt() ??
+                0;
             final e = (loc['endOffset'] as num?)?.toInt() ?? block.text.length;
-            blockHighlights.add(HighlightSpan(
-              start: s,
-              end: e,
-              color: _highlightColor(h.color),
-              note: h.note,
-            ));
-            if (h.note != null && h.note!.trim().isNotEmpty && !blockNotes.contains(h)) {
+            blockHighlights.add(
+              HighlightSpan(
+                start: s,
+                end: e,
+                color: _highlightColor(h.color),
+                note: h.note,
+              ),
+            );
+            if (h.note != null &&
+                h.note!.trim().isNotEmpty &&
+                !blockNotes.contains(h)) {
               blockNotes.add(h);
             }
           } else if (loc['spans'] is List) {
             for (final spanItem in loc['spans'] as List) {
-              if (spanItem is Map && (spanItem['block'] as num?)?.toInt() == index) {
+              if (spanItem is Map &&
+                  (spanItem['block'] as num?)?.toInt() == index) {
                 final s = (spanItem['startOffset'] as num?)?.toInt() ?? 0;
-                final e = (spanItem['endOffset'] as num?)?.toInt() ?? block.text.length;
-                blockHighlights.add(HighlightSpan(
-                  start: s,
-                  end: e,
-                  color: _highlightColor(h.color),
-                  note: h.note,
-                ));
-                if (h.note != null && h.note!.trim().isNotEmpty && !blockNotes.contains(h)) {
+                final e =
+                    (spanItem['endOffset'] as num?)?.toInt() ??
+                    block.text.length;
+                blockHighlights.add(
+                  HighlightSpan(
+                    start: s,
+                    end: e,
+                    color: _highlightColor(h.color),
+                    note: h.note,
+                  ),
+                );
+                if (h.note != null &&
+                    h.note!.trim().isNotEmpty &&
+                    !blockNotes.contains(h)) {
                   blockNotes.add(h);
                 }
               }
@@ -453,12 +473,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               decoration: BoxDecoration(
                 color: _highlightColor(noteHl.color).withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(6),
-                border: Border(left: BorderSide(color: _highlightColor(noteHl.color), width: 3)),
+                border: Border(
+                  left: BorderSide(
+                    color: _highlightColor(noteHl.color),
+                    width: 3,
+                  ),
+                ),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(CupertinoIcons.pencil, size: 13, color: prefs.themeConfig.secondaryTextColor),
+                  Icon(
+                    CupertinoIcons.pencil,
+                    size: 13,
+                    color: prefs.themeConfig.secondaryTextColor,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -498,7 +527,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     super.initState();
     _prefsNotifier = ref.read(readerPreferencesProvider.notifier);
     _prefsNotifier.setActiveBookId(widget.book.id);
-    final bookOverrides = DatabaseService.instance.getBookReaderSettings(widget.book.id);
+    final bookOverrides = DatabaseService.instance.getBookReaderSettings(
+      widget.book.id,
+    );
     if (bookOverrides != null) {
       _prefsNotifier.loadFromState(
         ReaderPreferencesState.fromMap(bookOverrides),
@@ -641,7 +672,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     child: child,
   );
 
-  Future<void> _highlightSelectedText([String color = 'yellow', String? note]) async {
+  Future<void> _highlightSelectedText([
+    String color = 'yellow',
+    String? note,
+  ]) async {
     final text = _selectedQuote?.trim();
     if (text == null || text.isEmpty) return;
 
@@ -669,7 +703,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               final s = startOffset.clamp(0, bText.length);
               final e = endOffset.clamp(0, bText.length);
               if (e > s) {
-                activeSelections.add((block: i, start: s, end: e, text: bText.substring(s, e)));
+                activeSelections.add((
+                  block: i,
+                  start: s,
+                  end: e,
+                  text: bText.substring(s, e),
+                ));
               }
             }
           }
@@ -683,7 +722,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       foundEnd = activeSelections.first.end;
       if (activeSelections.length > 1) {
         multiSpans = activeSelections
-            .map((s) => {'block': s.block, 'startOffset': s.start, 'endOffset': s.end})
+            .map(
+              (s) => {
+                'block': s.block,
+                'startOffset': s.start,
+                'endOffset': s.end,
+              },
+            )
             .toList();
         actualSelectedText = activeSelections.map((s) => s.text).join('\n\n');
       } else {
@@ -700,9 +745,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         );
       } else {
         _captureAnchor();
-        for (int i = math.max(0, _anchor.block - 1);
-            i <= math.min(blocks.length - 1, _anchor.block + 3);
-            i++) {
+        for (
+          int i = math.max(0, _anchor.block - 1);
+          i <= math.min(blocks.length - 1, _anchor.block + 3);
+          i++
+        ) {
           visibleBlockIndices.add(i);
         }
       }
@@ -745,8 +792,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         if (paragraphs.length > 1) {
           final searchBlocks = [
             ...visibleBlockIndices,
-            ...List.generate(blocks.length, (i) => i)
-                .where((i) => !visibleBlockIndices.contains(i)),
+            ...List.generate(
+              blocks.length,
+              (i) => i,
+            ).where((i) => !visibleBlockIndices.contains(i)),
           ];
           for (final startB in searchBlocks) {
             if (startB + paragraphs.length - 1 >= blocks.length) continue;
@@ -806,14 +855,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     int pageIdx = _currentPageIndex;
     if (_pagedPages.isNotEmpty) {
-      final p = _pagedPages
-          .indexWhere((page) => page.any((f) => f.block == foundBlock));
+      final p = _pagedPages.indexWhere(
+        (page) => page.any((f) => f.block == foundBlock),
+      );
       if (p != -1) pageIdx = p;
     }
 
-    final blockText = (foundBlock >= 0 && foundBlock < blocks.length) ? blocks[foundBlock].text : '';
-    final prefixContext = blockText.substring(math.max(0, foundStart - 32), math.max(0, foundStart));
-    final suffixContext = blockText.substring(math.min(blockText.length, foundEnd), math.min(blockText.length, foundEnd + 32));
+    final blockText = (foundBlock >= 0 && foundBlock < blocks.length)
+        ? blocks[foundBlock].text
+        : '';
+    final prefixContext = blockText.substring(
+      math.max(0, foundStart - 32),
+      math.max(0, foundStart),
+    );
+    final suffixContext = blockText.substring(
+      math.min(blockText.length, foundEnd),
+      math.min(blockText.length, foundEnd + 32),
+    );
 
     final locatorMap = <String, dynamic>{
       'engine': 'hon-html-v2',
@@ -865,18 +923,24 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (bm.locatorString != null && bm.locatorString!.isNotEmpty) {
       try {
         final loc = jsonDecode(bm.locatorString!) as Map<String, dynamic>;
-        chIdx = (loc['chapter'] as num?)?.toInt() ??
+        chIdx =
+            (loc['chapter'] as num?)?.toInt() ??
             (loc['chapterIndex'] as num?)?.toInt() ??
             bm.pageIndex;
         blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
         offset = (loc['offset'] as num?)?.toInt() ?? 0;
-        pageIdx = (loc['page'] as num?)?.toInt() ?? (loc['pageIndex'] as num?)?.toInt() ?? 0;
+        pageIdx =
+            (loc['page'] as num?)?.toInt() ??
+            (loc['pageIndex'] as num?)?.toInt() ??
+            0;
       } catch (_) {}
     }
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
 
-    final isPaginated = ref.read(readerPreferencesProvider).layoutMode == ReaderLayoutMode.paginated;
+    final isPaginated =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.paginated;
     setState(() {
       _currentChapterIndex = chIdx;
       _anchor = ReaderTextAnchor(blockIdx, offset);
@@ -884,16 +948,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _layoutSignature = null;
       _scrollBaseIndex = chIdx;
       _chapterKeys.clear();
-      _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, chIdx);
+      _isBookmarked = DatabaseService.instance.isBookmarked(
+        widget.book.id,
+        chIdx,
+      );
     });
 
     if (isPaginated) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_pagedPages.isNotEmpty) {
-          final targetPage = _pagedPages.indexWhere((page) =>
-              page.any((f) => f.block == blockIdx && offset >= f.start && (f.end == 0 || offset <= f.end)));
-          final finalPage = targetPage != -1 ? targetPage : pageIdx.clamp(0, _pagedPages.length - 1);
+          final targetPage = _pagedPages.indexWhere(
+            (page) => page.any(
+              (f) =>
+                  f.block == blockIdx &&
+                  offset >= f.start &&
+                  (f.end == 0 || offset <= f.end),
+            ),
+          );
+          final finalPage = targetPage != -1
+              ? targetPage
+              : pageIdx.clamp(0, _pagedPages.length - 1);
           setState(() => _currentPageIndex = finalPage);
           if (_pageController.hasClients) {
             _pageController.jumpToPage(finalPage + 1);
@@ -906,7 +981,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final key = _blockKeys['$chIdx:$blockIdx'];
         final ctx = key?.currentContext;
         if (ctx != null) {
-          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0.1,
+          );
         } else {
           _restoreScrollAnchor();
         }
@@ -928,14 +1007,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         offset = (firstSpan['startOffset'] as num?)?.toInt() ?? 0;
       } else {
         blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
-        offset = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+        offset =
+            (loc['startOffset'] as num?)?.toInt() ??
+            (loc['offset'] as num?)?.toInt() ??
+            0;
       }
       pageIdx = (loc['pageIndex'] as num?)?.toInt() ?? 0;
     } catch (_) {}
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
 
-    final isPaginated = ref.read(readerPreferencesProvider).layoutMode == ReaderLayoutMode.paginated;
+    final isPaginated =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.paginated;
     setState(() {
       _currentChapterIndex = chIdx;
       _anchor = ReaderTextAnchor(blockIdx, offset);
@@ -943,15 +1027,27 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _layoutSignature = null;
       _scrollBaseIndex = chIdx;
       _chapterKeys.clear();
-      _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, chIdx);
+      _isBookmarked = DatabaseService.instance.isBookmarked(
+        widget.book.id,
+        chIdx,
+      );
     });
 
     if (isPaginated) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_pagedPages.isNotEmpty) {
-          final targetPage = _pagedPages.indexWhere((page) => page.any((f) => f.block == blockIdx && offset >= f.start && (f.end == 0 || offset <= f.end)));
-          final finalPage = targetPage != -1 ? targetPage : pageIdx.clamp(0, _pagedPages.length - 1);
+          final targetPage = _pagedPages.indexWhere(
+            (page) => page.any(
+              (f) =>
+                  f.block == blockIdx &&
+                  offset >= f.start &&
+                  (f.end == 0 || offset <= f.end),
+            ),
+          );
+          final finalPage = targetPage != -1
+              ? targetPage
+              : pageIdx.clamp(0, _pagedPages.length - 1);
           setState(() => _currentPageIndex = finalPage);
           if (_pageController.hasClients) {
             _pageController.jumpToPage(finalPage + 1);
@@ -964,7 +1060,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final key = _blockKeys['$chIdx:$blockIdx'];
         final ctx = key?.currentContext;
         if (ctx != null) {
-          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0.1,
+          );
         } else {
           _restoreScrollAnchor();
         }
@@ -1045,13 +1145,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   Future<void> _loadBookContent() async {
     try {
-      final bookSettings =
-          DatabaseService.instance.getBookReaderSettings(widget.book.id);
+      final bookSettings = DatabaseService.instance.getBookReaderSettings(
+        widget.book.id,
+      );
       if (bookSettings != null) {
-        ref.read(readerPreferencesProvider.notifier).loadFromState(
-          ReaderPreferencesState.fromMap(bookSettings),
-          bookId: widget.book.id,
-        );
+        ref
+            .read(readerPreferencesProvider.notifier)
+            .loadFromState(
+              ReaderPreferencesState.fromMap(bookSettings),
+              bookId: widget.book.id,
+            );
       } else {
         await ref.read(readerPreferencesProvider.notifier).reloadDefaults();
         ref
@@ -1107,7 +1210,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               }
             }
             if (body.isNotEmpty) {
-              body = ChapterContentSanitizer.sanitize(body, chapterTitle: ch.title);
+              body = ChapterContentSanitizer.sanitize(
+                body,
+                chapterTitle: ch.title,
+              );
             }
             loadedChapters.add(
               EpubChapterItem(
@@ -1410,60 +1516,68 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: themeConfig.systemBrightness == Brightness.dark
-          ? SystemUiOverlayStyle.light
-          : SystemUiOverlayStyle.dark,
-      child: Scaffold(
-        backgroundColor: themeConfig.backgroundColor,
-        body: SafeArea(
-          top: false,
-          bottom: false,
-          child: Stack(
-            children: [
-              // Main Reading Content Area
-              GestureDetector(
-                onTap: _toggleControls,
-                behavior: HitTestBehavior.opaque,
-                child: prefs.layoutMode == ReaderLayoutMode.verticalScroll
-                    ? _buildScrollView(prefs, themeConfig)
-                    : _buildPagedView(prefs, themeConfig),
-              ),
+    return PopScope(
+      // System back skips the X button, so flush the debounced scroll save.
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) return;
+        _saveDebounceTimer?.cancel();
+        _saveProgress();
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: themeConfig.systemBrightness == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: Scaffold(
+          backgroundColor: themeConfig.backgroundColor,
+          body: SafeArea(
+            top: false,
+            bottom: false,
+            child: Stack(
+              children: [
+                // Main Reading Content Area
+                GestureDetector(
+                  onTap: _toggleControls,
+                  behavior: HitTestBehavior.opaque,
+                  child: prefs.layoutMode == ReaderLayoutMode.verticalScroll
+                      ? _buildScrollView(prefs, themeConfig)
+                      : _buildPagedView(prefs, themeConfig),
+                ),
 
-              // Ambient Top Header Overlay
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedSlide(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 200),
-                  offset: _showControls ? Offset.zero : const Offset(0, -1),
-                  child: ReaderControlsVisibility(
-                    visible: _showControls,
-                    child: _buildTopHeader(themeConfig),
+                // Ambient Top Header Overlay
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedSlide(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    offset: _showControls ? Offset.zero : const Offset(0, -1),
+                    child: ReaderControlsVisibility(
+                      visible: _showControls,
+                      child: _buildTopHeader(themeConfig),
+                    ),
                   ),
                 ),
-              ),
 
-              // Ambient Bottom Bar Overlay
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedSlide(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 200),
-                  offset: _showControls ? Offset.zero : const Offset(0, 1),
-                  child: ReaderControlsVisibility(
-                    visible: _showControls,
-                    child: _buildBottomBar(themeConfig),
+                // Ambient Bottom Bar Overlay
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedSlide(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    offset: _showControls ? Offset.zero : const Offset(0, 1),
+                    child: ReaderControlsVisibility(
+                      visible: _showControls,
+                      child: _buildBottomBar(themeConfig),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1842,9 +1956,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (widget.fromCatalogue) {
       Navigator.of(context).pop();
     } else {
-      final sourceId = widget.book.sourceId ??
-          (widget.book.id.contains(':') ? widget.book.id.split(':').first : 'unknown');
-      final sourceNovelId = widget.book.sourceNovelId ??
+      final sourceId =
+          widget.book.sourceId ??
+          (widget.book.id.contains(':')
+              ? widget.book.id.split(':').first
+              : 'unknown');
+      final sourceNovelId =
+          widget.book.sourceNovelId ??
           (widget.book.id.contains(':')
               ? widget.book.id.substring(widget.book.id.indexOf(':') + 1)
               : widget.book.id);

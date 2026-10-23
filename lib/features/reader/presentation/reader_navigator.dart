@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../app/theme/app_appearance.dart';
+import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/native/readium_reader_service.dart';
@@ -76,30 +77,13 @@ class ReaderNavigator {
       Map<String, dynamic> typography = Map<String, dynamic>.from(readerPrefs);
 
       if (bookOverrides != null) {
-        if (bookOverrides['fontSize'] is num) {
-          fontSize = (bookOverrides['fontSize'] as num).toDouble().clamp(
-            0.5,
-            2.5,
-          );
-        }
-        if (bookOverrides['theme'] is String) {
-          theme = bookOverrides['theme'] as String;
-        }
-        if (bookOverrides['isScroll'] is bool) {
-          isScroll = bookOverrides['isScroll'] as bool;
-        }
-        if (bookOverrides['typography'] is String) {
-          try {
-            final typo = jsonDecode(bookOverrides['typography'] as String);
-            if (typo is Map) {
-              typography.addAll(Map<String, dynamic>.from(typo));
-            }
-          } catch (_) {}
-        } else if (bookOverrides['typography'] is Map) {
-          typography.addAll(
-            Map<String, dynamic>.from(bookOverrides['typography'] as Map),
-          );
-        }
+        // Per-book settings are saved in the Dart preference format
+        // ('size', 'layout', 'font'…); fromMap also reads older native keys.
+        final saved = ReaderPreferencesState.fromMap(bookOverrides);
+        fontSize = (saved.fontSize / 18.0).clamp(0.5, 2.5);
+        theme = saved.themePreset.name;
+        isScroll = saved.layoutMode == ReaderLayoutMode.verticalScroll;
+        typography.addAll(saved.toMap());
       }
 
       final appAppearance =
