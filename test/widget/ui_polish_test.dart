@@ -157,9 +157,10 @@ void main() {
       final element = tester.element(find.byType(ThemesSettingsSheet));
       final container = ProviderScope.containerOf(element);
       final before = container.read(readerPreferencesProvider).lineHeight;
-      final slider = find
-          .byType(Slider)
-          .at(1); // appearance brightness precedes Customize line spacing.
+      // Line spacing is the only slider formatted as a multiplier ("1.65×").
+      final slider = find.byWidgetPredicate(
+        (w) => w is Slider && (w.label ?? '').endsWith('×'),
+      );
       await tester.ensureVisible(slider);
       await tester.pumpAndSettle();
       final rect = tester.getRect(slider);
