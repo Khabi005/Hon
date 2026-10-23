@@ -5,6 +5,7 @@ import '../../../../core/database/database_service.dart';
 import '../../../../core/models/book.dart';
 import '../../../../core/models/reading_progress.dart';
 import '../../../../shared/widgets/book_cover_widget.dart';
+import '../../../../shared/widgets/book_open_route.dart';
 import '../../../reader/presentation/reader_navigator.dart';
 import '../../../../app/theme/hon_colors.dart';
 import '../../../../shared/widgets/pressable_scale.dart';
@@ -29,11 +30,13 @@ class ContinueReadingCard extends StatelessWidget {
         : 0;
 
     final colors = Theme.of(context).colorScheme;
+    final cover = CoverOrigin();
     return Semantics(
       button: true,
       label: 'Continue reading ${book.title}, $pct percent read',
       child: PressableScale(
-        onTap: () => ReaderNavigator.openBook(context, book),
+        onTap: () =>
+            ReaderNavigator.openBook(context, book, origin: cover.rect),
         child: _CoverTintedSurface(
           coverPath: book.coverPath,
           width: width,
@@ -42,13 +45,15 @@ class ContinueReadingCard extends StatelessWidget {
           child: Row(
             children: [
               // Left: Book Cover
-              BookCoverWidget(
-                title: book.title,
-                author: book.author,
-                coverPath: book.coverPath,
-                width: 64,
-                height: 96,
-                borderRadius: 6,
+              cover.wrap(
+                BookCoverWidget(
+                  title: book.title,
+                  author: book.author,
+                  coverPath: book.coverPath,
+                  width: 64,
+                  height: 96,
+                  borderRadius: 6,
+                ),
               ),
               const SizedBox(width: 14),
 

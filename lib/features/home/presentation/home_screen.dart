@@ -9,6 +9,7 @@ import '../../../app/theme/hon_typography.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
+import '../../../shared/widgets/book_open_route.dart';
 import '../../reader/presentation/reader_navigator.dart';
 import '../../settings/presentation/settings_screen.dart';
 import 'widgets/continue_reading_card.dart';
@@ -384,22 +385,29 @@ class HomeScreen extends ConsumerWidget {
         separatorBuilder: (_, __) => const SizedBox(width: 18),
         itemBuilder: (_, index) {
           final book = books[index];
+          final cover = CoverOrigin();
           return Semantics(
             button: true,
             label: 'Read ${book.title}',
             child: PressableScale(
-              onTap: () => ReaderNavigator.openBook(context, book),
+              onTap: () => ReaderNavigator.openBook(
+                context,
+                book,
+                origin: cover.rect,
+              ),
               child: SizedBox(
                 width: 96,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    BookCoverWidget(
-                      title: book.title,
-                      author: book.author,
-                      coverPath: book.coverPath,
-                      width: 96,
-                      height: 144,
+                    cover.wrap(
+                      BookCoverWidget(
+                        title: book.title,
+                        author: book.author,
+                        coverPath: book.coverPath,
+                        width: 96,
+                        height: 144,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Text(

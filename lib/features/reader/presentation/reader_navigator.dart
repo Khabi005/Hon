@@ -7,12 +7,14 @@ import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/native/readium_reader_service.dart';
+import '../../../shared/widgets/book_open_route.dart';
 import 'pdf_reader_screen.dart';
 import 'reader_screen.dart';
 
 class ReaderNavigator {
   /// Opens a book in the appropriate reader (EPUB/WebNovel or PDF)
   /// restoring its last saved location or navigating to a specific chapter/page.
+  /// With [origin], the cover's on-screen bounds, the reader grows out of it.
   static Future<void> openBook(
     BuildContext context,
     Book book, {
@@ -22,6 +24,7 @@ class ReaderNavigator {
     String? locator,
     String? initialChapterContent,
     bool fromCatalogue = false,
+    Rect? origin,
   }) async {
     // If not explicitly provided, look up saved progress from DatabaseService
     final savedProgress = DatabaseService.instance.getProgress(book.id);
@@ -41,9 +44,9 @@ class ReaderNavigator {
 
     if (book.format == BookFormat.pdf) {
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          // Modal, like Apple Books: no edge swipe-back to fight page turns.
-          fullscreenDialog: true,
+        BookOpenRoute.to<void>(
+          context,
+          origin: origin,
           builder: (_) => PdfReaderScreen(
             book: book,
             initialPage: targetPageIndex > 0 ? targetPageIndex : 1,
@@ -172,9 +175,9 @@ class ReaderNavigator {
       }
     } else {
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          // Modal, like Apple Books: no edge swipe-back to fight page turns.
-          fullscreenDialog: true,
+        BookOpenRoute.to<void>(
+          context,
+          origin: origin,
           builder: (_) => ReaderScreen(
             book: book,
             restoreSavedProgress: false,
