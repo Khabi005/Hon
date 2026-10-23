@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../database/database_service.dart';
 import '../models/highlight.dart';
 import '../models/reading_progress.dart';
+import '../utils/reading_time.dart';
 
 class ReadiumOpenResult {
   final bool success;
@@ -74,6 +75,8 @@ class ReadiumReaderService {
 
   // Active foreground session time tracking
   static DateTime? _activeSessionStartTime;
+  // Last page turn or scroll the native reader reported.
+  static DateTime? _lastReadingActivity;
   static bool _isForegrounded = true;
   static bool _isReady = false;
 
@@ -83,6 +86,19 @@ class ReadiumReaderService {
   @visibleForTesting
   static set activeSessionStartTime(DateTime? val) =>
       _activeSessionStartTime = val;
+
+  /// Locator changes keep the session counting. After a long idle gap the
+  /// counted part is banked and a new session starts now.
+  static void _noteReadingActivity() {
+    final now = DateTime.now();
+    final start = _activeSessionStartTime;
+    if (start != null && readingWentIdle(start, _lastReadingActivity, now)) {
+      final elapsed = countedReadingSeconds(start, _lastReadingActivity, now);
+      if (elapsed > 0) DatabaseService.instance.addReadingTime(elapsed);
+      _activeSessionStartTime = now;
+    }
+    _lastReadingActivity = now;
+  }
 
   @visibleForTesting
   static bool get isForegrounded => _isForegrounded;
@@ -214,6 +230,7 @@ class ReadiumReaderService {
         case 'onLocatorChanged':
           final args = call.arguments as Map<dynamic, dynamic>?;
           if (args != null && _isCurrentSession(args)) {
+            _noteReadingActivity();
             final bookId = args['bookId'] as String?;
             final locatorJson = args['locator'] as String?;
             // Whole-book total progression (0.0 - 1.0)
@@ -301,9 +318,11 @@ class ReadiumReaderService {
             // Save elapsed foreground reading time and STOP timer!
             // Crucial: do NOT leave timer running in the background!
             if (_activeSessionStartTime != null) {
-              final elapsed = DateTime.now()
-                  .difference(_activeSessionStartTime!)
-                  .inSeconds;
+              final elapsed = countedReadingSeconds(
+                _activeSessionStartTime!,
+                _lastReadingActivity,
+                DateTime.now(),
+              );
               if (elapsed > 0) {
                 DatabaseService.instance.addReadingTime(elapsed);
               }
@@ -365,9 +384,11 @@ class ReadiumReaderService {
             _isForegrounded = false;
             // Accumulate any remaining reading time before closing
             if (_activeSessionStartTime != null) {
-              final elapsed = DateTime.now()
-                  .difference(_activeSessionStartTime!)
-                  .inSeconds;
+              final elapsed = countedReadingSeconds(
+                _activeSessionStartTime!,
+                _lastReadingActivity,
+                DateTime.now(),
+              );
               if (elapsed > 0) {
                 DatabaseService.instance.addReadingTime(elapsed);
               }

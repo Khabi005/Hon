@@ -13,6 +13,7 @@ import 'package:pdfx/pdfx.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/models/reading_progress.dart';
+import '../../../core/utils/reading_time.dart';
 import '../sheets/pdf_contents_sheet.dart';
 import '../sheets/pdf_appearance_sheet.dart';
 
@@ -45,6 +46,7 @@ class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
   Offset? _pointerDownPos;
   DateTime? _pointerDownTime;
   DateTime? _sessionStartTime;
+  DateTime? _lastReadingActivity;
   bool _isForegrounded = true;
 
   @override
@@ -70,13 +72,30 @@ class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
 
   void _pauseReadingSession() {
     if (_sessionStartTime != null) {
-      final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
+      final elapsed = countedReadingSeconds(
+        _sessionStartTime!,
+        _lastReadingActivity,
+        DateTime.now(),
+      );
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
       _sessionStartTime =
           null; // Crucial: STOP timer so background time is never counted!
     }
+  }
+
+  /// Page changes and taps keep the session counting. After a long idle gap
+  /// the counted part is banked and a new session starts now.
+  void _noteReadingActivity() {
+    final now = DateTime.now();
+    final start = _sessionStartTime;
+    if (start != null && readingWentIdle(start, _lastReadingActivity, now)) {
+      final elapsed = countedReadingSeconds(start, _lastReadingActivity, now);
+      if (elapsed > 0) DatabaseService.instance.addReadingTime(elapsed);
+      _sessionStartTime = now;
+    }
+    _lastReadingActivity = now;
   }
 
   void _resumeReadingSession() {
@@ -432,6 +451,7 @@ class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
                 Listener(
                   behavior: HitTestBehavior.translucent,
                   onPointerDown: (e) {
+                    _noteReadingActivity();
                     _pointerDownPos = e.position;
                     _pointerDownTime = DateTime.now();
                   },
@@ -541,7 +561,10 @@ class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
             });
           }
         },
-        onPageChanged: (page) => _saveProgress(page, _pageCount),
+        onPageChanged: (page) {
+          _noteReadingActivity();
+          _saveProgress(page, _pageCount);
+        },
         builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
           options: const DefaultBuilderOptions(),
           documentLoaderBuilder: (_) =>
@@ -577,7 +600,10 @@ class _PdfReaderScreenState extends ConsumerState<PdfReaderScreen>
             });
           }
         },
-        onPageChanged: (page) => _saveProgress(page, _pageCount),
+        onPageChanged: (page) {
+          _noteReadingActivity();
+          _saveProgress(page, _pageCount);
+        },
         builders: PdfViewBuilders<DefaultBuilderOptions>(
           options: const DefaultBuilderOptions(),
           documentLoaderBuilder: (_) =>

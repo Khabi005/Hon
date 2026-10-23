@@ -27,6 +27,7 @@ import '../sheets/themes_settings_sheet.dart';
 import '../sheets/reader_search_dialog.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/chapter_content_sanitizer.dart';
+import '../../../core/utils/reading_time.dart';
 import '../../browse/presentation/source_catalog_screen.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
@@ -512,6 +513,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   Timer? _saveDebounceTimer;
   DateTime _lastVisibleCheck = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime? _sessionStartTime;
+  DateTime? _lastReadingActivity;
   bool _isForegrounded = true;
   late ReaderPreferencesNotifier _prefsNotifier;
   final Map<String, SelectionListenerNotifier> _selectionNotifiers = {};
@@ -568,13 +570,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _pauseReadingSession() {
     if (_sessionStartTime != null) {
-      final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
+      final elapsed = countedReadingSeconds(
+        _sessionStartTime!,
+        _lastReadingActivity,
+        DateTime.now(),
+      );
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
       _sessionStartTime =
           null; // Crucial: STOP timer so background time is never counted!
     }
+  }
+
+  /// Scrolls, taps and page turns keep the session counting. After a long
+  /// idle gap the counted part is banked and a new session starts now.
+  void _noteReadingActivity() {
+    final now = DateTime.now();
+    final start = _sessionStartTime;
+    if (start != null && readingWentIdle(start, _lastReadingActivity, now)) {
+      final elapsed = countedReadingSeconds(start, _lastReadingActivity, now);
+      if (elapsed > 0) DatabaseService.instance.addReadingTime(elapsed);
+      _sessionStartTime = now;
+    }
+    _lastReadingActivity = now;
   }
 
   void _resumeReadingSession() {
@@ -1137,6 +1156,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
+    _noteReadingActivity();
     _saveDebounceTimer?.cancel();
     _saveDebounceTimer = Timer(
       const Duration(milliseconds: 600),
@@ -1449,6 +1469,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   void _toggleControls() {
+    _noteReadingActivity();
     setState(() {
       _showControls = !_showControls;
     });
@@ -1848,6 +1869,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             physics: const BouncingScrollPhysics(),
             itemCount: pages.length + 2,
             onPageChanged: (page) {
+              _noteReadingActivity();
               if (_changingPagedChapter) return;
               if (page == 0 && _currentChapterIndex > 0) {
                 _changePagedChapter(_currentChapterIndex - 1, atEnd: true);
