@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/files/storage_service.dart';
 import '../../../core/utils/log_ignored.dart';
+import '../../../core/utils/reading_time.dart';
 
 /// A location in the original chapter, independent of page size and typography.
 class ReaderTextAnchor {
@@ -153,6 +154,26 @@ class ReaderFragment {
 class ReaderDocument {
   final List<ReaderBlock> blocks;
   const ReaderDocument(this.blocks);
+
+  static final _wordsAfter = Expando<List<int>>('wordsAfter');
+
+  /// Words from [anchor] to the end of the chapter. Per-block counts are
+  /// worked out once per document, so this is cheap to call on every build.
+  int wordsFrom(ReaderTextAnchor anchor) {
+    final after = _wordsAfter[this] ??= () {
+      // after[i] = words in blocks i+1 .. end.
+      final list = List<int>.filled(blocks.length + 1, 0);
+      for (var i = blocks.length - 1; i >= 0; i--) {
+        list[i] = list[i + 1] + (i + 1 < blocks.length ? countWords(blocks[i + 1].text) : 0);
+      }
+      return list;
+    }();
+    if (blocks.isEmpty || anchor.block >= blocks.length) return 0;
+    final index = anchor.block < 0 ? 0 : anchor.block;
+    final text = blocks[index].text;
+    final start = anchor.offset.clamp(0, text.length);
+    return countWords(text.substring(start)) + after[index];
+  }
 
   static Future<ReaderDocument> parseAsync(String source, {String? title, String? baseUrl}) =>
       Isolate.run(() => ReaderDocument.parse(source, title: title, baseUrl: baseUrl));

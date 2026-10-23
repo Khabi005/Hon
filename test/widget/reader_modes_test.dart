@@ -78,7 +78,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       for (
         var attempt = 0;
-        attempt < 10 && find.text('Chapter 1 of 2').evaluate().isEmpty;
+        attempt < 10 && find.textContaining('Chapter 1 of 2').evaluate().isEmpty;
         attempt++
       ) {
         await tester.runAsync(
@@ -86,12 +86,12 @@ void main() {
         );
         await tester.pump();
       }
-      expect(find.text('Chapter 1 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 1 of 2'), findsOneWidget);
       expect(find.byType(PageView), findsOneWidget);
       await tester.drag(find.byType(PageView), const Offset(-500, 0));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
-      expect(find.text('Chapter 1 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 1 of 2'), findsOneWidget);
       expect(
         tester.widget<PageView>(find.byType(PageView)).controller!.page,
         closeTo(2, 0.1),
@@ -111,9 +111,9 @@ void main() {
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );
         await tester.pump(const Duration(milliseconds: 500));
-        if (find.text('Chapter 2 of 2').evaluate().isNotEmpty) break;
+        if (find.textContaining('Chapter 2 of 2').evaluate().isNotEmpty) break;
       }
-      expect(find.text('Chapter 2 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 2 of 2'), findsOneWidget);
       for (var i = 0; i < 30; i++) {
         await tester.drag(find.byType(CustomScrollView), const Offset(0, 600));
         await tester.pump();
@@ -121,9 +121,9 @@ void main() {
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );
         await tester.pump(const Duration(milliseconds: 500));
-        if (find.text('Chapter 1 of 2').evaluate().isNotEmpty) break;
+        if (find.textContaining('Chapter 1 of 2').evaluate().isNotEmpty) break;
       }
-      expect(find.text('Chapter 1 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 1 of 2'), findsOneWidget);
     },
   );
 
@@ -196,7 +196,7 @@ void main() {
           .read(readerPreferencesProvider.notifier)
           .setLayoutMode(ReaderLayoutMode.verticalScroll);
       await settle();
-      expect(find.text('Chapter 2 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 2 of 2'), findsOneWidget);
       final heading = find.text('Beta Chapter', findRichText: true);
       expect(heading, findsOneWidget);
 
@@ -209,11 +209,11 @@ void main() {
       expect(tester.getTopLeft(heading).dy, closeTo(before, 1));
 
       for (var i = 0; i < 20; i++) {
-        if (find.text('Chapter 1 of 2').evaluate().isNotEmpty) break;
+        if (find.textContaining('Chapter 1 of 2').evaluate().isNotEmpty) break;
         await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
         await settle();
       }
-      expect(find.text('Chapter 1 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 1 of 2'), findsOneWidget);
       expect(find.text('Alpha Chapter', findRichText: true), findsOneWidget);
     },
   );
@@ -290,11 +290,11 @@ void main() {
       await settle();
       expect(files[0].existsSync(), isTrue);
       for (var i = 0; i < 30; i++) {
-        if (find.text('Chapter 2 of 2').evaluate().isNotEmpty) break;
+        if (find.textContaining('Chapter 2 of 2').evaluate().isNotEmpty) break;
         await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
         await settle();
       }
-      expect(find.text('Chapter 2 of 2'), findsOneWidget);
+      expect(find.textContaining('Chapter 2 of 2'), findsOneWidget);
       await settle();
       expect(files[0].existsSync(), isFalse);
       expect(files[1].existsSync(), isTrue);

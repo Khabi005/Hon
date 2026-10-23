@@ -35,3 +35,22 @@ bool readingWentIdle(
       : lastActivity;
   return now.difference(active) > idleCap;
 }
+
+/// A typical silent reading speed for fiction, in words per minute.
+const averageReadingWpm = 230;
+
+final _word = RegExp(r'\S+');
+
+/// Number of words in [text].
+int countWords(String text) => _word.allMatches(text).length;
+
+/// "12 min left", rounded up so the last page never says 0, or null when
+/// there is nothing left to read.
+String? minutesLeftLabel(int words, {int wpm = averageReadingWpm}) {
+  if (words <= 0) return null;
+  final minutes = (words / wpm).ceil();
+  if (minutes < 60) return '$minutes min left';
+  final hours = minutes ~/ 60;
+  final rest = minutes % 60;
+  return rest == 0 ? '$hours h left' : '$hours h $rest min left';
+}

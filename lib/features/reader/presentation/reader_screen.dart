@@ -1504,6 +1504,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _toggleControls() {
     _noteReadingActivity();
+    // Refresh the position so the footer's time left is current.
+    if (!_showControls) _captureAnchor();
     setState(() {
       _showControls = !_showControls;
     });
@@ -2113,11 +2115,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
   }
 
+  /// "12 min left" for the rest of the current chapter, once it is parsed.
+  String? _timeLeftInChapter() {
+    final document = _documents[_currentChapterIndex];
+    if (document == null) return null;
+    var anchor = _anchor;
+    if (!_scrollController.hasClients && _pagedPages.isNotEmpty) {
+      final page =
+          _pagedPages[_currentPageIndex.clamp(0, _pagedPages.length - 1)];
+      if (page.isNotEmpty) {
+        anchor = ReaderTextAnchor(page.first.block, page.first.start);
+      }
+    }
+    return minutesLeftLabel(document.wordsFrom(anchor));
+  }
+
   Widget _buildBottomBar(ReaderThemeConfig themeConfig) {
     final total = _chapters.isNotEmpty ? _chapters.length : _totalPages;
+    final timeLeft = _timeLeftInChapter();
     return ReaderFooter(
       theme: themeConfig,
-      progress: 'Chapter ${_currentChapterIndex + 1} of $total',
+      progress: [
+        'Chapter ${_currentChapterIndex + 1} of $total',
+        ?timeLeft,
+      ].join(' · '),
       onReload: _reloadCurrentChapter,
       onMenu: () {
         ReaderMenuPopup.show(
