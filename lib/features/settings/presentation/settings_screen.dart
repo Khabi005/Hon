@@ -152,6 +152,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
+          SwitchListTile(
+            secondary: const Icon(
+              CupertinoIcons.eye_slash,
+              color: HonColors.accentBlue,
+            ),
+            title: const Text('Incognito mode'),
+            subtitle: const Text('Pause reading history and stats'),
+            value: DatabaseService.instance.incognito,
+            onChanged: (value) async {
+              await DatabaseService.instance.setIncognito(value);
+              if (mounted) setState(() {});
+            },
+          ),
           ListTile(
             leading: const Icon(
               CupertinoIcons.timer,
@@ -408,6 +421,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (val) async {
                       await BackgroundUpdateService.instance.saveSettings(
                         requiresBatteryNotLow: val,
+                      );
+                      await _loadUpdateSettings();
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('Only while charging'),
+                    subtitle: const Text('Wait until the phone is plugged in'),
+                    value: _updateSettings.requiresCharging,
+                    onChanged: (val) async {
+                      await BackgroundUpdateService.instance.saveSettings(
+                        requiresCharging: val,
                       );
                       await _loadUpdateSettings();
                     },

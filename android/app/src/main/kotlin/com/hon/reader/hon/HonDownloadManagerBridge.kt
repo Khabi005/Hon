@@ -356,8 +356,9 @@ class HonDownloadManagerBridge(
                 val intervalHours = (call.argument<Int>("intervalHours") ?: 24).toLong()
                 val unmeteredOnly = call.argument<Boolean>("unmeteredOnly") ?: true
                 val batteryNotLow = call.argument<Boolean>("batteryNotLow") ?: true
+                val charging = call.argument<Boolean>("charging") ?: false
                 try {
-                    HonUpdateCheckWorker.schedule(context, enabled, intervalHours, unmeteredOnly, batteryNotLow)
+                    HonUpdateCheckWorker.schedule(context, enabled, intervalHours, unmeteredOnly, batteryNotLow, charging)
                     result.success(true)
                 } catch (e: Exception) {
                     result.error("SCHEDULE_FAILED", e.message, null)

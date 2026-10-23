@@ -73,7 +73,10 @@ class HomeScreen extends ConsumerWidget {
           slivers: [
             SliverHonLargeTitle(
               title: 'Home',
-              eyebrow: DateFormat('EEEE, d MMMM').format(DateTime.now()),
+              eyebrow: [
+                DateFormat('EEEE, d MMMM').format(DateTime.now()),
+                if (DatabaseService.instance.incognito) 'Incognito',
+              ].join(' · '),
               actions: [
                 IconButton(
                   tooltip: 'Reading goals',

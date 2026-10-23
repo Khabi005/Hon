@@ -32,6 +32,15 @@ class HonUpdateCheckWorkerTest {
         assertTrue(request.tags.contains("hon_update_check"))
         assertEquals(NetworkType.UNMETERED, request.workSpec.constraints.requiredNetworkType)
         assertTrue(request.workSpec.constraints.requiresBatteryNotLow())
+        assertFalse(request.workSpec.constraints.requiresCharging())
+
+        val chargingRequest = HonUpdateCheckWorker.buildPeriodicWorkRequest(
+            intervalHours = 12,
+            unmeteredOnly = false,
+            batteryNotLow = false,
+            charging = true
+        )
+        assertTrue(chargingRequest.workSpec.constraints.requiresCharging())
     }
 
     class InMemoryUpdateCheckDatabase : UpdateCheckDatabase {

@@ -466,9 +466,15 @@ void main() {
       expect(file2.existsSync(), isTrue);
 
       var updatedChapters = db.getChapters('novel1');
-      expect(updatedChapters[0].downloadState, ChapterDownloadState.notDownloaded);
+      expect(
+        updatedChapters[0].downloadState,
+        ChapterDownloadState.notDownloaded,
+      );
       expect(updatedChapters[0].localFilePath, isNull);
-      expect(updatedChapters[1].downloadState, ChapterDownloadState.notDownloaded);
+      expect(
+        updatedChapters[1].downloadState,
+        ChapterDownloadState.notDownloaded,
+      );
       expect(updatedChapters[1].localFilePath, isNull);
       expect(updatedChapters[2].downloadState, ChapterDownloadState.downloaded);
       expect(updatedChapters[2].localFilePath, file2.path);
@@ -487,4 +493,64 @@ void main() {
       expect(updatedChapters.every((c) => c.localFilePath == null), isTrue);
     },
   );
+
+  test('incognito keeps places without touching history or stats', () async {
+    await db.saveBook(book('one'));
+    await db.saveBook(book('two'));
+    final earlier = DateTime(2026, 1, 1);
+    await db.saveProgress(
+      ReadingProgress(bookId: 'one', chapterIndex: 1, lastReadAt: earlier),
+    );
+
+    await db.setIncognito(true);
+    await db.saveProgress(
+      ReadingProgress(
+        bookId: 'one',
+        chapterIndex: 4,
+        lastReadAt: DateTime.now(),
+      ),
+    );
+    await db.saveProgress(
+      ReadingProgress(
+        bookId: 'two',
+        chapterIndex: 2,
+        lastReadAt: DateTime.now(),
+      ),
+    );
+    await db.addReadingTime(600);
+
+    // The started book moves on but keeps its place in history.
+    expect(db.getProgress('one')!.chapterIndex, 4);
+    expect(db.getProgress('one')!.lastReadAt, earlier);
+    // The new one leaves no trace, and no minutes are counted.
+    expect(db.getProgress('two'), isNull);
+    expect(db.getTodayReadingMinutes(), 0);
+
+    await db.setIncognito(false);
+    await db.addReadingTime(600);
+    expect(db.getTodayReadingMinutes(), 10);
+  });
+
+  test('a full update check skips novels marked finished', () async {
+    await db.saveBook(book('ongoing'));
+    await db.saveBook(book('done'));
+    for (final id in ['ongoing', 'done']) {
+      await db.setLibraryMembership(id, true);
+      await db.saveChapters(id, [chapter('$id:a', id, 0)]);
+    }
+    await db.markBookFinished('done', true);
+    final checked = <String>[];
+    final updates = ChapterUpdateService(
+      fetch: (_, id) async {
+        checked.add(id);
+        return NovelDetails(id: id, title: 'Book', chapters: const []);
+      },
+    );
+    await updates.check();
+    expect(
+      checked,
+      isNot(contains(predicate<String>((id) => id.contains('done')))),
+    );
+    expect(checked, isNotEmpty);
+  });
 }

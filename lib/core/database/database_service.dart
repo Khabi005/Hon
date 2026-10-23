@@ -1686,7 +1686,24 @@ class DatabaseService {
   // --- Reading Progress ---
   ReadingProgress? getProgress(String bookId) => _readingProgress[bookId];
 
+  static const incognitoKey = 'hon_incognito';
+
+  /// Incognito reading: no history, no reading time. Books already started
+  /// still remember their place, without moving up in history; books opened
+  /// for the first time leave no trace.
+  bool get incognito => _prefs?.getBool(incognitoKey) ?? false;
+
+  Future<void> setIncognito(bool value) async {
+    await _prefs?.setBool(incognitoKey, value);
+    _notify();
+  }
+
   Future<void> saveProgress(ReadingProgress progress) async {
+    if (incognito) {
+      final previous = _readingProgress[progress.bookId];
+      if (previous == null) return;
+      progress = progress.copyWith(lastReadAt: previous.lastReadAt);
+    }
     _readingProgress[progress.bookId] = progress;
     final entry = _libraryEntries[progress.bookId];
     if (entry != null) {
@@ -2396,6 +2413,7 @@ class DatabaseService {
   }
 
   Future<void> addReadingTime(int seconds) async {
+    if (incognito) return;
     final now = DateTime.now();
     final dateKey = 'hon_reading_secs_${now.year}_${now.month}_${now.day}';
     final current = _prefs?.getInt(dateKey) ?? 0;

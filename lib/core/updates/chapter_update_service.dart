@@ -173,8 +173,10 @@ class ChapterUpdateService extends ChangeNotifier {
 
     try {
       await init();
+      // A full check skips novels marked finished, like the background check.
       final books = (only == null ? db.getLibraryBooks() : [only])
           .where((book) => book.format == BookFormat.webNovel)
+          .where((book) => only != null || db.getLibraryEntry(book.id)?.isFinished != true)
           .toList();
 
       if (books.isEmpty) return 0;
