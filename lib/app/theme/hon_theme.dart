@@ -8,6 +8,9 @@ class HonTheme {
   static final ThemeData lightTheme = _build(Brightness.light);
   static final ThemeData darkTheme = _build(Brightness.dark);
 
+  /// Bouncing overscroll everywhere instead of Android's stretch.
+  static const ScrollBehavior scrollBehavior = _HonScrollBehavior();
+
   static ThemeData _build(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     final ink = dark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
@@ -42,6 +45,15 @@ class HonTheme {
       scaffoldBackgroundColor: dark
           ? HonColors.darkBackground
           : HonColors.lightBackground,
+      // iOS feel: slide transitions with edge swipe-back, no ink ripples.
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        },
+      ),
+      splashFactory: NoSplash.splashFactory,
       cupertinoOverrideTheme: CupertinoThemeData(
         brightness: brightness,
         primaryColor: ink,
@@ -162,4 +174,19 @@ class HonTheme {
       ),
     );
   }
+}
+
+class _HonScrollBehavior extends MaterialScrollBehavior {
+  const _HonScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
 }

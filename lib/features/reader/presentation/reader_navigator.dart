@@ -41,6 +41,8 @@ class ReaderNavigator {
     if (book.format == BookFormat.pdf) {
       await Navigator.of(context).push(
         MaterialPageRoute(
+          // Modal, like Apple Books: no edge swipe-back to fight page turns.
+          fullscreenDialog: true,
           builder: (_) => PdfReaderScreen(
             book: book,
             initialPage: targetPageIndex > 0 ? targetPageIndex : 1,
@@ -61,19 +63,24 @@ class ReaderNavigator {
           // Keep the last valid native preferences if stored Dart preferences are damaged.
         }
       }
-      final bookOverrides =
-          DatabaseService.instance.getBookReaderSettings(book.id);
+      final bookOverrides = DatabaseService.instance.getBookReaderSettings(
+        book.id,
+      );
       double fontSize =
-          (((readerPrefs['size'] as num?)?.toDouble() ?? 18.0) / 18.0)
-              .clamp(0.5, 2.5);
+          (((readerPrefs['size'] as num?)?.toDouble() ?? 18.0) / 18.0).clamp(
+            0.5,
+            2.5,
+          );
       String theme = readerPrefs['theme'] as String? ?? 'calm';
       bool isScroll = readerPrefs['layout'] == 'verticalScroll';
       Map<String, dynamic> typography = Map<String, dynamic>.from(readerPrefs);
 
       if (bookOverrides != null) {
         if (bookOverrides['fontSize'] is num) {
-          fontSize =
-              (bookOverrides['fontSize'] as num).toDouble().clamp(0.5, 2.5);
+          fontSize = (bookOverrides['fontSize'] as num).toDouble().clamp(
+            0.5,
+            2.5,
+          );
         }
         if (bookOverrides['theme'] is String) {
           theme = bookOverrides['theme'] as String;
@@ -90,11 +97,13 @@ class ReaderNavigator {
           } catch (_) {}
         } else if (bookOverrides['typography'] is Map) {
           typography.addAll(
-              Map<String, dynamic>.from(bookOverrides['typography'] as Map));
+            Map<String, dynamic>.from(bookOverrides['typography'] as Map),
+          );
         }
       }
 
-      final appAppearance = preferences.getString(appAppearanceKey) ??
+      final appAppearance =
+          preferences.getString(appAppearanceKey) ??
           preferences.getString('hon_app_appearance');
       final isGlass = appAppearance == AppAppearance.liquidGlass.name;
 
@@ -161,6 +170,8 @@ class ReaderNavigator {
         if (shouldFallback == true && context.mounted) {
           await Navigator.of(context).push(
             MaterialPageRoute(
+              // Modal, like Apple Books: no edge swipe-back to fight page turns.
+              fullscreenDialog: true,
               builder: (_) => ReaderScreen(
                 book: book,
                 restoreSavedProgress: false,
@@ -178,6 +189,8 @@ class ReaderNavigator {
     } else {
       await Navigator.of(context).push(
         MaterialPageRoute(
+          // Modal, like Apple Books: no edge swipe-back to fight page turns.
+          fullscreenDialog: true,
           builder: (_) => ReaderScreen(
             book: book,
             restoreSavedProgress: false,

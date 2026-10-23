@@ -7,6 +7,7 @@ import '../../../../core/models/reading_progress.dart';
 import '../../../../shared/widgets/book_cover_widget.dart';
 import '../../../reader/presentation/reader_navigator.dart';
 import '../../../../app/theme/hon_colors.dart';
+import '../../../../shared/widgets/pressable_scale.dart';
 
 class ContinueReadingCard extends StatelessWidget {
   final Book book;
@@ -30,7 +31,7 @@ class ContinueReadingCard extends StatelessWidget {
     return Semantics(
       button: true,
       label: 'Continue reading ${book.title}, $pct percent read',
-      child: GestureDetector(
+      child: PressableScale(
         onTap: () => ReaderNavigator.openBook(context, book),
         child: GlassSurface(
           width: width,

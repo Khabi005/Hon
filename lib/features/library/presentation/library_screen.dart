@@ -21,6 +21,7 @@ import '../../browse/presentation/source_catalog_screen.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/updates/chapter_update_service.dart';
 import '../../../core/export/epub_export_service.dart';
+import '../../../shared/widgets/pressable_scale.dart';
 
 enum LibraryFilter { all, epubs, pdfs, novels, finished }
 
@@ -849,7 +850,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       button: true,
       label: 'Read ${book.title}',
       hint: 'Long press for book options',
-      child: GestureDetector(
+      child: PressableScale(
         onTap: () => _handleBookTap(context, book),
         onLongPress: () => _showBookOptionsSheet(context, book),
         child: Column(

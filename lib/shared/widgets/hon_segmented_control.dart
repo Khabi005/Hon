@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class HonSegmentedControl extends StatelessWidget {
   final List<String> labels;
@@ -38,7 +39,10 @@ class HonSegmentedControl extends StatelessWidget {
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(10),
-                  onTap: () => onChanged(index),
+                  onTap: () {
+                    if (index != selected) HapticFeedback.selectionClick();
+                    onChanged(index);
+                  },
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,

@@ -16,6 +16,7 @@ import 'widgets/reading_goals_sheet.dart';
 import 'widgets/reading_week.dart';
 import 'widgets/source_discovery_card.dart';
 import 'reading_history_screen.dart';
+import '../../../shared/widgets/pressable_scale.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -409,7 +410,7 @@ class HomeScreen extends ConsumerWidget {
           return Semantics(
             button: true,
             label: 'Read ${book.title}',
-            child: GestureDetector(
+            child: PressableScale(
               onTap: () => ReaderNavigator.openBook(context, book),
               child: SizedBox(
                 width: 96,
