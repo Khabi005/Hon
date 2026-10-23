@@ -248,14 +248,36 @@ class ThemesSettingsSheet extends ConsumerWidget {
                   ),
                 ),
                 if (!prefs.isSystemBrightness)
-                  _SettingSlider(
+                  // Apple Books style: a small sun, the slider, a large sun.
+                  Semantics(
                     label: 'Brightness',
-                    value: prefs.brightness.clamp(0.1, 1.0),
-                    min: .1,
-                    max: 1,
-                    format: (value) => '${(value * 100).round()}%',
-                    onChanged: notifier.setBrightness,
-                    onCommitted: notifier.setBrightness,
+                    value: '${(prefs.brightness.clamp(0.1, 1.0) * 100).round()}%',
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            CupertinoIcons.sun_min,
+                            size: 16,
+                            color: cfg.secondaryTextColor,
+                          ),
+                          Expanded(
+                            child: CupertinoSlider(
+                              value: prefs.brightness.clamp(0.1, 1.0),
+                              min: .1,
+                              max: 1,
+                              activeColor: cfg.textColor,
+                              onChanged: notifier.setBrightness,
+                            ),
+                          ),
+                          Icon(
+                            CupertinoIcons.sun_max_fill,
+                            size: 22,
+                            color: cfg.secondaryTextColor,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 const SizedBox(height: 8),
                 GridView.builder(
@@ -628,12 +650,11 @@ class ThemesSettingsSheet extends ConsumerWidget {
 }
 
 /// Text layout changes commit at release, so a drag does not repaginate the book
-/// on every pointer update. Brightness can still preview immediately.
+/// on every pointer update.
 class _SettingSlider extends StatefulWidget {
   final String label;
   final double value, min, max;
   final String Function(double) format;
-  final ValueChanged<double>? onChanged;
   final ValueChanged<double> onCommitted;
   const _SettingSlider({
     required this.label,
@@ -641,7 +662,6 @@ class _SettingSlider extends StatefulWidget {
     required this.min,
     required this.max,
     required this.format,
-    this.onChanged,
     required this.onCommitted,
   });
   @override
@@ -669,7 +689,6 @@ class _SettingSliderState extends State<_SettingSlider> {
           semanticFormatterCallback: widget.format,
           onChanged: (next) {
             setState(() => _drag = next);
-            widget.onChanged?.call(next);
           },
           onChangeEnd: (next) {
             widget.onCommitted(next);
