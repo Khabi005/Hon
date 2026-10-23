@@ -14,6 +14,7 @@ import 'package:hon/core/models/download_job.dart';
 import 'package:hon/core/models/novel_source.dart';
 import 'package:hon/core/models/reading_progress.dart';
 import 'package:hon/core/updates/chapter_update_service.dart';
+import 'package:hon/core/downloads/download_preferences.dart';
 import 'package:hon/core/downloads/hon_download_manager.dart';
 import 'package:hon/core/sources/source_registry.dart';
 import 'package:hon/core/sources/source_preferences.dart';
@@ -144,6 +145,37 @@ void main() {
       expect(db.getChapters('one').length, 2);
     },
   );
+  test('auto-download queues only chapters an update check found', () async {
+    await db.saveBook(book('one'));
+    await db.setLibraryMembership('one', true);
+    await db.saveChapters('one', [chapter('old', 'one', 0)]);
+    SourceChapter source(String id, int i) => SourceChapter(
+      id: id,
+      title: 'Chapter $id',
+      index: i.toDouble(),
+      url: 'https://example.test/$id',
+    );
+    var chapters = [source('old', 0), source('new', 1)];
+    final updates = ChapterUpdateService(
+      fetch: (_, id) async =>
+          NovelDetails(id: id, title: 'Book', chapters: chapters),
+    );
+
+    // Off by default: the new chapter is listed but not queued.
+    expect(await updates.check(), 1);
+    expect(db.getAllDownloadJobs(), isEmpty);
+
+    await DownloadPreferences.setAutoDownloadNew(true);
+    chapters = [...chapters, source('newer', 2)];
+    expect(await updates.check(), 1);
+    expect(updates.errors, isEmpty);
+    final jobs = db.getAllDownloadJobs();
+    expect(jobs.map((j) => j.chapterId), ['one:newer']);
+    // Queued with the same managed file path the download manager uses.
+    final queued = db.getChapters('one').firstWhere((c) => c.id == 'one:newer');
+    expect(queued.localFilePath, startsWith('${folder.path}/chapters/'));
+    await HonDownloadManager.instance.cancelDownload(jobs.single.id);
+  });
   test(
     'portable backup restores files, locators, collections and paused jobs',
     () async {
@@ -456,4 +488,3 @@ void main() {
     },
   );
 }
-

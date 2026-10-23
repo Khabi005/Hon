@@ -11,6 +11,7 @@ import '../../../core/files/storage_service.dart';
 import '../../reader/sheets/themes_settings_sheet.dart';
 import 'extension_repositories_screen.dart';
 import 'backup_restore_screen.dart';
+import '../../../core/downloads/download_preferences.dart';
 import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/updates/background_update_service.dart';
 
@@ -25,6 +26,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _storageBytes = 0;
   bool _isCleaning = false;
   bool _wifiOnly = false;
+  bool _autoDownloadNew = false;
+  bool _deleteAfterReading = false;
   bool _changingNetwork = false;
   BackgroundUpdateSettings _updateSettings = const BackgroundUpdateSettings();
   bool _triggeringUpdate = false;
@@ -36,6 +39,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadUpdateSettings();
     HonDownloadManager.instance.wifiOnly.then((value) {
       if (mounted) setState(() => _wifiOnly = value);
+    });
+    DownloadPreferences.autoDownloadNew().then((value) {
+      if (mounted) setState(() => _autoDownloadNew = value);
+    });
+    DownloadPreferences.deleteAfterReading().then((value) {
+      if (mounted) setState(() => _deleteAfterReading = value);
     });
   }
 
@@ -263,6 +272,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             }
                           }
                         },
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  title: const Text('Download new chapters'),
+                  subtitle: const Text(
+                    'Save chapters found by update checks for offline reading',
+                  ),
+                  value: _autoDownloadNew,
+                  onChanged: (value) async {
+                    setState(() => _autoDownloadNew = value);
+                    await DownloadPreferences.setAutoDownloadNew(value);
+                  },
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  title: const Text('Delete chapters after reading'),
+                  subtitle: const Text(
+                    'Remove a chapter\'s offline copy when you move on to the next one',
+                  ),
+                  value: _deleteAfterReading,
+                  onChanged: (value) async {
+                    setState(() => _deleteAfterReading = value);
+                    await DownloadPreferences.setDeleteAfterReading(value);
+                  },
                 ),
                 const Divider(height: 1),
                 ListTile(

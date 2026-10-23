@@ -136,7 +136,9 @@ class HonUpdateCheckWorker(
             networkFetcher: suspend (sourceId: String, novelUrl: String) -> List<ChapterData>?,
             notifier: (newChapters: Int, booksCount: Int) -> Unit,
             isStoppedCheck: () -> Boolean = { false },
-            delayProvider: suspend (ms: Long) -> Unit = { delay(it) }
+            delayProvider: suspend (ms: Long) -> Unit = { delay(it) },
+            // Chapters added since the last check (never on a book's first check).
+            onNewChapters: (bookId: String, sourceId: String, chapters: List<ExistingChapter>) -> Unit = { _, _, _ -> }
         ): UpdateCheckResult {
             if (database == null) {
                 return UpdateCheckResult(0, 0, 0, 1, "Database not available")
@@ -287,6 +289,11 @@ class HonUpdateCheckWorker(
                     if (newlyAddedCount > 0) {
                         totalNewChapters += newlyAddedCount
                         booksWithUpdates++
+                        try {
+                            onNewChapters(bookId, sourceId, newChapters)
+                        } catch (_: Exception) {
+                            // Saving the chapter list matters more than queueing them.
+                        }
                     }
                 } catch (e: Exception) {
                     failures++
@@ -330,7 +337,15 @@ class HonUpdateCheckWorker(
             enabledSourceIds = enabledSources,
             networkFetcher = { sourceId, novelUrl -> fetchChaptersFromSource(sourceId, novelUrl) },
             notifier = { newChapters, booksCount -> postUpdateNotification(newChapters, booksCount) },
-            isStoppedCheck = { isStopped }
+            isStoppedCheck = { isStopped },
+            onNewChapters = { bookId, sourceId, chapters ->
+                if (db != null && AutoDownloadQueue.isEnabled(context)) {
+                    val jobs = AutoDownloadQueue.persist(
+                        db, bookId, sourceId, chapters, AutoDownloadQueue.chaptersDir(context)
+                    )
+                    AutoDownloadQueue.schedule(context, jobs)
+                }
+            }
         )
 
         db?.close()
