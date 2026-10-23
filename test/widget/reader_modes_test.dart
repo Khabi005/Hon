@@ -101,9 +101,9 @@ void main() {
           .setLayoutMode(ReaderLayoutMode.verticalScroll);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 500));
-      expect(find.byType(ListView), findsOneWidget);
+      expect(find.byType(CustomScrollView), findsOneWidget);
       for (var i = 0; i < 30; i++) {
-        await tester.drag(find.byType(ListView), const Offset(0, -600));
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
         await tester.pump();
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -113,7 +113,7 @@ void main() {
       }
       expect(find.text('Chapter 2 of 2'), findsOneWidget);
       for (var i = 0; i < 30; i++) {
-        await tester.drag(find.byType(ListView), const Offset(0, 600));
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, 600));
         await tester.pump();
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -122,6 +122,94 @@ void main() {
         if (find.text('Chapter 1 of 2').evaluate().isNotEmpty) break;
       }
       expect(find.text('Chapter 1 of 2'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'scrolling up loads the previous chapter without moving the text',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final db = DatabaseService.instance;
+      await db.init(AppDatabase.inMemory());
+      final folder = Directory.systemTemp.createTempSync('hon_reader_prepend_');
+      addTearDown(() {
+        if (folder.existsSync()) folder.deleteSync(recursive: true);
+      });
+      final now = DateTime.now();
+      final book = Book(
+        id: 'reader_prepend',
+        title: 'Prepend Test',
+        format: BookFormat.webNovel,
+        totalChapters: 2,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final chapters = <Chapter>[];
+      for (final (i, word) in ['Alpha', 'Beta'].indexed) {
+        final file = File('${folder.path}/$i.html')
+          ..writeAsStringSync(
+            '<p>${List.filled(120, '$word chapter text.').join(' ')}</p>',
+          );
+        chapters.add(
+          Chapter(
+            id: 'c$i',
+            bookId: book.id,
+            sourceChapterId: 'c$i',
+            title: '$word Chapter',
+            chapterIndex: i.toDouble(),
+            localFilePath: file.path,
+            updatedAt: now,
+          ),
+        );
+      }
+      await db.saveBook(book);
+      await db.saveChapters(book.id, chapters);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: ReaderScreen(
+              book: book,
+              initialChapterIndex: 1,
+              restoreSavedProgress: false,
+            ),
+          ),
+        ),
+      );
+      Future<void> settle() async {
+        for (var i = 0; i < 6; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+          await tester.pump(const Duration(milliseconds: 200));
+        }
+      }
+
+      await settle();
+      final element = tester.element(find.byType(ReaderScreen));
+      ProviderScope.containerOf(element)
+          .read(readerPreferencesProvider.notifier)
+          .setLayoutMode(ReaderLayoutMode.verticalScroll);
+      await settle();
+      expect(find.text('Chapter 2 of 2'), findsOneWidget);
+      final heading = find.text('Beta Chapter', findRichText: true);
+      expect(heading, findsOneWidget);
+
+      // A small pull down from the top of chapter 2 asks for chapter 1.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, 40));
+      await tester.pump();
+      final before = tester.getTopLeft(heading).dy;
+      await settle();
+      // Chapter 1 went in above; chapter 2's heading stayed where it was.
+      expect(tester.getTopLeft(heading).dy, closeTo(before, 1));
+
+      for (var i = 0; i < 20; i++) {
+        if (find.text('Chapter 1 of 2').evaluate().isNotEmpty) break;
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
+        await settle();
+      }
+      expect(find.text('Chapter 1 of 2'), findsOneWidget);
+      expect(find.text('Alpha Chapter', findRichText: true), findsOneWidget);
     },
   );
 }

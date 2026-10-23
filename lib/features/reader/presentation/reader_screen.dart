@@ -67,6 +67,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   List<EpubChapterItem> _chapters = [];
   int _scrollBaseIndex = 0;
+  // Chapter at scroll offset 0. Earlier chapters are prepended above it in a
+  // reverse-growing sliver, so loading one never moves the text on screen.
+  int _scrollAnchorIndex = 0;
   final Map<int, GlobalKey> _chapterKeys = {};
   bool _prependingChapter = false;
   int _currentChapterIndex = 0;
@@ -291,7 +294,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _restoringAnchor = true;
     _scrollController.jumpTo(
       (_scrollController.offset + delta).clamp(
-        0.0,
+        _scrollController.position.minScrollExtent,
         _scrollController.position.maxScrollExtent,
       ),
     );
@@ -450,8 +453,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         ),
       ),
     );
-    final selectableRichText = SelectionListener(
-      selectionNotifier: _selectionNotifierFor(chapter, index, start),
+    final selectableRichText = _TrackedSelection(
+      registry: _selectionNotifiers,
+      id: start == 0 ? '$chapter:$index' : '$chapter:$index@$start',
       child: richText,
     );
 
@@ -521,19 +525,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   late ReaderPreferencesNotifier _prefsNotifier;
   final Map<String, SelectionListenerNotifier> _selectionNotifiers = {};
 
-  /// One notifier per rendered piece of text. In paged mode a paragraph can
-  /// be split across two pages that are both on screen mid-swipe, and a
-  /// notifier may only listen to one widget, so fragments get their own key.
-  SelectionListenerNotifier _selectionNotifierFor(
-    int chapter,
-    int block, [
-    int start = 0,
-  ]) {
-    return _selectionNotifiers.putIfAbsent(
-      start == 0 ? '$chapter:$block' : '$chapter:$block@$start',
-      () => SelectionListenerNotifier(),
-    );
-  }
+  /// Live selection notifiers by `chapter:block` (or `chapter:block@start`
+  /// for a paged fragment), filled in by [_TrackedSelection].
 
   @override
   void initState() {
@@ -556,7 +549,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _sessionStartTime = null;
     _currentChapterIndex = widget.initialChapterIndex;
     _currentPageIndex = widget.initialPageIndex;
-    _scrollBaseIndex = _currentChapterIndex;
+    _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
     _pageController = PageController(initialPage: _currentPageIndex + 1);
     _scrollController = ScrollController();
 
@@ -648,9 +641,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       prefs.setActiveBookId(null);
       prefs.reloadDefaults();
     });
-    for (final notifier in _selectionNotifiers.values) {
-      notifier.dispose();
-    }
     _selectionNotifiers.clear();
     super.dispose();
   }
@@ -1002,7 +992,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _anchor = ReaderTextAnchor(blockIdx, offset);
       _hasAnchor = true;
       _layoutSignature = null;
-      _scrollBaseIndex = chIdx;
+      _scrollBaseIndex = _scrollAnchorIndex = chIdx;
       _chapterKeys.clear();
       _isBookmarked = DatabaseService.instance.isBookmarked(
         widget.book.id,
@@ -1083,7 +1073,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _anchor = ReaderTextAnchor(blockIdx, offset);
       _hasAnchor = true;
       _layoutSignature = null;
-      _scrollBaseIndex = chIdx;
+      _scrollBaseIndex = _scrollAnchorIndex = chIdx;
       _chapterKeys.clear();
       _isBookmarked = DatabaseService.instance.isBookmarked(
         widget.book.id,
@@ -1308,7 +1298,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               0,
               loadedChapters.length - 1,
             );
-            _scrollBaseIndex = _currentChapterIndex;
+            _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
             _isBookmarked = DatabaseService.instance.isBookmarked(
               widget.book.id,
               _currentChapterIndex,
@@ -1394,7 +1384,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               } else {
                 _currentChapterIndex = 0;
               }
-              _scrollBaseIndex = _currentChapterIndex;
+              _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
               _isBookmarked = DatabaseService.instance.isBookmarked(
                 widget.book.id,
                 _currentChapterIndex,
@@ -1525,7 +1515,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _anchor = const ReaderTextAnchor(0);
         _hasAnchor = true;
         _layoutSignature = null;
-        _scrollBaseIndex = index;
+        _scrollBaseIndex = _scrollAnchorIndex = index;
         _chapterKeys.clear();
         _isBookmarked = DatabaseService.instance.isBookmarked(
           widget.book.id,
@@ -1562,7 +1552,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       _captureAnchor();
       if (next.layoutMode == ReaderLayoutMode.verticalScroll &&
           previous.layoutMode != next.layoutMode) {
-        _scrollBaseIndex = _currentChapterIndex;
+        _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
         _chapterKeys.clear();
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1670,10 +1660,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
+    final topPadding = MediaQuery.of(context).padding.top + 68;
+    final horizontal = EdgeInsets.symmetric(horizontal: prefs.horizontalMargin);
+    final before = _scrollAnchorIndex - _scrollBaseIndex;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
-        if (notification is OverscrollNotification &&
-            notification.overscroll < 0 &&
+        // Bouncing physics never reports overscroll, so load the previous
+        // chapter as the reader nears the top instead of waiting for it.
+        final metrics = notification.metrics;
+        if (notification is ScrollUpdateNotification &&
+            metrics.axis == Axis.vertical &&
+            metrics.pixels <
+                metrics.minScrollExtent + metrics.viewportDimension &&
+            (notification.scrollDelta ?? 0) < 0 &&
             _scrollBaseIndex > 0 &&
             !_prependingChapter) {
           _prependingChapter = true;
@@ -1696,69 +1695,99 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         }
         return false;
       },
-      child: ListView.builder(
-        key: ValueKey('scroll_$_scrollBaseIndex'),
+      child: CustomScrollView(
+        key: ValueKey('scroll_$_scrollAnchorIndex'),
         controller: _scrollController,
         physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          prefs.horizontalMargin,
-          MediaQuery.of(context).padding.top + 68,
-          prefs.horizontalMargin,
-          MediaQuery.of(context).padding.bottom + 52,
-        ),
-        itemCount: _chapters.length - _scrollBaseIndex,
-        itemBuilder: (context, index) {
-          final chapterIndex = _scrollBaseIndex + index;
-          if (_chapters[chapterIndex].htmlContent.isEmpty) {
-            return SizedBox(
-              key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
-              height: MediaQuery.sizeOf(context).height * 0.8,
-              child: _missingChapter(chapterIndex, themeConfig),
-            );
-          }
-          return _selectableContent(
-            Column(
-              key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (chapterIndex > _scrollBaseIndex) const SizedBox(height: 52),
-                for (
-                  var block = 0;
-                  block < _document(chapterIndex).blocks.length;
-                  block++
-                )
-                  Padding(
-                    padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
-                    child: _blockWidget(
-                      chapterIndex,
-                      block,
-                      prefs,
-                      track: true,
-                    ),
-                  ),
-                const SizedBox(height: 24),
-              ],
+        center: _scrollCenterKey,
+        slivers: [
+          // Earlier chapters, nearest first, growing upwards from offset 0.
+          SliverPadding(
+            padding: horizontal,
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => index == before
+                    ? SizedBox(height: topPadding)
+                    : _scrollChapter(
+                        _scrollAnchorIndex - 1 - index,
+                        prefs,
+                        themeConfig,
+                      ),
+                childCount: before == 0 ? 0 : before + 1,
+              ),
             ),
-          );
-        },
+          ),
+          SliverToBoxAdapter(
+            key: _scrollCenterKey,
+            child: SizedBox(height: topPadding),
+          ),
+          SliverPadding(
+            padding: horizontal.copyWith(
+              bottom: MediaQuery.of(context).padding.bottom + 52,
+            ),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _scrollChapter(
+                  _scrollAnchorIndex + index,
+                  prefs,
+                  themeConfig,
+                ),
+                childCount: _chapters.length - _scrollAnchorIndex,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  final Key _scrollCenterKey = UniqueKey();
+
+  Widget _scrollChapter(
+    int chapterIndex,
+    ReaderPreferencesState prefs,
+    ReaderThemeConfig themeConfig,
+  ) {
+    if (_chapters[chapterIndex].htmlContent.isEmpty) {
+      return SizedBox(
+        key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
+        height: MediaQuery.sizeOf(context).height * 0.8,
+        child: _missingChapter(chapterIndex, themeConfig),
+      );
+    }
+    return _selectableContent(
+      Column(
+        key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (
+            var block = 0;
+            block < _document(chapterIndex).blocks.length;
+            block++
+          )
+            Padding(
+              padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
+              child: _blockWidget(chapterIndex, block, prefs, track: true),
+            ),
+          // The gap sits below each chapter, so adding one above never
+          // changes the height of the chapter being read.
+          const SizedBox(height: 76),
+        ],
       ),
     );
   }
 
   void _prependPreviousChapter() {
-    if (_scrollBaseIndex <= 0 || !_scrollController.hasClients) {
+    if (!mounted || _scrollBaseIndex <= 0) {
       _prependingChapter = false;
       return;
     }
-    final oldOffset = _scrollController.offset;
     final previous = _scrollBaseIndex - 1;
-    setState(() => _scrollBaseIndex = previous);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      final box = _chapterKeys[previous]?.currentContext?.findRenderObject();
-      if (box is RenderBox) {
-        _scrollController.jumpTo(oldOffset + box.size.height);
-      }
+    // Make sure its text is loaded; the empty placeholder would otherwise
+    // be replaced by the real chapter above the reader a moment later.
+    _ensureChapterContent(previous).whenComplete(() {
+      if (!mounted) return;
+      setState(() => _scrollBaseIndex = previous);
       _prependingChapter = false;
     });
   }
@@ -2193,4 +2222,55 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       }
     }
   }
+}
+
+/// Gives each rendered piece of text its own [SelectionListenerNotifier] and
+/// publishes it in [registry] under [id] while mounted. A notifier can only
+/// serve one listener, and the same paragraph can be built twice at once
+/// (two pages mid-swipe, or old and new layouts while switching modes).
+class _TrackedSelection extends StatefulWidget {
+  const _TrackedSelection({
+    required this.registry,
+    required this.id,
+    required this.child,
+  });
+
+  final Map<String, SelectionListenerNotifier> registry;
+  final String id;
+  final Widget child;
+
+  @override
+  State<_TrackedSelection> createState() => _TrackedSelectionState();
+}
+
+class _TrackedSelectionState extends State<_TrackedSelection> {
+  final _notifier = SelectionListenerNotifier();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.registry[widget.id] = _notifier;
+  }
+
+  @override
+  void didUpdateWidget(_TrackedSelection old) {
+    super.didUpdateWidget(old);
+    if (old.id != widget.id || old.registry != widget.registry) {
+      if (old.registry[old.id] == _notifier) old.registry.remove(old.id);
+      widget.registry[widget.id] = _notifier;
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.registry[widget.id] == _notifier) {
+      widget.registry.remove(widget.id);
+    }
+    _notifier.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SelectionListener(selectionNotifier: _notifier, child: widget.child);
 }
