@@ -510,6 +510,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   late PageController _pageController;
   late ScrollController _scrollController;
   Timer? _saveDebounceTimer;
+  DateTime _lastVisibleCheck = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime? _sessionStartTime;
   bool _isForegrounded = true;
   late ReaderPreferencesNotifier _prefsNotifier;
@@ -1617,8 +1618,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             (_) => _prependPreviousChapter(),
           );
         }
-        if (notification is ScrollUpdateNotification ||
-            notification is ScrollEndNotification) {
+        // Walking every chapter's render box is costly; do it at most every
+        // 100 ms while scrolling, and always once the scroll settles.
+        final now = DateTime.now();
+        final settle = notification is ScrollEndNotification;
+        if ((settle || notification is ScrollUpdateNotification) &&
+            (settle ||
+                now.difference(_lastVisibleCheck) >
+                    const Duration(milliseconds: 100))) {
+          _lastVisibleCheck = now;
           WidgetsBinding.instance.addPostFrameCallback(
             (_) => _updateVisibleChapter(),
           );

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -99,6 +100,17 @@ class DatabaseService {
       changeNotifier.value++;
       if (library) libraryChangeNotifier.value++;
     }
+  }
+
+  Timer? _progressNotifyTimer;
+
+  /// Native progress events can arrive many times a second per job. Coalesce
+  /// them so Home, the tab bar and Downloads rebuild at most ~7 times a second.
+  void _notifyDownloadProgress() {
+    if (_progressNotifyTimer?.isActive ?? false) return;
+    _progressNotifyTimer = Timer(const Duration(milliseconds: 150), () {
+      _notify(library: false);
+    });
   }
 
   Future<void> reloadPreferences() async {
@@ -1046,7 +1058,7 @@ class DatabaseService {
     if (database == null) return;
     final row = await (database.select(database.downloadJobsTable)
       ..where((t) => t.id.equals(jobId))).getSingleOrNull();
-    if (row == null) { _downloadJobs.remove(jobId); _notify(library: false); return; }
+    if (row == null) { _downloadJobs.remove(jobId); _notifyDownloadProgress(); return; }
     _downloadJobs[row.id] = DownloadJob(
       id: row.id, bookId: row.bookId, chapterId: row.chapterId,
       chapterTitle: row.chapterTitle, sourceId: row.sourceId,
@@ -1084,7 +1096,7 @@ class DatabaseService {
     } else if (row.status == 'completed') {
       _downloadedCounts[row.bookId] = (_downloadedCounts[row.bookId] ?? 0) + 1;
     }
-    _notify(library: false);
+    _notifyDownloadProgress();
   }
 
   /// Refreshes all download jobs from Drift SQLite database into in-memory cache
