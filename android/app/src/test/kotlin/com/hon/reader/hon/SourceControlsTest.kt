@@ -112,8 +112,10 @@ NA3wJdl4DDUuQSV8hBgx6zoI1ZSGORprDFux7c6rhc77QZMSRrEgomBeklervEve
 LRFgxIAphIukwTGSMZZR+AI+Qnp0BYTWovHXozOf3H8r6hozEoT02JHn0AeTfA==
 -----END CERTIFICATE-----
 """
-        val leaf = cf.generateCertificate(leafPem.byteInputStream()) as java.security.cert.X509Certificate
-        val intermediate = cf.generateCertificate(intermediatePem.byteInputStream()) as java.security.cert.X509Certificate
+        // Conscrypt only treats input as PEM when it starts with '-', so trim
+        // the raw strings' leading newline.
+        val leaf = cf.generateCertificate(leafPem.trim().byteInputStream()) as java.security.cert.X509Certificate
+        val intermediate = cf.generateCertificate(intermediatePem.trim().byteInputStream()) as java.security.cert.X509Certificate
         val tm = SourceHttpClient.customTrustManagerForTesting()
         assertNotNull(tm)
         tm.checkServerTrusted(arrayOf(leaf, intermediate), "RSA")
