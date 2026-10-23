@@ -118,7 +118,20 @@ LRFgxIAphIukwTGSMZZR+AI+Qnp0BYTWovHXozOf3H8r6hozEoT02JHn0AeTfA==
         val intermediate = cf.generateCertificate(intermediatePem.trim().byteInputStream()) as java.security.cert.X509Certificate
         val tm = SourceHttpClient.customTrustManagerForTesting()
         assertNotNull(tm)
-        tm.checkServerTrusted(arrayOf(leaf, intermediate), "RSA")
+        // The sample leaf expires (2027-01-08), so validate the chain at a
+        // fixed date inside its lifetime against the trust manager's roots.
+        // That keeps proving the bundled ISRG Root YR anchors it after expiry.
+        val anchors = tm.acceptedIssuers.map { java.security.cert.TrustAnchor(it, null) }.toSet()
+        val params = java.security.cert.PKIXParameters(anchors).apply {
+            isRevocationEnabled = false
+            date = java.util.Date(leaf.notBefore.time + 24L * 60 * 60 * 1000)
+        }
+        val path = cf.generateCertPath(listOf(leaf, intermediate))
+        java.security.cert.CertPathValidator.getInstance("PKIX").validate(path, params)
+        // While the leaf is still current, also go through the real check.
+        if (java.util.Date().before(leaf.notAfter)) {
+            tm.checkServerTrusted(arrayOf(leaf, intermediate), "RSA")
+        }
     }
 }
 
