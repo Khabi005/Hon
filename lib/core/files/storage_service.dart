@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../utils/log_ignored.dart';
 
 class StorageService {
   static StorageService? _instance;
@@ -132,7 +133,9 @@ class StorageService {
       if (stagedFile.existsSync()) {
         stagedFile.deleteSync();
       }
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'storage_service');
+    }
   }
 
   Future<void> cleanStaging() async {
@@ -142,7 +145,9 @@ class StorageService {
           entity.deleteSync(recursive: true);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'storage_service');
+    }
   }
 
   Future<int> getStorageUsageBytes() async {

@@ -1,4 +1,5 @@
 import 'source_registry.dart';
+import '../utils/log_ignored.dart';
 
 enum SourceHealthState {
   ok,
@@ -138,7 +139,9 @@ class SourceHealthService {
       for (final l in info.listings) {
         listings.add(l.name);
       }
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'source_health_service');
+    }
 
     CapabilityStatus searchStatus;
     String searchMessage;

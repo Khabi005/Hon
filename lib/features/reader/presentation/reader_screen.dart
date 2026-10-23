@@ -29,6 +29,7 @@ import '../../../core/models/novel_source.dart';
 import '../../../core/sources/chapter_content_sanitizer.dart';
 import '../../../core/utils/reading_time.dart';
 import '../../browse/presentation/source_catalog_screen.dart';
+import '../../../core/utils/log_ignored.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
   final Book book;
@@ -404,7 +405,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'reader_screen');
+      }
     }
 
     final richText = Builder(
@@ -732,7 +735,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_screen');
+        }
       }
     }
 
@@ -953,7 +958,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             (loc['page'] as num?)?.toInt() ??
             (loc['pageIndex'] as num?)?.toInt() ??
             0;
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'reader_screen');
+      }
     }
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
@@ -1033,7 +1040,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             0;
       }
       pageIdx = (loc['pageIndex'] as num?)?.toInt() ?? 0;
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'reader_screen');
+    }
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
 
@@ -1197,7 +1206,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             );
             _hasAnchor = true;
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_screen');
+        }
       }
       if (savedProgress != null) {
         if (widget.initialChapterIndex == 0 && savedProgress.chapterIndex > 0) {
@@ -1340,7 +1351,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                   resolvedChapterIndex = matchIdx;
                 }
               }
-            } catch (_) {}
+            } catch (e) {
+              logIgnored(e, 'reader_screen');
+            }
           }
 
           if (mounted) {

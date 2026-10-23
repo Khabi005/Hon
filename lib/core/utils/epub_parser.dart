@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
 import 'package:path/path.dart' as p;
+import 'log_ignored.dart';
 
 class ParsedEpubMetadata {
   final String title;
@@ -238,7 +239,9 @@ class EpubParser {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'epub_parser');
+      }
     }
 
     // Try parsing Table of Contents from EPUB 3 Nav if present
@@ -262,7 +265,9 @@ class EpubParser {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'epub_parser');
+      }
     }
 
     // Spine
@@ -301,7 +306,9 @@ class EpubParser {
           if (h1 != null && h1.innerText.trim().isNotEmpty) {
             chapterTitle = h1.innerText.trim();
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'epub_parser');
+        }
       }
 
       chapters.add(

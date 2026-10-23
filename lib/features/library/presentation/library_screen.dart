@@ -23,6 +23,7 @@ import '../../../core/models/novel_source.dart';
 import '../../../core/updates/chapter_update_service.dart';
 import '../../../core/export/epub_export_service.dart';
 import '../../../shared/widgets/pressable_scale.dart';
+import '../../../core/utils/log_ignored.dart';
 
 enum LibraryFilter { all, epubs, pdfs, novels, finished }
 
@@ -131,7 +132,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           if (meta.coverBytes != null) {
             coverPath = await storage.saveCoverImage(bookId, meta.coverBytes!);
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'library_screen');
+        }
       }
 
       // 4. Promote to permanent storage

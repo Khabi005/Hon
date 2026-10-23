@@ -5,6 +5,7 @@ import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/log_ignored.dart';
 
 part 'app_database.g.dart';
 
@@ -253,7 +254,9 @@ class AppDatabase extends _$AppDatabase {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'app_database');
+        }
 
         try {
           final entries = await select(libraryEntriesTable).get();
@@ -275,7 +278,9 @@ class AppDatabase extends _$AppDatabase {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'app_database');
+        }
       }
     },
     beforeOpen: (_) async {

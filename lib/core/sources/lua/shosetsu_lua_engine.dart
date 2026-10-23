@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:lua_dardo_plus/lua.dart';
 
 import '../../models/novel_source.dart';
+import '../../utils/log_ignored.dart';
 
 class SourceNetworkException implements Exception {
   final String message;
@@ -162,7 +163,9 @@ class ShosetsuLuaEngine {
           if (releaseStr != null && releaseStr.isNotEmpty) {
             try {
               releaseDate = DateTime.tryParse(releaseStr);
-            } catch (_) {}
+            } catch (e) {
+              logIgnored(e, 'shosetsu_lua_engine');
+            }
           }
           return SourceChapter(
             id: ch['id'] as String,

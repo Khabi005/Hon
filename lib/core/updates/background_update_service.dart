@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/log_ignored.dart';
 
 class BackgroundUpdateSettings {
   final bool enabled;
@@ -106,7 +107,9 @@ class BackgroundUpdateService {
           'unmeteredOnly': newUnmetered,
           'batteryNotLow': newBattery,
         });
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'background_update_service');
+      }
     }
   }
 
@@ -117,7 +120,9 @@ class BackgroundUpdateService {
         await _channel.invokeMethod('triggerImmediateUpdateCheck', {
           'unmeteredOnly': unmeteredOnly ?? current.unmeteredOnly,
         });
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'background_update_service');
+      }
     }
   }
 }

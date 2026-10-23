@@ -14,6 +14,7 @@ import '../../../core/downloads/chapter_action_coordinator.dart';
 import '../../../core/models/bookmark.dart';
 import '../../../core/models/chapter.dart';
 import '../../../core/models/highlight.dart';
+import '../../../core/utils/log_ignored.dart';
 
 class ReaderContentsSheet extends StatefulWidget {
   final String? bookId;
@@ -929,7 +930,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
         try {
           final loc = jsonDecode(hl.locatorString) as Map<String, dynamic>;
           chIdx = (loc['chapterIndex'] as num?)?.toInt() ?? 0;
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_contents_sheet');
+        }
 
         final hlColor = colorFromKey(hl.color);
 

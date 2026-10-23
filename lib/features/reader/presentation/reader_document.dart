@@ -14,6 +14,7 @@ import 'package:path/path.dart' as p;
 
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/files/storage_service.dart';
+import '../../../core/utils/log_ignored.dart';
 
 /// A location in the original chapter, independent of page size and typography.
 class ReaderTextAnchor {
@@ -471,7 +472,9 @@ class _ReaderImageState extends State<_ReaderImage> {
         tmp.writeAsBytesSync(bytes, flush: true);
         tmp.renameSync(file.path);
       }
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'reader_document');
+    }
   }
   @override
   void initState() { super.initState(); _decode(); }

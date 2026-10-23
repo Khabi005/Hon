@@ -6,6 +6,7 @@ import '../database/database_service.dart';
 import '../models/highlight.dart';
 import '../models/reading_progress.dart';
 import '../utils/reading_time.dart';
+import '../utils/log_ignored.dart';
 
 class ReadiumOpenResult {
   final bool success;
@@ -582,7 +583,9 @@ class ReadiumReaderService {
         'locator': locator,
         'chapterIndex': chapterIndex,
       });
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'readium_reader_service');
+    }
   }
 
   static Future<void> applySettings({
@@ -601,7 +604,9 @@ class ReadiumReaderService {
         'isGlass': ?isGlass,
         'typography': ?typography,
       });
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'readium_reader_service');
+    }
   }
 
   static Future<Map<String, dynamic>?> closeSession() async {

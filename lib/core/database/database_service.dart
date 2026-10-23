@@ -17,6 +17,7 @@ import '../models/chapter_deletion_result.dart';
 import '../files/storage_service.dart';
 import '../utils/epub_parser.dart';
 import 'app_database.dart';
+import '../utils/log_ignored.dart';
 
 export '../models/chapter_deletion_result.dart';
 
@@ -505,7 +506,9 @@ class DatabaseService {
         for (final item in rows('highlights')) {
           try {
             await saveHighlight(Highlight.fromMap(item));
-          } catch (_) {}
+          } catch (e) {
+            logIgnored(e, 'database_service');
+          }
         }
         final settingsMap = data['bookReaderSettings'] as Map?;
         if (settingsMap != null) {
@@ -515,7 +518,9 @@ class DatabaseService {
                 entry.key.toString(),
                 Map<String, dynamic>.from(entry.value as Map),
               );
-            } catch (_) {}
+            } catch (e) {
+              logIgnored(e, 'database_service');
+            }
           }
         }
       });
@@ -761,7 +766,9 @@ class DatabaseService {
                 mode: drift.InsertMode.insertOrReplace,
               );
             }
-          } catch (_) {}
+          } catch (e) {
+            logIgnored(e, 'database_service');
+          }
         }
 
         for (final l in legacyLibEntries) {
@@ -823,7 +830,9 @@ class DatabaseService {
               );
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'database_service');
+        }
       }
 
       // 2. Rebuild library_collection_memberships_table from library_entries_table.collection_ids
@@ -1012,7 +1021,9 @@ class DatabaseService {
       try {
         _bookReaderSettings[row.bookId] =
             Map<String, dynamic>.from(jsonDecode(row.settingsJson) as Map);
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'database_service');
+      }
     }
   }
 
@@ -1463,7 +1474,9 @@ class DatabaseService {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'database_service');
+        }
       }
     }
 

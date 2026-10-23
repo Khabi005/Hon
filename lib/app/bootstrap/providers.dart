@@ -7,6 +7,7 @@ import '../../core/files/storage_service.dart';
 import '../../core/models/book.dart';
 import '../../core/models/download_job.dart';
 import '../theme/reader_theme.dart';
+import '../../core/utils/log_ignored.dart';
 
 // Shared so Home shortcuts select the existing tab rather than stacking copies.
 final navigationTabProvider = StateProvider<int>((ref) => 0);
@@ -290,7 +291,9 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
       try {
         final json = jsonDecode(raw) as Map<String, dynamic>;
         global = ReaderPreferencesState.fromMap(json);
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'providers');
+      }
     }
     _dirty = false;
     state = global;

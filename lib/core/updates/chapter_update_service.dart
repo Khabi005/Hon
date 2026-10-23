@@ -10,6 +10,7 @@ import '../models/book.dart';
 import '../models/chapter.dart';
 import '../models/novel_source.dart';
 import '../sources/source_registry.dart';
+import '../utils/log_ignored.dart';
 
 class ChapterUpdateService extends ChangeNotifier {
   static final instance = ChapterUpdateService();
@@ -58,7 +59,9 @@ class ChapterUpdateService extends ChangeNotifier {
               }
             }
           });
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'chapter_update_service');
+        }
       }
     }
 

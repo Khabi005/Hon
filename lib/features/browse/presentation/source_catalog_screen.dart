@@ -23,6 +23,7 @@ import '../../../core/sources/installed_extension_service.dart';
 import '../../../core/sources/source_preferences.dart';
 import '../../../core/sources/source_health_service.dart';
 import '../../../core/export/epub_export_service.dart';
+import '../../../core/utils/log_ignored.dart';
 
 
 class SourceCatalogScreen extends StatefulWidget {
@@ -833,7 +834,9 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
                 final vp = RenderAbstractViewport.of(renderBox);
                 final revealed = vp.getOffsetToReveal(renderBox, 0.0);
                 listStartOffset = revealed.offset + renderBox.size.height;
-              } catch (_) {}
+              } catch (e) {
+                logIgnored(e, 'source_catalog_screen');
+              }
             }
           }
           if (listStartOffset <= 0.0) {

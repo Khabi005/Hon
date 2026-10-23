@@ -11,6 +11,7 @@ import '../files/storage_service.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
 import '../sources/chapter_content_sanitizer.dart';
+import '../utils/log_ignored.dart';
 
 class EpubExportResult {
   final bool success;
@@ -167,7 +168,9 @@ img {
         archive.addFile(ArchiveFile(coverEntryName, coverBytes.length, coverBytes));
         coverManifestId = 'cover-image';
         manifestItems.add('<item id="cover-image" href="images/cover.$ext" media-type="$mime" properties="cover-image"/>');
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'epub_export_service');
+      }
     }
 
     int imageCounter = 0;
@@ -323,7 +326,9 @@ ${ncxNavPoints.join('\n')}
       if (await tempFile.exists()) {
         try {
           await tempFile.delete();
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'epub_export_service');
+        }
       }
       return EpubExportResult(
         success: false,
