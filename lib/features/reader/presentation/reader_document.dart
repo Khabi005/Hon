@@ -193,6 +193,18 @@ class ReaderDocument {
       'table',
       'tr',
       'td',
+      'th',
+      'dl',
+      'dt',
+      'dd',
+      'aside',
+      'nav',
+      'center',
+      'address',
+      'details',
+      'summary',
+      'caption',
+      'hgroup',
     };
     void visit(
       dom.Node node, {
@@ -312,7 +324,24 @@ class ReaderDocument {
           }
         }
       }
-      if (!hasExistingHeading) {
+      if (hasExistingHeading) {
+        final first = blocks.first;
+        final firstNorm = norm(first.text);
+        if (firstNorm == normTitle && !first.heading) {
+          // The source sent the chapter title as plain text: style it.
+          blocks[0] = ReaderBlock(runs: first.runs, heading: true);
+        } else if (firstNorm != normTitle &&
+            firstNorm.endsWith(normTitle) &&
+            first.text.length <= cleanTitle.length + 80) {
+          // Some sources put the novel name and chapter title in sibling
+          // inline elements ("Shadow Slave" + "Chapter 1"), which read as
+          // "Shadow SlaveChapter 1". Show just the chapter title.
+          blocks[0] = ReaderBlock(
+            heading: true,
+            runs: [ReaderRun(cleanTitle, const TextStyle())],
+          );
+        }
+      } else {
         blocks.insert(
           0,
           ReaderBlock(
