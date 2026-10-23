@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import '../../../app/bootstrap/providers.dart';
+import 'reader_auto_scroll.dart';
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/sources/source_registry.dart';
@@ -62,8 +63,10 @@ class ReaderScreen extends ConsumerStatefulWidget {
 enum ChapterLoadResult { refreshedOnline, offlineFallback, skipped, failed }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   bool _showControls = true;
+  late final ReaderAutoScroller _autoScroller;
+  bool _volumeKeyPaging = false;
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -556,6 +559,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _scrollController = ScrollController();
 
     _scrollController.addListener(_onScroll);
+    _autoScroller = ReaderAutoScroller(
+      vsync: this,
+      controller: _scrollController,
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+    );
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    ReaderInputPreferences.volumeKeys().then((on) => _volumeKeyPaging = on);
     _loadBookContent();
   }
 
@@ -619,6 +631,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _pauseReadingSession();
     _sessionStartTime = null;
     _saveDebounceTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    _autoScroller.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     for (final recognizer in _linkRecognizers.values) {
@@ -1502,6 +1516,88 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     DatabaseService.instance.saveProgress(progress);
   }
 
+  /// With "Volume keys turn pages" on, volume down goes forward and volume
+  /// up goes back, a page in paged mode or a screen in scroll mode.
+  bool _onHardwareKey(KeyEvent event) {
+    if (!_volumeKeyPaging || !mounted) return false;
+    final key = event.logicalKey;
+    final forward = key == LogicalKeyboardKey.audioVolumeDown;
+    if (!forward && key != LogicalKeyboardKey.audioVolumeUp) return false;
+    // Leave the volume alone while a sheet or menu is on top.
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    if (event is! KeyUpEvent) _turnPage(forward);
+    return true;
+  }
+
+  void _turnPage(bool forward) {
+    _noteReadingActivity();
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 250);
+    if (ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.verticalScroll) {
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      final step = position.viewportDimension * 0.85 * (forward ? 1 : -1);
+      final target = (position.pixels + step).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      if (duration == Duration.zero) {
+        _scrollController.jumpTo(target);
+      } else {
+        _scrollController.animateTo(
+          target,
+          duration: duration,
+          curve: Curves.easeOut,
+        );
+      }
+    } else if (_pageController.hasClients) {
+      if (forward) {
+        _pageController.nextPage(duration: duration, curve: Curves.easeOut);
+      } else {
+        _pageController.previousPage(duration: duration, curve: Curves.easeOut);
+      }
+    }
+  }
+
+  ({Offset position, Duration time, bool hadSelection})? _contentTapStart;
+
+  void _onContentPointerDown(PointerDownEvent event) {
+    _contentTapStart = (
+      position: event.position,
+      time: event.timeStamp,
+      // A tap that clears a selection shouldn't also toggle the controls.
+      hadSelection: _selectedQuote?.isNotEmpty == true,
+    );
+  }
+
+  void _onContentPointerUp(PointerUpEvent event) {
+    final start = _contentTapStart;
+    _contentTapStart = null;
+    if (start == null || start.hadSelection) return;
+    final moved = (event.position - start.position).distance;
+    final held = event.timeStamp - start.time;
+    if (moved > kTouchSlop || held > const Duration(milliseconds: 300)) return;
+    // Let a tapped link handle the tap alone.
+    if (_hitsLink(event.position)) return;
+    _toggleControls();
+  }
+
+  bool _hitsLink(Offset globalPosition) {
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      result,
+      globalPosition,
+      View.of(context).viewId,
+    );
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is TextSpan && target.recognizer != null) return true;
+    }
+    return false;
+  }
+
   void _toggleControls() {
     _noteReadingActivity();
     // Refresh the position so the footer's time left is current.
@@ -1552,6 +1648,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           previous.paragraphSpacing != next.paragraphSpacing ||
           previous.textIndent != next.textIndent ||
           previous.isJustified != next.isJustified;
+      if (previous.layoutMode != next.layoutMode) _autoScroller.stop();
       if (!reflowsText) return;
       _captureAnchor();
       if (next.layoutMode == ReaderLayoutMode.verticalScroll &&
@@ -1592,10 +1689,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             bottom: false,
             child: Stack(
               children: [
-                // Main Reading Content Area
-                GestureDetector(
-                  onTap: _toggleControls,
+                // Main Reading Content Area. Taps are read from raw pointer
+                // events: the text's SelectionArea wins the gesture arena for
+                // taps, so a GestureDetector here only saw taps on margins.
+                Listener(
                   behavior: HitTestBehavior.opaque,
+                  onPointerDown: _onContentPointerDown,
+                  onPointerUp: _onContentPointerUp,
+                  onPointerCancel: (_) => _contentTapStart = null,
                   child: prefs.layoutMode == ReaderLayoutMode.verticalScroll
                       ? _buildScrollView(prefs, themeConfig)
                       : _buildPagedView(prefs, themeConfig),
@@ -1617,6 +1718,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                     ),
                   ),
                 ),
+
+                if (_autoScroller.running && _showControls)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: MediaQuery.paddingOf(context).bottom + 66,
+                    child: Center(child: _buildAutoScrollControls(themeConfig)),
+                  ),
 
                 // Ambient Bottom Bar Overlay
                 Positioned(
@@ -1667,80 +1776,85 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final topPadding = MediaQuery.of(context).padding.top + 68;
     final horizontal = EdgeInsets.symmetric(horizontal: prefs.horizontalMargin);
     final before = _scrollAnchorIndex - _scrollBaseIndex;
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        // Bouncing physics never reports overscroll, so load the previous
-        // chapter as the reader nears the top instead of waiting for it.
-        final metrics = notification.metrics;
-        if (notification is ScrollUpdateNotification &&
-            metrics.axis == Axis.vertical &&
-            metrics.pixels <
-                metrics.minScrollExtent + metrics.viewportDimension &&
-            (notification.scrollDelta ?? 0) < 0 &&
-            _scrollBaseIndex > 0 &&
-            !_prependingChapter) {
-          _prependingChapter = true;
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _prependPreviousChapter(),
-          );
-        }
-        // Walking every chapter's render box is costly; do it at most every
-        // 100 ms while scrolling, and always once the scroll settles.
-        final now = DateTime.now();
-        final settle = notification is ScrollEndNotification;
-        if ((settle || notification is ScrollUpdateNotification) &&
-            (settle ||
-                now.difference(_lastVisibleCheck) >
-                    const Duration(milliseconds: 100))) {
-          _lastVisibleCheck = now;
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _updateVisibleChapter(),
-          );
-        }
-        return false;
-      },
-      child: CustomScrollView(
-        key: ValueKey('scroll_$_scrollAnchorIndex'),
-        controller: _scrollController,
-        physics: const BouncingScrollPhysics(),
-        center: _scrollCenterKey,
-        slivers: [
-          // Earlier chapters, nearest first, growing upwards from offset 0.
-          SliverPadding(
-            padding: horizontal,
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => index == before
-                    ? SizedBox(height: topPadding)
-                    : _scrollChapter(
-                        _scrollAnchorIndex - 1 - index,
-                        prefs,
-                        themeConfig,
-                      ),
-                childCount: before == 0 ? 0 : before + 1,
-              ),
-            ),
-          ),
-          SliverToBoxAdapter(
-            key: _scrollCenterKey,
-            child: SizedBox(height: topPadding),
-          ),
-          SliverPadding(
-            padding: horizontal.copyWith(
-              bottom: MediaQuery.of(context).padding.bottom + 52,
-            ),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => _scrollChapter(
-                  _scrollAnchorIndex + index,
-                  prefs,
-                  themeConfig,
+    return Listener(
+      onPointerDown: (_) => _autoScroller.hold(true),
+      onPointerUp: (_) => _autoScroller.hold(false),
+      onPointerCancel: (_) => _autoScroller.hold(false),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          // Bouncing physics never reports overscroll, so load the previous
+          // chapter as the reader nears the top instead of waiting for it.
+          final metrics = notification.metrics;
+          if (notification is ScrollUpdateNotification &&
+              metrics.axis == Axis.vertical &&
+              metrics.pixels <
+                  metrics.minScrollExtent + metrics.viewportDimension &&
+              (notification.scrollDelta ?? 0) < 0 &&
+              _scrollBaseIndex > 0 &&
+              !_prependingChapter) {
+            _prependingChapter = true;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _prependPreviousChapter(),
+            );
+          }
+          // Walking every chapter's render box is costly; do it at most every
+          // 100 ms while scrolling, and always once the scroll settles.
+          final now = DateTime.now();
+          final settle = notification is ScrollEndNotification;
+          if ((settle || notification is ScrollUpdateNotification) &&
+              (settle ||
+                  now.difference(_lastVisibleCheck) >
+                      const Duration(milliseconds: 100))) {
+            _lastVisibleCheck = now;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _updateVisibleChapter(),
+            );
+          }
+          return false;
+        },
+        child: CustomScrollView(
+          key: ValueKey('scroll_$_scrollAnchorIndex'),
+          controller: _scrollController,
+          physics: const BouncingScrollPhysics(),
+          center: _scrollCenterKey,
+          slivers: [
+            // Earlier chapters, nearest first, growing upwards from offset 0.
+            SliverPadding(
+              padding: horizontal,
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => index == before
+                      ? SizedBox(height: topPadding)
+                      : _scrollChapter(
+                          _scrollAnchorIndex - 1 - index,
+                          prefs,
+                          themeConfig,
+                        ),
+                  childCount: before == 0 ? 0 : before + 1,
                 ),
-                childCount: _chapters.length - _scrollAnchorIndex,
               ),
             ),
-          ),
-        ],
+            SliverToBoxAdapter(
+              key: _scrollCenterKey,
+              child: SizedBox(height: topPadding),
+            ),
+            SliverPadding(
+              padding: horizontal.copyWith(
+                bottom: MediaQuery.of(context).padding.bottom + 52,
+              ),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _scrollChapter(
+                    _scrollAnchorIndex + index,
+                    prefs,
+                    themeConfig,
+                  ),
+                  childCount: _chapters.length - _scrollAnchorIndex,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2115,6 +2229,40 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
   }
 
+  Widget _buildAutoScrollControls(ReaderThemeConfig themeConfig) {
+    Widget button(String tooltip, IconData icon, VoidCallback onTap) =>
+        IconButton(
+          tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, size: 18, color: themeConfig.textColor),
+          onPressed: onTap,
+        );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: themeConfig.uiControlsBackground.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            button('Slower', CupertinoIcons.minus, () => _autoScroller.changeSpeed(-ReaderAutoScroller.speedStep)),
+            Text(
+              'Auto-scroll ${_autoScroller.speed.round()}',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: themeConfig.textColor),
+            ),
+            button('Faster', CupertinoIcons.plus, () => _autoScroller.changeSpeed(ReaderAutoScroller.speedStep)),
+            button('Stop auto-scroll', CupertinoIcons.stop_fill, _autoScroller.stop),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// "12 min left" for the rest of the current chapter, once it is parsed.
   String? _timeLeftInChapter() {
     final document = _documents[_currentChapterIndex];
@@ -2161,6 +2309,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           onOpenSearch: () {
             _showBookSearch();
           },
+          isAutoScrolling: _autoScroller.running,
+          onToggleAutoScroll:
+              ref.read(readerPreferencesProvider).layoutMode ==
+                  ReaderLayoutMode.verticalScroll
+              ? () {
+                  _autoScroller.toggle();
+                  if (_autoScroller.running) {
+                    setState(() => _showControls = false);
+                  }
+                }
+              : null,
           onOpenThemes: () {
             ThemesSettingsSheet.show(context, bookId: widget.book.id);
           },

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hon/app/bootstrap/providers.dart';
@@ -10,7 +11,9 @@ import 'package:hon/core/downloads/download_preferences.dart';
 import 'package:hon/core/models/book.dart';
 import 'package:hon/core/files/storage_service.dart';
 import 'package:hon/core/models/chapter.dart';
+import 'package:hon/features/reader/presentation/reader_auto_scroll.dart';
 import 'package:hon/features/reader/presentation/reader_screen.dart';
+import 'package:hon/features/reader/widgets/reader_chrome.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -78,7 +81,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       for (
         var attempt = 0;
-        attempt < 10 && find.textContaining('Chapter 1 of 2').evaluate().isEmpty;
+        attempt < 10 &&
+            find.textContaining('Chapter 1 of 2').evaluate().isEmpty;
         attempt++
       ) {
         await tester.runAsync(
@@ -304,4 +308,108 @@ void main() {
       );
     },
   );
+
+  testWidgets('volume keys turn pages and auto-scroll moves the text', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      ReaderInputPreferences.volumeKeysKey: true,
+    });
+    final db = DatabaseService.instance;
+    await db.init(AppDatabase.inMemory());
+    final folder = Directory.systemTemp.createTempSync('hon_reader_keys_');
+    addTearDown(() {
+      if (folder.existsSync()) folder.deleteSync(recursive: true);
+    });
+    final file = File('${folder.path}/one.html')
+      ..writeAsStringSync(
+        '<p>${List.filled(3000, 'Volume chapter text.').join(' ')}</p>',
+      );
+    final now = DateTime.now();
+    final book = Book(
+      id: 'reader_keys',
+      title: 'Keys Test',
+      format: BookFormat.webNovel,
+      totalChapters: 1,
+      createdAt: now,
+      updatedAt: now,
+    );
+    await db.saveBook(book);
+    await db.saveChapters(book.id, [
+      Chapter(
+        id: 'k1',
+        bookId: book.id,
+        sourceChapterId: 'k1',
+        title: 'Chapter One',
+        chapterIndex: 0,
+        localFilePath: file.path,
+        updatedAt: now,
+      ),
+    ]);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: ReaderScreen(book: book, restoreSavedProgress: false),
+        ),
+      ),
+    );
+    Future<void> settle() async {
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+    }
+
+    await settle();
+    final pages = tester.widget<PageView>(find.byType(PageView)).controller!;
+    final start = pages.page!;
+    await tester.sendKeyEvent(LogicalKeyboardKey.audioVolumeDown);
+    await tester.pumpAndSettle();
+    expect(pages.page, closeTo(start + 1, 0.01));
+    await tester.sendKeyEvent(LogicalKeyboardKey.audioVolumeUp);
+    await tester.pumpAndSettle();
+    expect(pages.page, closeTo(start, 0.01));
+
+    ProviderScope.containerOf(tester.element(find.byType(ReaderScreen)))
+        .read(readerPreferencesProvider.notifier)
+        .setLayoutMode(ReaderLayoutMode.verticalScroll);
+    await settle();
+    final scroll = tester
+        .widget<CustomScrollView>(find.byType(CustomScrollView))
+        .controller!;
+    final before = scroll.offset;
+    await tester.tap(find.byTooltip('Reader menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Auto-Scroll'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+    expect(scroll.offset, greaterThan(before + 40));
+
+    // Volume down in scroll mode moves about a screen.
+    final held = scroll.offset;
+    expect(
+      tester
+          .widgetList<ReaderControlsVisibility>(
+            find.byType(ReaderControlsVisibility),
+          )
+          .map((w) => w.visible),
+      everyElement(isFalse),
+    );
+    // A tap on the text itself shows the controls again.
+    await tester.tap(find.byType(CustomScrollView));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('Auto-scroll'), findsOneWidget);
+    await tester.tap(find.byTooltip('Stop auto-scroll'));
+    await tester.pump();
+    final stopped = scroll.offset;
+    await tester.pump(const Duration(seconds: 1));
+    expect(scroll.offset, stopped);
+    expect(stopped, greaterThanOrEqualTo(held));
+    await tester.sendKeyEvent(LogicalKeyboardKey.audioVolumeDown);
+    await tester.pumpAndSettle();
+    expect(scroll.offset, greaterThan(stopped + 300));
+  });
 }

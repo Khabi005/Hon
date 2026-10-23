@@ -13,6 +13,8 @@ class ReaderMenuPopup extends StatelessWidget {
   final VoidCallback onToggleBookmark;
   final VoidCallback? onShareSelected;
   final VoidCallback? onReloadChapter;
+  final VoidCallback? onToggleAutoScroll;
+  final bool isAutoScrolling;
   final String searchLabel;
   final ReaderThemeConfig? theme;
   final VoidCallback onToggleOrientationLock;
@@ -29,6 +31,8 @@ class ReaderMenuPopup extends StatelessWidget {
     required this.onToggleBookmark,
     this.onShareSelected,
     this.onReloadChapter,
+    this.onToggleAutoScroll,
+    this.isAutoScrolling = false,
     this.searchLabel = 'Search Book',
     this.theme,
     required this.onToggleOrientationLock,
@@ -46,6 +50,8 @@ class ReaderMenuPopup extends StatelessWidget {
     required VoidCallback onToggleBookmark,
     VoidCallback? onShareSelected,
     VoidCallback? onReloadChapter,
+    VoidCallback? onToggleAutoScroll,
+    bool isAutoScrolling = false,
     String searchLabel = 'Search Book',
     ReaderThemeConfig? theme,
     required VoidCallback onToggleOrientationLock,
@@ -102,6 +108,13 @@ class ReaderMenuPopup extends StatelessWidget {
                     : () {
                         Navigator.of(ctx).pop();
                         onShareSelected();
+                      },
+                isAutoScrolling: isAutoScrolling,
+                onToggleAutoScroll: onToggleAutoScroll == null
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        onToggleAutoScroll();
                       },
                 onReloadChapter: onReloadChapter == null
                     ? null
@@ -200,6 +213,19 @@ class ReaderMenuPopup extends StatelessWidget {
             ),
             _buildDivider(isDark),
 
+            if (onToggleAutoScroll != null) ...[
+              _buildMenuItem(
+                title: isAutoScrolling ? 'Stop Auto-Scroll' : 'Auto-Scroll',
+                icon: isAutoScrolling
+                    ? CupertinoIcons.stop_circle
+                    : CupertinoIcons.play_circle,
+                textColor: textColor,
+                iconColor: iconColor,
+                onTap: onToggleAutoScroll!,
+              ),
+              _buildDivider(isDark),
+            ],
+
             // 4. Reload Chapter (if supported)
             if (onReloadChapter != null) ...[
               _buildMenuItem(
@@ -277,16 +303,20 @@ class ReaderMenuPopup extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: textColor,
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
               ),
             ),
+            const SizedBox(width: 12),
             Icon(icon, size: 19, color: iconColor),
           ],
         ),

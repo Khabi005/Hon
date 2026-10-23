@@ -12,6 +12,7 @@ import '../../reader/sheets/themes_settings_sheet.dart';
 import 'extension_repositories_screen.dart';
 import 'backup_restore_screen.dart';
 import '../../../core/downloads/download_preferences.dart';
+import '../../reader/presentation/reader_auto_scroll.dart';
 import '../../../core/downloads/hon_download_manager.dart';
 import '../../../core/updates/background_update_service.dart';
 
@@ -28,6 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _wifiOnly = false;
   bool _autoDownloadNew = false;
   bool _deleteAfterReading = false;
+  bool _volumeKeys = false;
   bool _changingNetwork = false;
   BackgroundUpdateSettings _updateSettings = const BackgroundUpdateSettings();
   bool _triggeringUpdate = false;
@@ -45,6 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     DownloadPreferences.deleteAfterReading().then((value) {
       if (mounted) setState(() => _deleteAfterReading = value);
+    });
+    ReaderInputPreferences.volumeKeys().then((value) {
+      if (mounted) setState(() => _volumeKeys = value);
     });
   }
 
@@ -147,6 +152,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
                   onTap: () => ThemesSettingsSheet.show(context),
                 );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          GlassSurface(
+            radius: 14,
+            child: SwitchListTile(
+              secondary: const Icon(
+                CupertinoIcons.speaker_2,
+                color: HonColors.accentOrange,
+              ),
+              title: const Text('Volume keys turn pages'),
+              subtitle: const Text('Volume down goes forward, up goes back'),
+              value: _volumeKeys,
+              onChanged: (value) async {
+                setState(() => _volumeKeys = value);
+                await ReaderInputPreferences.setVolumeKeys(value);
               },
             ),
           ),
