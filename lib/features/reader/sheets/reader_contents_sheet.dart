@@ -297,6 +297,42 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
     );
   }
 
+  /// Queues every chapter from the current one to the end, asking first when
+  /// that is a lot of chapters.
+  Future<void> _downloadRemainingInContents() async {
+    if (widget.bookId == null) return;
+    final db = DatabaseService.instance;
+    final book = db.getBookById(widget.bookId!);
+    if (book == null) return;
+    await db.ensureChaptersLoaded(book.id);
+    final remaining = db
+        .getChapters(book.id)
+        .skip(widget.currentChapterIndex.clamp(0, 1 << 30))
+        .where((c) => c.downloadState != ChapterDownloadState.downloaded)
+        .length;
+    if (!mounted) return;
+    if (remaining > 50) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Download $remaining chapters?'),
+          content: const Text('They download in the background and can be paused from Downloads.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Download')),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await ChapterActionCoordinator.instance.downloadNextN(
+      context,
+      book: book,
+      count: 1 << 30,
+      currentReadingIndex: widget.currentChapterIndex,
+    );
+  }
+
   Future<void> _deleteReadDownloadsInContents() async {
     if (widget.bookId == null) return;
     final db = DatabaseService.instance;
@@ -427,6 +463,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                         case 'custom':
                           await _downloadCustomInContents();
                           break;
+                        case 'remaining':
+                          await _downloadRemainingInContents();
+                          break;
                         case 'select':
                           setState(() => _isSelectionMode = true);
                           break;
@@ -461,6 +500,10 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                       const PopupMenuItem(
                         value: 'custom',
                         child: Text('Download custom count...'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'remaining',
+                        child: Text('Download all remaining'),
                       ),
                       const PopupMenuDivider(),
                       const PopupMenuItem(

@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hon/core/database/app_database.dart';
 import 'package:hon/core/database/database_service.dart';
+import 'package:hon/core/downloads/hon_download_manager.dart';
+import 'package:hon/core/files/storage_service.dart';
 import 'package:hon/core/models/book.dart';
 import 'package:hon/core/models/chapter.dart';
 import 'package:hon/core/utils/epub_parser.dart';
@@ -16,11 +20,15 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final db = DatabaseService.instance;
     await db.init(AppDatabase.inMemory());
+    final folder = Directory.systemTemp.createTempSync('hon_contents_');
+    addTearDown(() => folder.deleteSync(recursive: true));
+    StorageService.instance.setBaseDirForTesting(folder);
     final now = DateTime.now();
     final book = Book(
       id: 'contents',
       title: 'Contents Test',
       format: BookFormat.webNovel,
+      sourceId: 'test-source',
       totalChapters: count,
       createdAt: now,
       updatedAt: now,
@@ -34,8 +42,13 @@ void main() {
           sourceChapterId: 'c$i',
           title: 'Episode ${i + 1}',
           chapterIndex: i.toDouble(),
+          url: 'https://example.test/c$i',
           // Every third chapter is saved offline.
-          localFilePath: i % 3 == 0 ? '/managed/c$i.html' : null,
+          localFilePath: i % 3 == 0
+              ? (File(
+                  '${folder.path}/c$i.html',
+                )..writeAsStringSync('<p>x</p>')).path
+              : null,
           downloadState: i % 3 == 0
               ? ChapterDownloadState.downloaded
               : ChapterDownloadState.notDownloaded,
@@ -130,5 +143,25 @@ void main() {
     await tester.tap(find.text('Invert selection'));
     await tester.pumpAndSettle();
     expect(find.text('${count - 3} selected'), findsOneWidget);
+  });
+
+  testWidgets('download all remaining queues from the current chapter on', (
+    tester,
+  ) async {
+    await openSheet(tester);
+    await tester.tap(find.byTooltip('Chapter options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download all remaining'));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 300)),
+    );
+    await tester.pumpAndSettle();
+    final jobs = DatabaseService.instance.getAllDownloadJobs();
+    // Chapters 5 to 24, less the six already saved offline.
+    expect(jobs.length, 14);
+    expect(jobs.map((j) => j.chapterId), isNot(contains('c3')));
+    for (final job in jobs) {
+      await HonDownloadManager.instance.cancelDownload(job.id);
+    }
   });
 }
