@@ -139,10 +139,26 @@ class HonTheme {
         showDragHandle: true,
         clipBehavior: Clip.antiAlias,
       ),
+      // iOS-style alerts: narrower, centred title in UI weight, quieter body.
       dialogTheme: DialogThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
         shape: shape,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
+        titleTextStyle: TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -.3,
+          color: ink,
+        ),
+        contentTextStyle: TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 14,
+          height: 1.35,
+          color: secondary,
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       ),
       popupMenuTheme: PopupMenuThemeData(
         color: surface,
