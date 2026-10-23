@@ -233,6 +233,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Map<String, TapGestureRecognizer> _linkRecognizers = {};
   ReaderTextAnchor _anchor = const ReaderTextAnchor(0);
   List<List<ReaderFragment>> _pagedPages = [];
+
+  /// Pages of the chapters either side of the current one, worked out at
+  /// idle time so turning into them doesn't lay out a whole chapter in the
+  /// middle of the swipe. Keyed by the same signature as [_layoutSignature].
+  final Map<String, List<List<ReaderFragment>>> _pageCache = {};
   String? _layoutSignature;
   bool _hasAnchor = false;
   bool _restoringAnchor = false;
@@ -631,6 +636,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _pauseReadingSession();
     _sessionStartTime = null;
     _saveDebounceTimer?.cancel();
+    _prepaginateTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _autoScroller.dispose();
     _scrollController.removeListener(_onScroll);
@@ -1598,6 +1604,45 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     return false;
   }
 
+  Timer? _prepaginateTimer;
+
+  /// Lays out the next chapter, then the previous one, each a moment after
+  /// the page settles, one chapter per timer so neither shares a frame with
+  /// a page turn.
+  void _prepaginateNeighbours(
+    List<List<ReaderFragment>> Function(int chapter) paginate,
+    String Function(int chapter) signatureFor,
+  ) {
+    final current = _currentChapterIndex;
+    final neighbours = [
+      for (final chapter in [current + 1, current - 1])
+        if (chapter >= 0 && chapter < _chapters.length) chapter,
+    ];
+    final wanted = neighbours.map(signatureFor).toSet();
+    _pageCache.removeWhere((key, _) => !wanted.contains(key));
+    _prepaginateTimer?.cancel();
+    void next(int i) {
+      if (i >= neighbours.length) return;
+      _prepaginateTimer = Timer(const Duration(milliseconds: 250), () {
+        // Skip if the reader moved on or the layout changed meanwhile.
+        if (!mounted ||
+            _currentChapterIndex != current ||
+            _layoutSignature != signatureFor(current)) {
+          return;
+        }
+        final chapter = neighbours[i];
+        final key = signatureFor(chapter);
+        if (!_pageCache.containsKey(key) &&
+            _chapters[chapter].htmlContent.isNotEmpty) {
+          _pageCache[key] = paginate(chapter);
+        }
+        next(i + 1);
+      });
+    }
+
+    next(0);
+  }
+
   void _toggleControls() {
     _noteReadingActivity();
     // Refresh the position so the footer's time left is current.
@@ -2002,15 +2047,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           100.0,
           double.infinity,
         );
-        final signature =
-            '$_currentChapterIndex:$width:$height:${MediaQuery.textScalerOf(context)}:${prefs.fontSize}:${prefs.fontFamily}:${prefs.lineHeight}:${prefs.paragraphSpacing}:${prefs.isJustified}';
+        final scaler = MediaQuery.textScalerOf(context);
+        final direction = Directionality.of(context);
+        String signatureFor(int chapter) =>
+            '$chapter:$width:$height:$scaler:${prefs.fontSize}:${prefs.fontFamily}:${prefs.lineHeight}:${prefs.paragraphSpacing}:${prefs.isJustified}';
+        final signature = signatureFor(_currentChapterIndex);
         if (_layoutSignature != signature) {
-          final pages = _document(_currentChapterIndex).paginate(
-            prefs,
-            width,
-            height,
-            MediaQuery.textScalerOf(context),
-            Directionality.of(context),
+          final pages =
+              _pageCache.remove(signature) ??
+              _document(
+                _currentChapterIndex,
+              ).paginate(prefs, width, height, scaler, direction);
+          _prepaginateNeighbours(
+            (chapter) => _document(
+              chapter,
+            ).paginate(prefs, width, height, scaler, direction),
+            signatureFor,
           );
           _pagedPages = pages;
           _chapterPageCount = pages.length;
