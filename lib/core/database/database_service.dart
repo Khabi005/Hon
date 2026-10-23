@@ -92,6 +92,7 @@ class DatabaseService {
 
     // 4. Clean up any legacy synthetic demo fixtures seeded by earlier versions
     _cleanLegacySyntheticDemos();
+    _externalDataVersion = await _readDataVersion();
   }
 
   int _notificationBatch = 0;
@@ -1135,6 +1136,36 @@ class DatabaseService {
       await loadChapters(bookId);
     }
     _notify(library: true);
+  }
+
+  int? _externalDataVersion;
+
+  /// SQLite's `data_version` for this connection. It only moves when another
+  /// connection (the Android download and update workers) commits, so the
+  /// app's own writes never make it look stale.
+  Future<int?> _readDataVersion() async {
+    final database = _db;
+    if (database == null) return null;
+    try {
+      final row = await database
+          .customSelect('PRAGMA data_version')
+          .getSingle();
+      return row.data.values.first as int?;
+    } catch (e) {
+      debugPrint('DatabaseService: data_version unavailable: $e');
+      return null;
+    }
+  }
+
+  /// App resume path. Reloading every table on each resume made returning
+  /// from the EPUB reader (its own Activity) stutter, so only reload when a
+  /// worker actually wrote while we were away.
+  Future<void> reloadIfChangedExternally() async {
+    final version = await _readDataVersion();
+    if (version != null && version == _externalDataVersion) return;
+    await reloadFromDatabase();
+    await refreshAllDownloads();
+    _externalDataVersion = version ?? await _readDataVersion();
   }
 
   /// Reconciles chapter files written by Android WorkManager while Flutter was

@@ -57,8 +57,7 @@ class _HonAppState extends ConsumerState<HonApp> with WidgetsBindingObserver {
       SharedPreferences.getInstance()
           .then((prefs) => prefs.reload())
           .catchError((_) {});
-      DatabaseService.instance.reloadFromDatabase();
-      DatabaseService.instance.refreshAllDownloads();
+      DatabaseService.instance.reloadIfChangedExternally();
     }
   }
 
