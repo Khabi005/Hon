@@ -25,6 +25,8 @@ import '../../../core/export/epub_export_service.dart';
 import '../../../shared/widgets/pressable_scale.dart';
 import '../../../core/utils/log_ignored.dart';
 import '../../../shared/widgets/book_open_route.dart';
+import '../../../core/sources/source_migration.dart';
+import 'source_migration_screen.dart';
 
 enum LibraryFilter { all, epubs, pdfs, novels, finished }
 
@@ -559,6 +561,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                       ),
                       sourceId: sourceId,
                       sourceName: sourceId,
+                    ),
+                  ),
+                );
+              },
+            ),
+            CupertinoActionSheetAction(
+              child: const Text('Move to Another Source'),
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                final result = await Navigator.of(context)
+                    .push<SourceMigrationResult>(
+                      MaterialPageRoute(
+                        builder: (_) => SourceMigrationScreen(book: book),
+                      ),
+                    );
+                if (result == null) return;
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      result.resumeChapter == null
+                          ? 'Moved to ${result.book.sourceId}.'
+                          : 'Moved to ${result.book.sourceId}. Continue from ${result.resumeChapter!.title}.',
                     ),
                   ),
                 );

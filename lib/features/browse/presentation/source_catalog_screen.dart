@@ -23,6 +23,7 @@ import '../../../core/sources/installed_extension_service.dart';
 import '../../../core/sources/source_preferences.dart';
 import '../../../core/sources/source_health_service.dart';
 import '../../../core/export/epub_export_service.dart';
+import '../../../core/utils/html_utils.dart';
 import '../../../core/utils/log_ignored.dart';
 
 
@@ -734,28 +735,6 @@ class _SourceNovelDetailsScreenState extends State<SourceNovelDetailsScreen> {
   bool _isSelectionMode = false;
   final Set<String> _selectedChapterIds = <String>{};
   final ScrollController _scrollController = ScrollController();
-
-  static String cleanHtmlSynopsis(String raw) {
-    if (raw.isEmpty) return raw;
-    var text = raw;
-    text = text.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
-    text = text.replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n');
-    text = text.replaceAll(RegExp(r'<p[^>]*>', caseSensitive: false), '');
-    text = text.replaceAll(RegExp(r'<[^>]+>'), '');
-    text = text
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll('&apos;', "'")
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&hellip;', '…')
-        .replaceAll('&mdash;', '—')
-        .replaceAll('&ndash;', '–');
-    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
-    return text.trim();
-  }
 
   bool _hasInitialScrolled = false;
   final GlobalKey _currentChapterKey = GlobalKey();
