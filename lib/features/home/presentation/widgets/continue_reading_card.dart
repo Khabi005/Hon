@@ -262,16 +262,21 @@ class GroupedContinueReadingCard extends StatelessWidget {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            Text(
-                              '$primaryPct% read',
-                              style: TextStyle(
-                                color: colors.onSurfaceVariant,
-                                fontSize: 12,
-                                height: 1.2,
-                                fontWeight: FontWeight.w500,
+                            // Expanded so large text truncates the label
+                            // instead of pushing Resume off the card.
+                            Expanded(
+                              child: Text(
+                                '$primaryPct% read',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: colors.onSurfaceVariant,
+                                  fontSize: 12,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
-                            const Spacer(),
                             FilledButton.tonal(
                               style: FilledButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
