@@ -13,11 +13,15 @@ class ThemesSettingsSheet extends ConsumerWidget {
   final bool supportsTypography;
   final Widget? layoutControl;
   final String? bookId;
+
+  /// Shows "Reset to Defaults" for settings kept outside the database.
+  final Future<void> Function()? onReset;
   const ThemesSettingsSheet({
     super.key,
     this.supportsTypography = true,
     this.layoutControl,
     this.bookId,
+    this.onReset,
   });
 
   static Future<void> show(
@@ -25,6 +29,7 @@ class ThemesSettingsSheet extends ConsumerWidget {
     bool supportsTypography = true,
     Widget? layoutControl,
     String? bookId,
+    Future<void> Function()? onReset,
   }) {
     SemanticsService.announce('Themes and settings opened', TextDirection.ltr);
     return showModalBottomSheet(
@@ -37,6 +42,7 @@ class ThemesSettingsSheet extends ConsumerWidget {
         supportsTypography: supportsTypography,
         layoutControl: layoutControl,
         bookId: bookId,
+        onReset: onReset,
       ),
     );
   }
@@ -351,7 +357,14 @@ class ThemesSettingsSheet extends ConsumerWidget {
                     label: const Text('Customize Fonts & Spacing'),
                   ),
                 ],
-                if (bookId != null &&
+                if (onReset != null) ...[
+                  const SizedBox(height: 10),
+                  TextButton.icon(
+                    onPressed: onReset,
+                    icon: const Icon(Icons.restore, size: 16),
+                    label: const Text('Reset to Defaults'),
+                  ),
+                ] else if (bookId != null &&
                     DatabaseService.instance.getBookReaderSettings(bookId!) != null) ...[
                   const SizedBox(height: 10),
                   TextButton.icon(

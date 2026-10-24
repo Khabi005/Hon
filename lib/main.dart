@@ -12,6 +12,11 @@ import 'core/sources/source_registry.dart';
 import 'core/sources/bundled_source_catalog.dart';
 import 'core/sources/extension_repository_service.dart';
 import 'core/sources/installed_extension_service.dart';
+import 'features/reader/epub_menus/epub_menu_app.dart';
+
+/// Run by the native EPUB reader in a second engine to draw Hon's menus.
+@pragma('vm:entry-point')
+void epubMenuMain() => runEpubMenus();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

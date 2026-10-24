@@ -107,9 +107,24 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     _activeBookId = bookId;
   }
 
-  ReaderPreferencesNotifier() : super(const ReaderPreferencesState()) {
+  ReaderPreferencesNotifier()
+    : _onChanged = null,
+      super(const ReaderPreferencesState()) {
     _load();
   }
+
+  /// Settings owned elsewhere, such as the native EPUB reader: starts from
+  /// [initial], saves nothing, and reports each change to [onChanged].
+  ReaderPreferencesNotifier.detached(
+    super.initial,
+    void Function(ReaderPreferencesState) onChanged,
+  ) : _onChanged = onChanged;
+
+  final void Function(ReaderPreferencesState)? _onChanged;
+
+  /// Replaces the settings without reporting them, for updates that came
+  /// from the owner of detached settings.
+  void replace(ReaderPreferencesState next) => state = next;
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -145,6 +160,11 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
   }) {
     _dirty = true;
     state = next;
+    final onChanged = _onChanged;
+    if (onChanged != null) {
+      onChanged(next);
+      return;
+    }
     final destinationBookId = explicitGlobal ? null : (targetBookId ?? _activeBookId);
     _pendingWrite = _pendingWrite
         .then((_) => _persist(next, targetBookId: destinationBookId))
