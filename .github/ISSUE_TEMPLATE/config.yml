@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question or chat on Discord
+    url: https://discord.gg/w2XsFwFTW
+    about: Questions, help with sources, and early test builds.
+  - name: Download the latest APK
+    url: https://github.com/Khabi005/Hon/releases
+    about: All releases and release notes.
