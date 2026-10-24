@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in Hon isn't working as it should.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. A few details help a lot.
+        Quick questions are often faster on [Discord](https://discord.gg/w2XsFwFTW).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a novel from ...
+        2. Tap ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Hon version
+      description: Settings > About, or the release you installed.
+      placeholder: v0.0.4
+    validations:
+      required: true
+  - type: dropdown
+    id: apk
+    attributes:
+      label: APK
+      options:
+        - arm64-v8a
+        - complete (universal)
+        - Built from source
+        - Not sure
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android version
+      placeholder: Pixel 8, Android 15
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in the app?
+      multiple: true
+      options:
+        - Home
+        - Library
+        - Browse / sources
+        - Search
+        - Downloads
+        - Web novel reader
+        - EPUB reader
+        - PDF reader
+        - Settings / backup
+        - Something else
+  - type: input
+    id: source
+    attributes:
+      label: Source and novel (if relevant)
+      placeholder: Source name, novel title or link
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or a screen recording
+      description: Drag files here. Very helpful for visual or reader bugs.

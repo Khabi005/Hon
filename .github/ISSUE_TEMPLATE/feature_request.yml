@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an idea or improvement for Hon.
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Describe the moment where Hon gets in your way, or what you wish it could do.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How should it work?
+      description: Your idea for the solution. Mockups or examples from other apps (Apple Books, Shosetsu, LNReader) are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything else you've tried or considered?

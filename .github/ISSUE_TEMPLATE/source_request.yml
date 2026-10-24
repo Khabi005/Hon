@@ -1,0 +1,31 @@
+name: Source problem or request
+description: A novel source is broken, or you'd like one added.
+title: "[Source] "
+labels: ["source"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What's this about?
+      options:
+        - A source is broken
+        - Please add a source
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: Source name and website
+      placeholder: Example Novels, https://example.com
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: For a broken source, what fails (search, catalog, chapter list, chapter text, login) and the error shown. Include a novel link if you can.
+  - type: input
+    id: version
+    attributes:
+      label: Hon version
+      placeholder: v0.0.4
