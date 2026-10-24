@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hon · A quiet place to read</title>
+  <meta name="description" content="Hon is a calm, private reading app for Android. Web novels, EPUBs and PDFs on one shelf, with the look and feel of Apple Books. Free and open source." />
+  <meta name="theme-color" content="#FBF8F1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <link rel="canonical" href="https://khabi005.github.io/Hon/" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Hon · A quiet place to read" />
+  <meta property="og:description" content="A calm, private reading app for Android. Web novels, EPUBs and PDFs on one shelf." />
+  <meta property="og:url" content="https://khabi005.github.io/Hon/" />
+  <meta property="og:image" content="https://khabi005.github.io/Hon/assets/og.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      var t = localStorage.getItem('hon-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav" id="top">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="Hon home">
+        <img class="mark" src="assets/mark.png" alt="" width="28" height="26" />
+        <span>Hon</span>
+      </a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="#features">Features</a>
+        <a href="#themes">Themes</a>
+        <a href="#screens">Screens</a>
+        <a href="#guide">Guide</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-actions">
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle dark mode">
+          <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.6 1.6M17.7 17.7l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.6-1.6M17.7 6.3l1.6-1.6"/></svg>
+          <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>
+        </button>
+        <a class="icon-btn" href="https://github.com/Khabi005/Hon" aria-label="Hon on GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="fill"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        </a>
+        <a class="btn btn-primary btn-sm" href="#download">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="dot"></span> Alpha · Free and open source</p>
+          <h1>A quiet place<br />to read.</h1>
+          <p class="lede">Hon is a calm, private reading app for Android. Web novels, EPUBs and PDFs on one shelf, with the look and feel of Apple Books.</p>
+          <div class="hero-cta">
+            <a class="btn btn-primary" href="#download">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
+              Download for Android
+            </a>
+            <a class="btn btn-ghost" href="https://discord.gg/w2XsFwFTW">Join the Discord</a>
+          </div>
+          <p class="hero-meta"><span data-release-version>Latest release</span> · Android · GPL-3.0</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="phone phone-back"><img src="assets/screens/home-light.webp" alt="" width="460" height="1024" /></div>
+          <div class="phone phone-front"><img src="assets/screens/home-dark.webp" alt="" width="460" height="1024" /></div>
+        </div>
+      </div>
+      <div class="wrap">
+        <ul class="formats" aria-label="Supported formats">
+          <li>Web novels</li><li>EPUB</li><li>PDF</li><li>Offline downloads</li><li>No accounts</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section class="section" id="features">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">Features</p>
+          <h2>Everything you read, on one calm shelf.</h2>
+          <p class="sub">Hon stays out of the way. Clean cards, soft glass, and a reader that disappears once you start.</p>
+        </header>
+
+        <div class="grid features">
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><path d="M3.5 5.5c2.8-1 5.6-.8 8.5 1 2.9-1.8 5.7-2 8.5-1v13c-2.8-1-5.6-.8-8.5 1-2.9-1.8-5.7-2-8.5-1z"/><path d="M12 6.5v13"/></svg></div>
+            <h3>A reader that feels like a book</h3>
+            <p>Scroll or turn pages. Tune font size, margins, line spacing and indentation live, with four bundled serif typefaces.</p>
+          </article>
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m15.5 8.5-2.2 4.8-4.8 2.2 2.2-4.8z"/></svg></div>
+            <h3>Hundreds of novel sources</h3>
+            <p>Browse and search 170+ web novel sources out of the box. Runs Shosetsu-compatible extensions and lets you add extension repositories.</p>
+          </article>
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0-4-4m4 4 4-4M5 19.5h14"/></svg></div>
+            <h3>Downloads that keep going</h3>
+            <p>Chapters download in the background and resume after the app closes or the phone restarts. Images are saved for offline reading.</p>
+          </article>
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></div>
+            <h3>Your EPUBs and PDFs too</h3>
+            <p>Import local files next to your web novels. Native EPUB pagination, a dedicated PDF reader, contents and in-book search.</p>
+          </article>
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><path d="M4 7.5h7l2 2h7v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 7.5v-1a2 2 0 0 1 2-2h4l2 2"/></svg></div>
+            <h3>A library you shape</h3>
+            <p>Collections, library updates for new chapters, reading history, bookmarks and highlights. Pick up exactly where you left off.</p>
+          </article>
+          <article class="card feature">
+            <div class="ficon"><svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg></div>
+            <h3>Private by default</h3>
+            <p>No accounts, no ads, no tracking. Everything lives on your phone, with full backup and restore when you switch devices.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Themes -->
+    <section class="section section-tint" id="themes">
+      <div class="wrap themes-inner">
+        <div class="themes-copy">
+          <p class="kicker">Reading themes</p>
+          <h2>Six moods for every hour.</h2>
+          <p class="sub">From bright daylight to a pitch black page for OLED screens. Tap a theme to preview it.</p>
+          <div class="swatches" role="radiogroup" aria-label="Preview a reading theme">
+            <button class="swatch" role="radio" aria-checked="true" data-theme-name="Original" data-bg="#FFFFFF" data-fg="#1A1A1A" data-muted="#68686F" style="--sw:#FFFFFF;--sf:#1A1A1A">Original</button>
+            <button class="swatch" role="radio" aria-checked="false" data-theme-name="Quiet" data-bg="#2C2C2E" data-fg="#E5E5EA" data-muted="#B0B0B6" style="--sw:#2C2C2E;--sf:#E5E5EA">Quiet</button>
+            <button class="swatch" role="radio" aria-checked="false" data-theme-name="Paper" data-bg="#F2F2F7" data-fg="#1C1C1E" data-muted="#68686F" style="--sw:#F2F2F7;--sf:#1C1C1E">Paper</button>
+            <button class="swatch" role="radio" aria-checked="false" data-theme-name="Bold" data-bg="#000000" data-fg="#FFFFFF" data-muted="#B0B0B6" style="--sw:#000000;--sf:#FFFFFF">Bold</button>
+            <button class="swatch" role="radio" aria-checked="false" data-theme-name="Calm" data-bg="#F1E5CD" data-fg="#2C2211" data-muted="#70624E" style="--sw:#F1E5CD;--sf:#2C2211">Calm</button>
+            <button class="swatch" role="radio" aria-checked="false" data-theme-name="Focus" data-bg="#FFFDF5" data-fg="#262624" data-muted="#736E62" style="--sw:#FFFDF5;--sf:#262624">Focus</button>
+          </div>
+          <p class="fonts-note">Bundled typefaces: <span style="font-family:'Newsreader',serif">Newsreader</span>, Literata, Lora and Libre Baskerville.</p>
+        </div>
+        <div class="page-preview" id="page-preview" aria-live="polite">
+          <p class="pp-meta"><span>Chapter 1</span><span id="pp-name">Original</span></p>
+          <h3 class="pp-title">The Quiet Shelf</h3>
+          <p class="pp-ornament">❦</p>
+          <p>The rain had settled into a soft, patient rhythm against the window. She pulled the blanket closer, found her place, and the room around her slowly faded.</p>
+          <p>It was always like this with a good book. First the noise, then the words, and then nothing at all except the story, unfolding one quiet page at a time.</p>
+          <div class="pp-progress"><span></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screens -->
+    <section class="section" id="screens">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">A closer look</p>
+          <h2>Designed to feel at home on your phone.</h2>
+        </header>
+      </div>
+      <div class="gallery" tabindex="0" aria-label="App screenshots, scroll sideways">
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/home-dark.webp" alt="Home screen with Continue Reading" width="460" height="1024" /></div><figcaption>Home</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/library-dark.webp" alt="Library with book covers" width="460" height="1024" /></div><figcaption>Library</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/browse-dark.webp" alt="Browse novel sources" width="460" height="1024" /></div><figcaption>Browse sources</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/reader-themes.webp" alt="Reader themes and settings sheet" width="460" height="1024" /></div><figcaption>Reader themes</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/history-dark.webp" alt="Reading history" width="460" height="1064" /></div><figcaption>Reading history</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/source-controls-dark.webp" alt="Source controls" width="460" height="995" /></div><figcaption>Source controls</figcaption></figure>
+        <figure><div class="phone"><img loading="lazy" src="assets/screens/home-light.webp" alt="Home screen in light mode" width="460" height="1024" /></div><figcaption>Light mode</figcaption></figure>
+      </div>
+    </section>
+
+    <!-- Download -->
+    <section class="section section-tint" id="download">
+      <div class="wrap">
+        <header class="section-head center">
+          <p class="kicker">Download</p>
+          <h2>Get Hon for Android.</h2>
+          <p class="sub">Free, no sign-up. <span data-release-line>Grab the newest build from GitHub Releases.</span></p>
+        </header>
+
+        <div class="grid downloads">
+          <a class="card dl recommended" data-asset="arm64" href="https://github.com/Khabi005/Hon/releases">
+            <span class="badge">Recommended</span>
+            <h3>Hon for modern phones</h3>
+            <p>arm64-v8a build. Smaller and right for almost every phone and tablet from the last several years.</p>
+            <span class="dl-foot"><span class="dl-name" data-asset-name>arm64-v8a APK</span><span class="dl-size" data-asset-size></span></span>
+          </a>
+          <a class="card dl" data-asset="universal" href="https://github.com/Khabi005/Hon/releases">
+            <span class="badge badge-quiet">Universal</span>
+            <h3>Hon for every device</h3>
+            <p>Includes arm64, armeabi-v7a and x86_64. Pick this for older phones, emulators, or if you are not sure.</p>
+            <span class="dl-foot"><span class="dl-name" data-asset-name>Universal APK</span><span class="dl-size" data-asset-size></span></span>
+          </a>
+        </div>
+
+        <p class="dl-note">
+          Hon is in early alpha, so expect rough edges.
+          <a href="https://github.com/Khabi005/Hon/releases">All releases and notes</a> ·
+          <a href="https://github.com/Khabi005/Hon">Source code</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- Guide -->
+    <section class="section" id="guide">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="kicker">Getting started</p>
+          <h2>Reading in three steps.</h2>
+        </header>
+        <ol class="steps">
+          <li class="card">
+            <span class="step-n">1</span>
+            <h3>Install the APK</h3>
+            <p>Download the APK on your phone and open it. If Android asks, allow your browser or file manager to <em>install unknown apps</em>.</p>
+          </li>
+          <li class="card">
+            <span class="step-n">2</span>
+            <h3>Find a story</h3>
+            <p>Open <strong>Browse</strong> to explore sources, or use <strong>Search</strong> to look through your library and chosen sources at once. Import your own EPUBs and PDFs from the Library.</p>
+          </li>
+          <li class="card">
+            <span class="step-n">3</span>
+            <h3>Make it yours</h3>
+            <p>Add books to your library, download chapters for offline reading, and tap the page while reading to change theme, font and spacing.</p>
+          </li>
+        </ol>
+
+        <div class="tips">
+          <details class="card tip">
+            <summary>Add an extension repository</summary>
+            <p>Go to <strong>Settings</strong>, then <strong>Extension repositories</strong>, and paste the repository URL. Hon syncs its index and the new sources show up in Browse. Repositories built for Shosetsu work here.</p>
+          </details>
+          <details class="card tip">
+            <summary>Log in to a source</summary>
+            <p>Some sites need a login or a Cloudflare check. Open the source's settings from Browse and use the in-app login. Your session stays on your device.</p>
+          </details>
+          <details class="card tip">
+            <summary>Back up your library</summary>
+            <p>Open <strong>Settings</strong>, then <strong>Backup &amp; restore</strong>, to export your library, progress and settings to a file. Restore it on a new phone in one tap.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section section-tint" id="faq">
+      <div class="wrap faq-inner">
+        <header class="section-head">
+          <p class="kicker">FAQ</p>
+          <h2>Questions, answered.</h2>
+          <p class="sub">Something missing? Ask on <a href="https://discord.gg/w2XsFwFTW">Discord</a>.</p>
+        </header>
+        <div class="faq">
+          <details>
+            <summary>Is Hon free?</summary>
+            <p>Yes. Hon is free and open source under the GPL-3.0 license. There are no ads, subscriptions or in-app purchases.</p>
+          </details>
+          <details>
+            <summary>Where do the novels come from?</summary>
+            <p>Hon doesn't host any content. It reads from public websites through source extensions, the same kind used by Shosetsu. All content belongs to its original authors and sites.</p>
+          </details>
+          <details>
+            <summary>Do my Shosetsu extensions work?</summary>
+            <p>Hon runs Shosetsu-style Lua extensions with its own native engine, and you can add extension repositories in Settings. Most sources work; if one doesn't, let us know on Discord or GitHub.</p>
+          </details>
+          <details>
+            <summary>Which APK should I download?</summary>
+            <p>Almost everyone should pick the recommended arm64 build. Choose the universal build for older 32-bit phones, x86 emulators, or if the arm64 one won't install.</p>
+          </details>
+          <details>
+            <summary>Is there an iPhone or desktop version?</summary>
+            <p>Not right now. Hon is built for Android phones and tablets.</p>
+          </details>
+          <details>
+            <summary>Does Hon collect any data?</summary>
+            <p>No. There are no accounts and no telemetry. Your library, progress and downloads stay on your device. Hon only connects to the sources you use and the extension repositories you add.</p>
+          </details>
+          <details>
+            <summary>Android says the app is unsafe. Why?</summary>
+            <p>Apps installed outside the Play Store always show this warning. Hon's code is public on GitHub, and every release is built from it. Only download Hon from the official GitHub Releases page.</p>
+          </details>
+          <details>
+            <summary>How do I report a bug or request a feature?</summary>
+            <p>Open an issue on <a href="https://github.com/Khabi005/Hon/issues">GitHub</a> or drop a message in the <a href="https://discord.gg/w2XsFwFTW">Discord</a>. Steps to reproduce and a screenshot help a lot.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- Community -->
+    <section class="section">
+      <div class="wrap">
+        <div class="cta card">
+          <img class="cta-logo" src="assets/logo.webp" alt="" width="96" height="96" />
+          <div>
+            <h2>Shape what Hon becomes.</h2>
+            <p>Suggest features, request sources, test early builds and share your favorite reading setups.</p>
+          </div>
+          <div class="cta-actions">
+            <a class="btn btn-primary" href="https://discord.gg/w2XsFwFTW">Join the Discord</a>
+            <a class="btn btn-ghost" href="https://github.com/Khabi005/Hon">Star on GitHub</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="brand">
+        <img class="mark" src="assets/mark.png" alt="" width="24" height="22" />
+        <span>Hon</span>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/Khabi005/Hon">GitHub</a>
+        <a href="https://github.com/Khabi005/Hon/releases">Releases</a>
+        <a href="https://github.com/Khabi005/Hon/issues">Issues</a>
+        <a href="https://discord.gg/w2XsFwFTW">Discord</a>
+        <a href="https://www.gnu.org/licenses/gpl-3.0.html">GPL-3.0</a>
+      </nav>
+      <p class="fine">Made for readers. Hon does not host or own any of the content it displays.</p>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
