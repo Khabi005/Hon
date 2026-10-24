@@ -7,6 +7,7 @@ import '../../core/files/storage_service.dart';
 import '../../core/models/book.dart';
 import '../../core/models/download_job.dart';
 import '../theme/reader_theme.dart';
+import '../../core/utils/log_ignored.dart';
 
 // Shared so Home shortcuts select the existing tab rather than stacking copies.
 final navigationTabProvider = StateProvider<int>((ref) => 0);
@@ -64,8 +65,28 @@ final continueReadingProvider = Provider<List<Book>>((ref) {
   return DatabaseService.instance.getContinueReadingBooks();
 });
 
+class DownloadProgressNotifier extends StateNotifier<int> {
+  DownloadProgressNotifier() : super(0) {
+    DatabaseService.instance.downloadProgressNotifier.addListener(_onChange);
+  }
+
+  void _onChange() => state++;
+
+  @override
+  void dispose() {
+    DatabaseService.instance.downloadProgressNotifier.removeListener(_onChange);
+    super.dispose();
+  }
+}
+
+final downloadProgressProvider =
+    StateNotifierProvider<DownloadProgressNotifier, int>(
+      (ref) => DownloadProgressNotifier(),
+    );
+
 final allDownloadJobsProvider = Provider<List<DownloadJob>>((ref) {
   ref.watch(databaseChangeProvider);
+  ref.watch(downloadProgressProvider);
   return DatabaseService.instance.getAllDownloadJobs();
 });
 
@@ -86,9 +107,24 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
     _activeBookId = bookId;
   }
 
-  ReaderPreferencesNotifier() : super(const ReaderPreferencesState()) {
+  ReaderPreferencesNotifier()
+    : _onChanged = null,
+      super(const ReaderPreferencesState()) {
     _load();
   }
+
+  /// Settings owned elsewhere, such as the native EPUB reader: starts from
+  /// [initial], saves nothing, and reports each change to [onChanged].
+  ReaderPreferencesNotifier.detached(
+    super.initial,
+    void Function(ReaderPreferencesState) onChanged,
+  ) : _onChanged = onChanged;
+
+  final void Function(ReaderPreferencesState)? _onChanged;
+
+  /// Replaces the settings without reporting them, for updates that came
+  /// from the owner of detached settings.
+  void replace(ReaderPreferencesState next) => state = next;
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -124,6 +160,11 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
   }) {
     _dirty = true;
     state = next;
+    final onChanged = _onChanged;
+    if (onChanged != null) {
+      onChanged(next);
+      return;
+    }
     final destinationBookId = explicitGlobal ? null : (targetBookId ?? _activeBookId);
     _pendingWrite = _pendingWrite
         .then((_) => _persist(next, targetBookId: destinationBookId))
@@ -290,7 +331,9 @@ class ReaderPreferencesNotifier extends StateNotifier<ReaderPreferencesState> {
       try {
         final json = jsonDecode(raw) as Map<String, dynamic>;
         global = ReaderPreferencesState.fromMap(json);
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'providers');
+      }
     }
     _dirty = false;
     state = global;

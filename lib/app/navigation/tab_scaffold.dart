@@ -1,5 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../bootstrap/providers.dart';
 import '../theme/glass_surface.dart';
@@ -85,23 +87,25 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                       final tabWidth = constraints.maxWidth / _tabs.length;
                       final capsuleWidth = (tabWidth - 8).clamp(36.0, 72.0);
                       final capsuleHeight = compact ? 46.0 : 52.0;
-                      final isDark = Theme.of(context).brightness == Brightness.dark;
+                      final isDark =
+                          Theme.of(context).brightness == Brightness.dark;
                       final isPressed = _pressedIndex != null;
 
                       return Stack(
                         children: [
-                          // Single moving liquid glass spring capsule indicator
-                          AnimatedPositioned(
-                            duration: reduced
-                                ? Duration.zero
-                                : const Duration(milliseconds: 320),
-                            curve: Curves.easeOutBack,
-                            left: selected * tabWidth + (tabWidth - capsuleWidth) / 2,
+                          // Single liquid glass capsule, driven by a spring.
+                          _SpringCapsule(
+                            left:
+                                selected * tabWidth +
+                                (tabWidth - capsuleWidth) / 2,
                             top: ((compact ? 58.0 : 64.0) - capsuleHeight) / 2,
                             width: capsuleWidth,
                             height: capsuleHeight,
+                            reduced: reduced,
                             child: AnimatedScale(
-                              scale: isPressed && _pressedIndex == selected ? 0.92 : 1.0,
+                              scale: isPressed && _pressedIndex == selected
+                                  ? 0.92
+                                  : 1.0,
                               duration: const Duration(milliseconds: 100),
                               child: Container(
                                 decoration: BoxDecoration(
@@ -119,7 +123,9 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                                     BoxShadow(
                                       color: isDark
                                           ? Colors.black.withValues(alpha: 0.25)
-                                          : Colors.black.withValues(alpha: 0.04),
+                                          : Colors.black.withValues(
+                                              alpha: 0.04,
+                                            ),
                                       blurRadius: 8,
                                       offset: const Offset(0, 2),
                                     ),
@@ -142,13 +148,24 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                                     message: _labels[index],
                                     child: GestureDetector(
                                       behavior: HitTestBehavior.opaque,
-                                      onTapDown: (_) => setState(() => _pressedIndex = index),
-                                      onTapUp: (_) => setState(() => _pressedIndex = null),
-                                      onTapCancel: () => setState(() => _pressedIndex = null),
+                                      onTapDown: (_) =>
+                                          setState(() => _pressedIndex = index),
+                                      onTapUp: (_) =>
+                                          setState(() => _pressedIndex = null),
+                                      onTapCancel: () =>
+                                          setState(() => _pressedIndex = null),
                                       onTap: () {
                                         if (selected == index) return;
-                                        FocusManager.instance.primaryFocus?.unfocus();
-                                        ref.read(navigationTabProvider.notifier).state = index;
+                                        HapticFeedback.selectionClick();
+                                        FocusManager.instance.primaryFocus
+                                            ?.unfocus();
+                                        ref
+                                                .read(
+                                                  navigationTabProvider
+                                                      .notifier,
+                                                )
+                                                .state =
+                                            index;
                                       },
                                       child: Center(
                                         child: Padding(
@@ -162,7 +179,8 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                                               children: [
                                                 Badge(
                                                   isLabelVisible:
-                                                      index == 4 && activeDownloads > 0,
+                                                      index == 4 &&
+                                                      activeDownloads > 0,
                                                   label: Text(
                                                     activeDownloads > 99
                                                         ? '99+'
@@ -172,8 +190,14 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                                                     _icons[index],
                                                     size: 21,
                                                     color: active
-                                                        ? (isDark ? Colors.white : Colors.black)
-                                                        : colors.onSurfaceVariant.withValues(alpha: 0.75),
+                                                        ? (isDark
+                                                              ? Colors.white
+                                                              : Colors.black)
+                                                        : colors
+                                                              .onSurfaceVariant
+                                                              .withValues(
+                                                                alpha: 0.75,
+                                                              ),
                                                   ),
                                                 ),
                                                 if (!compact) ...[
@@ -189,8 +213,15 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
                                                             ? FontWeight.w600
                                                             : FontWeight.w400,
                                                         color: active
-                                                            ? (isDark ? Colors.white : Colors.black)
-                                                            : colors.onSurfaceVariant.withValues(alpha: 0.75),
+                                                            ? (isDark
+                                                                  ? Colors.white
+                                                                  : Colors
+                                                                        .black)
+                                                            : colors
+                                                                  .onSurfaceVariant
+                                                                  .withValues(
+                                                                    alpha: 0.75,
+                                                                  ),
                                                       ),
                                                     ),
                                                   ),
@@ -218,4 +249,77 @@ class _TabScaffoldState extends ConsumerState<TabScaffold> {
       ),
     );
   }
+}
+
+/// Moves the tab capsule with a critically damped spring and stretches it
+/// slightly while it travels, so it reads as liquid rather than sliding.
+class _SpringCapsule extends StatefulWidget {
+  const _SpringCapsule({
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.reduced,
+    required this.child,
+  });
+
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final bool reduced;
+  final Widget child;
+
+  @override
+  State<_SpringCapsule> createState() => _SpringCapsuleState();
+}
+
+class _SpringCapsuleState extends State<_SpringCapsule>
+    with SingleTickerProviderStateMixin {
+  static const _spring = SpringDescription(
+    mass: 1,
+    stiffness: 320,
+    damping: 31,
+  );
+  late final AnimationController _x = AnimationController.unbounded(
+    vsync: this,
+    value: widget.left,
+  );
+
+  @override
+  void didUpdateWidget(covariant _SpringCapsule oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.left == oldWidget.left) return;
+    if (widget.reduced) {
+      _x.value = widget.left;
+      return;
+    }
+    _x.animateWith(
+      SpringSimulation(_spring, _x.value, widget.left, _x.velocity),
+    );
+  }
+
+  @override
+  void dispose() {
+    _x.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _x,
+    builder: (context, child) {
+      // Up to 18% wider at peak speed, shrinking back as it settles.
+      final stretch = (_x.velocity.abs() / 6000).clamp(0.0, .18);
+      final width = widget.width * (1 + stretch);
+      return Positioned(
+        left: _x.value - (width - widget.width) / 2,
+        top: widget.top,
+        width: width,
+        height: widget.height,
+        child: child!,
+      );
+    },
+    child: widget.child,
+  );
 }

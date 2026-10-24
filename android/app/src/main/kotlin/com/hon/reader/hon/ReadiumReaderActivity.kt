@@ -27,6 +27,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -143,6 +144,19 @@ class ReadiumReaderActivity : AppCompatActivity() {
     private var readyReported = false
 
     private var cachedHighlights: List<Map<String, Any?>> = emptyList()
+
+    // Flutter menus over the book, and what they were last shown, so their
+    // calls can address entries by index.
+    private var flutterMenus: EpubFlutterMenus? = null
+    private var menuToc = emptyList<TocEntry>()
+    private var menuBookmarks = emptyList<Map<String, Any?>>()
+    private var menuHighlights = emptyList<Map<String, Any?>>()
+    private var menuSearchMatches = emptyList<Locator>()
+    private var menuSearchJob: kotlinx.coroutines.Job? = null
+    private val saveBrightness = Runnable { saveDurablePreferences() }
+    private val menuBack = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { flutterMenus?.back() }
+    }
 
     fun refreshHighlights() {
         if (bookId.isEmpty()) return
@@ -473,7 +487,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         val isLightPage = (currentTheme == Theme.LIGHT || currentTheme == Theme.SEPIA)
 
         if (areControlsVisible) {
-            val barBgColor = getBarBackgroundColor()
+            val barBgColor = getThemeBackgroundColor()
             window.statusBarColor = barBgColor
             window.navigationBarColor = barBgColor
             insetsController.isAppearanceLightStatusBars = isLightPage
@@ -492,7 +506,6 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     private fun updateThemeStyling() {
         val pageBg = getThemeBackgroundColor()
-        val barBg = getBarBackgroundColor()
         val primaryText = getPrimaryTextColor()
         val secondaryText = getSecondaryTextColor()
         val pillBg = getPillBackgroundColor()
@@ -500,18 +513,15 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         rootLayout.setBackgroundColor(pageBg)
 
-        if (isGlass && isBlurAllowed()) {
-            val strokeColor = if (androidx.core.graphics.ColorUtils.calculateLuminance(pageBg) > 0.5) {
-                Color.argb(25, 0, 0, 0)
-            } else {
-                Color.argb(35, 255, 255, 255)
-            }
-            topBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
-            bottomBar.background = makeCardDrawable(barBg, 0f, strokeColor, 1)
+        // Floating controls like the Flutter readers: the bars blend into the
+        // page and only the buttons and labels sit on small rounded pills.
+        val strokeColor = if (androidx.core.graphics.ColorUtils.calculateLuminance(pageBg) > 0.5) {
+            Color.argb(20, 0, 0, 0)
         } else {
-            topBar.setBackgroundColor(barBg)
-            bottomBar.setBackgroundColor(barBg)
+            Color.argb(36, 255, 255, 255)
         }
+        topBar.setBackgroundColor(pageBg)
+        bottomBar.setBackgroundColor(pageBg)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
                 window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
@@ -520,11 +530,16 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
         titleView.setTextColor(primaryText)
         backBtn.setTextColor(primaryText)
-        backBtn.background = makeCardDrawable(pillBg, 18f)
+        backBtn.background = makeCardDrawable(pillBg, 20f, strokeColor, 1)
+        titleView.background = makeCardDrawable(pillBg, 16f, strokeColor, 1)
+        titleView.setTextColor(secondaryText)
+        prevBtn.background = makeCardDrawable(pillBg, 20f, strokeColor, 1)
+        aaBtn.background = makeCardDrawable(pillBg, 24f, strokeColor, 1)
 
         aaBtn.setTextColor(primaryText)
-        prevBtn.setTextColor(secondaryText)
+        prevBtn.setTextColor(primaryText)
         progressPill.background = null
+        progressText.background = makeCardDrawable(pillBg, 16f, strokeColor, 1)
         progressText.setTextColor(secondaryText)
         updateSystemBars()
 
@@ -817,7 +832,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 textSize = 13f
                 gravity = Gravity.CENTER_VERTICAL
                 contentDescription = "Table of contents"
-                layoutParams = LinearLayout.LayoutParams(dp(72), dp(44))
+                setPadding(dp(14), 0, dp(14), 0)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(40))
                 setOnClickListener { showTocDialog() }
             }
             addView(prevBtn)
@@ -828,14 +844,21 @@ class ReadiumReaderActivity : AppCompatActivity() {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            addView(titleView, LinearLayout.LayoutParams(0, dp(44), 1f))
+            titleView.setPadding(dp(14), dp(8), dp(14), dp(8))
+            // Centre a content-sized title pill in the space between buttons.
+            addView(FrameLayout(this@ReadiumReaderActivity).apply {
+                addView(titleView, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER))
+            }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(8), 0, dp(8), 0) })
             backBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "✕"
                 textSize = 15f
                 gravity = Gravity.CENTER
                 contentDescription = "Close reader"
                 background = makeCardDrawable(getPillBackgroundColor(), 18f)
-                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { setMargins(dp(28), 0, 0, 0) }
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
                 setOnClickListener { finish() }
             }
             addView(backBtn)
@@ -896,6 +919,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(14), dp(8), dp(14), dp(8))
                     setOnClickListener { showTocDialog() }
                 }
                 addView(progressText)
@@ -903,10 +927,10 @@ class ReadiumReaderActivity : AppCompatActivity() {
             addView(progressPill, LinearLayout.LayoutParams(0, dp(44), 1f))
             aaBtn = TextView(this@ReadiumReaderActivity).apply {
                 text = "Aa"
-                textSize = 20f
+                textSize = 18f
                 gravity = Gravity.CENTER
                 contentDescription = "Reader menu"
-                layoutParams = LinearLayout.LayoutParams(dp(48), dp(44))
+                layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
                 setOnClickListener { showReaderMenu() }
             }
             addView(aaBtn)
@@ -924,8 +948,19 @@ class ReadiumReaderActivity : AppCompatActivity() {
             )
         )
 
-        setContentView(root)
+        // The Flutter menus draw over the whole reader.
+        val host = FrameLayout(this)
+        host.addView(root, FrameLayout.LayoutParams(-1, -1))
+        setContentView(host)
         updateThemeStyling()
+        if (flutterMenus == null) {
+            val menus = EpubFlutterMenus(this, ::onMenuCall)
+            menus.onShowingChanged = { showing -> menuBack.isEnabled = showing }
+            flutterMenus = menus
+            onBackPressedDispatcher.addCallback(this, menuBack)
+            // Start after the book has had a moment to open.
+            host.postDelayed({ if (!isFinishing) menus.prewarm(host) }, 700L)
+        }
     }
 
     private fun observeLocator(fragment: EpubNavigatorFragment, pub: Publication) {
@@ -949,7 +984,8 @@ class ReadiumReaderActivity : AppCompatActivity() {
         if (prevBtn.text.toString() != "Contents") prevBtn.text = "Contents"
         prevBtn.isEnabled = true
         prevBtn.alpha = 1f
-        val remainingLabel = if (index + 1 < count) "${count - index - 1} chapters left" else "Last chapter"
+        // Like Apple Books: show the book's title; the footer carries progress.
+        val remainingLabel = publication?.metadata?.title?.takeIf { it.isNotBlank() } ?: ""
         if (titleView.text.toString() != remainingLabel) titleView.text = remainingLabel
         val now = android.os.SystemClock.elapsedRealtime()
         val href = loc.href.toString()
@@ -1207,6 +1243,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     private fun showTocDialog() {
         val pub = publication ?: return
+        if (showFlutterMenu("contents")) return
         val dialog = Dialog(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1378,6 +1415,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     private fun showReaderMenu() {
         if (isFinishing || navigator == null) return
+        if (showFlutterMenu("menu")) return
         val dialog = Dialog(this)
         val menu = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1443,6 +1481,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     private fun showBookSearch() {
         val pub = publication ?: return
+        if (showFlutterMenu("search")) return
         val dialog = Dialog(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1476,20 +1515,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
             status.text = "Searching…"
             job = lifecycleScope.launch {
                 try {
-                    val found = withContext(Dispatchers.IO) {
-                        withTimeout(15_000) {
-                            val iterator = pub.search(value) ?: throw IllegalStateException("Text search is unavailable for this publication.")
-                            try {
-                                val result = mutableListOf<Locator>()
-                                while (result.size < 100) {
-                                    val batch = iterator.next() ?: break
-                                    val collection = batch.getOrNull() ?: throw IllegalStateException("Could not read a resource while searching.")
-                                    result.addAll(collection.locators)
-                                }
-                                result.take(100)
-                            } finally { iterator.close() }
-                        }
-                    }
+                    val found = searchPublication(pub, value)
                     if (!dialog.isShowing) return@launch
                     matches = found
                     status.text = if (found.isEmpty()) "No matches." else if (found.size == 100) "Showing the first 100 matches. Refine your search for more." else "${found.size} matches"
@@ -1522,6 +1548,248 @@ class ReadiumReaderActivity : AppCompatActivity() {
         list.setOnItemClickListener { _, _, position, _ -> goReading(matches[position]); dialog.dismiss() }
         dialog.setOnDismissListener { job?.cancel() }
         showBottomSheet(dialog, layout, (resources.displayMetrics.heightPixels * .8).toInt())
+    }
+
+    /** Up to 100 matches for [query], or throws with a message to show. */
+    private suspend fun searchPublication(pub: Publication, query: String): List<Locator> =
+        withContext(Dispatchers.IO) {
+            withTimeout(15_000) {
+                val iterator = pub.search(query) ?: throw IllegalStateException("Text search is unavailable for this publication.")
+                try {
+                    val result = mutableListOf<Locator>()
+                    while (result.size < 100) {
+                        val batch = iterator.next() ?: break
+                        val collection = batch.getOrNull() ?: throw IllegalStateException("Could not read a resource while searching.")
+                        result.addAll(collection.locators)
+                    }
+                    result.take(100)
+                } finally { iterator.close() }
+            }
+        }
+
+    private fun canReflow(): Boolean =
+        publication?.let { pub -> pub.readingOrder.none { pub.metadata.presentation.layoutOf(it) == EpubLayout.FIXED } } ?: true
+
+    private fun typographyJson(): JSONObject {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = if (bookId.isNotEmpty()) {
+            prefs.getString("readium_typography_$bookId", null) ?: prefs.getString("readium_typography", "{}")
+        } else {
+            prefs.getString("readium_typography", "{}")
+        }
+        return try { JSONObject(raw ?: "{}") } catch (_: Exception) { JSONObject() }
+    }
+
+    private fun storeTypography(values: JSONObject) {
+        val key = if (bookId.isNotEmpty()) "readium_typography_$bookId" else "readium_typography"
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(key, values.toString()).apply()
+    }
+
+    /** The reader settings in the Flutter reader's format. */
+    private fun menuPreferences(): Map<String, Any?> {
+        val values = mutableMapOf<String, Any?>()
+        val typography = typographyJson()
+        for (key in typography.keys()) {
+            val value = typography.opt(key)
+            if (value != null && value != JSONObject.NULL) values[key] = value
+        }
+        values["theme"] = currentPreset
+        values["layout"] = if (isScrollMode) "verticalScroll" else "paginated"
+        values["size"] = currentFontSize * 18.0
+        return values
+    }
+
+    private fun highlightRows(list: List<Map<String, Any?>>) = list.map {
+        mapOf(
+            "id" to it["id"]?.toString(),
+            "text" to (it["selectedText"]?.toString() ?: ""),
+            "note" to it["note"]?.toString(),
+            "color" to (it["color"]?.toString() ?: "yellow"),
+        )
+    }
+
+    private fun menuState(bookmarks: List<Map<String, Any?>>, highlights: List<Map<String, Any?>>): Map<String, Any?> {
+        val pub = publication
+        menuToc = pub?.let { flattenToc(it.tableOfContents.ifEmpty { it.readingOrder }) } ?: emptyList()
+        menuBookmarks = bookmarks
+        menuHighlights = highlights
+        val href = currentLocator?.href?.toString()?.substringBefore('#')
+        return mapOf(
+            "title" to (pub?.metadata?.title?.takeIf { it.isNotBlank() } ?: bookTitle),
+            "chapterIndex" to currentChapterIndex(),
+            "chapterCount" to (pub?.readingOrder?.size ?: 0),
+            "currentToc" to menuToc.indexOfFirst { it.link.url().toString().substringBefore('#') == href },
+            "toc" to menuToc.map { mapOf("title" to it.title, "depth" to it.depth) },
+            "bookmarks" to bookmarks.map {
+                mapOf(
+                    "label" to (it["label"]?.toString() ?: "Bookmark"),
+                    "chapterIndex" to ((it["chapterIndex"] as? Number) ?: (it["pageIndex"] as? Number))?.toInt(),
+                    "snippet" to it["snippet"]?.toString(),
+                )
+            },
+            "highlights" to highlightRows(highlights),
+            "canReflow" to canReflow(),
+            "isGlass" to isGlass,
+            "rotationLocked" to (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LOCKED),
+            "preferences" to menuPreferences(),
+        )
+    }
+
+    /** Opens [sheet] in Flutter. False when the native dialog should open. */
+    private fun showFlutterMenu(sheet: String): Boolean {
+        val menus = flutterMenus ?: return false
+        if (!menus.isReady || isFinishing) return false
+        val bridge = HonReaderBridge.instance
+        if (bridge == null || bookId.isEmpty()) {
+            return menus.show(sheet, menuState(emptyList(), cachedHighlights))
+        }
+        bridge.getBookmarks(bookId) { bookmarks ->
+            bridge.getHighlights(bookId) { highlights ->
+                runOnUiThread {
+                    if (!isFinishing && !menus.show(sheet, menuState(bookmarks, highlights))) {
+                        when (sheet) {
+                            "contents" -> showTocDialog()
+                            "search" -> showBookSearch()
+                            "appearance" -> showAppearanceDialog()
+                            else -> showReaderMenu()
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    private fun goToLocatorJson(json: String?): Boolean {
+        val locator = json?.let { try { Locator.fromJSON(JSONObject(it)) } catch (_: Exception) { null } } ?: return false
+        goReading(locator)
+        return true
+    }
+
+    /** Applies settings changed in the Flutter Themes & Settings sheet. */
+    private fun applyMenuPreferences(values: Map<String, Any?>) {
+        val before = menuPreferences()
+        (values["theme"] as? String)?.lowercase()?.let {
+            if (it in setOf("original", "quiet", "paper", "bold", "calm", "focus")) currentPreset = it
+        }
+        (values["size"] as? Number)?.toDouble()?.let { currentFontSize = (it / 18.0).coerceIn(12.0 / 18, 32.0 / 18) }
+        (values["layout"] as? String)?.let { isScrollMode = it == "verticalScroll" && canReflow() }
+        val typography = typographyJson()
+        for (key in listOf("font", "lineHeight", "margin", "paragraphSpacing", "indent", "justified", "brightness", "publisherStyles")) {
+            values[key]?.let { typography.put(key, it) }
+        }
+        storeTypography(typography)
+        fun same(a: Any?, b: Any?) =
+            if (a is Number && b is Number) kotlin.math.abs(a.toDouble() - b.toDouble()) < 1e-6 else a == b
+        val changed = menuPreferences().filter { (key, value) -> !same(before[key], value) }.keys
+        if (changed.isEmpty()) return
+        if (changed == setOf("brightness")) {
+            // Dragging the slider: change the screen now, save once it settles.
+            val level = typography.optDouble("brightness", -1.0)
+            window.attributes = window.attributes.apply {
+                screenBrightness = if (level < 0) WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE else level.coerceIn(0.05, 1.0).toFloat()
+            }
+            readerContainer.removeCallbacks(saveBrightness)
+            readerContainer.postDelayed(saveBrightness, 400L)
+            return
+        }
+        saveDurablePreferences()
+        applyPreferences()
+    }
+
+    /** Answers the Flutter menus. Every path calls [reply] once. */
+    private fun onMenuCall(method: String, args: Map<String, Any?>, reply: (Any?) -> Unit) {
+        val index = (args["index"] as? Number)?.toInt() ?: -1
+        val bridge = HonReaderBridge.instance
+        when (method) {
+            "goToToc" -> { menuToc.getOrNull(index)?.let { goReading(it.link) }; reply(null) }
+            "goToBookmark" -> {
+                val entry = menuBookmarks.getOrNull(index)
+                if (entry != null && !goToLocatorJson(entry["locatorString"] as? String)) {
+                    val chapter = (entry["pageIndex"] as? Number)?.toInt()
+                    val order = publication?.readingOrder
+                    if (chapter != null && order != null && chapter in order.indices) goReading(order[chapter])
+                }
+                reply(null)
+            }
+            "goToHighlight" -> {
+                val entry = menuHighlights.getOrNull(index)
+                goToLocatorJson(entry?.get("locatorString") as? String ?: entry?.get("locator") as? String)
+                reply(null)
+            }
+            "goToSearchResult" -> { menuSearchMatches.getOrNull(index)?.let { goReading(it) }; reply(null) }
+            "setPreferences" -> { applyMenuPreferences(args); reply(null) }
+            "resetPreferences" -> {
+                val finish = {
+                    resetToGlobalDefaults()
+                    applyPreferences()
+                    reply(menuPreferences())
+                }
+                if (bridge == null) finish() else bridge.resetBookReaderSettings(bookId) { runOnUiThread { finish() } }
+            }
+            "toggleScroll" -> {
+                if (canReflow()) { isScrollMode = !isScrollMode; saveDurablePreferences(); applyPreferences() }
+                reply(null)
+            }
+            "toggleRotationLock" -> {
+                requestedOrientation = if (requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_LOCKED)
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                reply(null)
+            }
+            "toggleBookmark" -> {
+                if (bridge == null) { reply(null); return }
+                bridge.toggleBookmark(
+                    bookId,
+                    currentChapterIndex(),
+                    currentLocator?.title ?: "Chapter ${currentChapterIndex() + 1}",
+                    locatorJson = currentLocator?.toJSON()?.toString(),
+                    locatorVersion = "readium-v2",
+                    snippet = currentLocator?.text?.highlight
+                ) { added ->
+                    Toast.makeText(this, if (added == true) "Bookmark saved" else if (added == false) "Bookmark removed" else "Could not save bookmark", Toast.LENGTH_SHORT).show()
+                    reply(added)
+                }
+            }
+            "deleteHighlight" -> {
+                val id = menuHighlights.getOrNull(index)?.get("id") as? String
+                if (bridge == null || id == null) { reply(highlightRows(menuHighlights)); return }
+                bridge.deleteHighlight(id) { _ ->
+                    refreshHighlights()
+                    bridge.getHighlights(bookId) { updated ->
+                        menuHighlights = updated
+                        reply(highlightRows(updated))
+                    }
+                }
+            }
+            "search" -> {
+                val pub = publication
+                val query = (args["query"] as? String)?.trim().orEmpty()
+                if (pub == null || query.length < 2) { reply(emptyList<Any>()); return }
+                menuSearchJob?.cancel()
+                menuSearchJob = lifecycleScope.launch {
+                    try {
+                        val found = searchPublication(pub, query)
+                        menuSearchMatches = found
+                        reply(found.map {
+                            mapOf(
+                                "title" to it.title,
+                                "before" to (it.text.before ?: ""),
+                                "highlight" to (it.text.highlight ?: ""),
+                                "after" to (it.text.after ?: ""),
+                            )
+                        })
+                    } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                        reply(mapOf("error" to "Search took too long. Try a more specific query."))
+                    } catch (error: CancellationException) {
+                        reply(mapOf("error" to "Search was replaced by a newer one."))
+                        throw error
+                    } catch (error: Exception) {
+                        reply(mapOf("error" to (error.message ?: "Search failed.")))
+                    }
+                }
+            }
+            else -> reply(null)
+        }
     }
 
     private fun resetToGlobalDefaults() {
@@ -1585,6 +1853,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
     }
 
     private fun showAppearanceDialog() {
+        if (showFlutterMenu("appearance")) return
         val dialog = Dialog(this)
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         fun typography(): JSONObject = try {
@@ -1810,6 +2079,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
         if (readyReported && currentLocator != null) {
             HonReaderBridge.instance?.reportResumed(bookId, requestId)
         }
+        flutterMenus?.onResume()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -1827,6 +2097,7 @@ class ReadiumReaderActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        flutterMenus?.onPause()
         val loc = currentLocator
         if (loc != null) {
             val totalProg = computeTotalProgression(loc)
@@ -1892,6 +2163,10 @@ class ReadiumReaderActivity : AppCompatActivity() {
             publication = null
         }
         locatorJob?.cancel()
+        menuSearchJob?.cancel()
+        if (::readerContainer.isInitialized) readerContainer.removeCallbacks(saveBrightness)
+        flutterMenus?.destroy()
+        flutterMenus = null
         continuousReader?.dispose(removeFragments = false)
         continuousReader = null
         navigator = null

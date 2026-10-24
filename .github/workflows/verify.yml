@@ -32,8 +32,8 @@ jobs:
       - name: Run Flutter Analyze
         run: flutter analyze
 
-      - name: Run Flutter Unit Tests
-        run: flutter test test/unit/
+      - name: Run Flutter Unit and Widget Tests
+        run: flutter test test/unit/ test/widget/
 
       - name: Run Android Unit Tests
         run: |

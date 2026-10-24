@@ -14,6 +14,8 @@ import '../../../core/downloads/chapter_action_coordinator.dart';
 import '../../../core/models/bookmark.dart';
 import '../../../core/models/chapter.dart';
 import '../../../core/models/highlight.dart';
+import '../../../core/utils/log_ignored.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ReaderContentsSheet extends StatefulWidget {
   final String? bookId;
@@ -76,7 +78,20 @@ class ReaderContentsSheet extends StatefulWidget {
   State<ReaderContentsSheet> createState() => _ReaderContentsSheetState();
 }
 
+/// Which chapters the Contents list shows. "Unread" means after the chapter
+/// being read, matching how the library counts unread chapters.
+enum ChapterListFilter { all, unread, downloaded, notDownloaded }
+
 class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
+  static const _filterKey = 'hon_contents_chapter_filter';
+  static const _newestFirstKey = 'hon_contents_newest_first';
+
+  ChapterListFilter _filter = ChapterListFilter.all;
+  bool _newestFirst = false;
+  String _query = '';
+
+  /// Chapter indices in the order the list currently shows them.
+  List<int> _visibleIndices = const [];
   int _selectedTabIndex = 0; // Chapters and bookmarks.
   late final ScrollController _chapterScrollController;
   bool _isSelectionMode = false;
@@ -100,8 +115,8 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
       }
 
       if (!_chapterScrollController.hasClients) return;
-      if (widget.currentChapterIndex < 0 || widget.currentChapterIndex >= widget.chapters.length) return;
-      final targetIndex = widget.currentChapterIndex;
+      final targetIndex = _visibleIndices.indexOf(widget.currentChapterIndex);
+      if (targetIndex < 0) return;
 
       for (int iteration = 0; iteration < 6; iteration++) {
         if (!mounted) return;
@@ -171,8 +186,78 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
     super.initState();
     DatabaseService.instance.addListener(_onDatabaseChanged);
     _chapterScrollController = ScrollController();
+    _loadListPreferences();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _jumpToCurrentChapter(animate: false);
+    });
+  }
+
+  Future<void> _loadListPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final filter = ChapterListFilter.values
+          .where((f) => f.name == prefs.getString(_filterKey))
+          .firstOrNull;
+      final newestFirst = prefs.getBool(_newestFirstKey) ?? false;
+      if (!mounted) return;
+      if (filter == null && !newestFirst) return;
+      setState(() {
+        _filter = filter ?? ChapterListFilter.all;
+        _newestFirst = newestFirst;
+      });
+      _jumpToCurrentChapter(animate: false);
+    } catch (e) {
+      logIgnored(e, 'contents list preferences');
+    }
+  }
+
+  Future<void> _saveListPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_filterKey, _filter.name);
+      await prefs.setBool(_newestFirstKey, _newestFirst);
+    } catch (e) {
+      logIgnored(e, 'contents list preferences');
+    }
+  }
+
+  void _setFilter(ChapterListFilter filter) {
+    if (filter == _filter) return;
+    setState(() => _filter = filter);
+    _saveListPreferences();
+    _scrollListToTop();
+  }
+
+  void _scrollListToTop() {
+    if (_chapterScrollController.hasClients) _chapterScrollController.jumpTo(0);
+  }
+
+  void _toggleNewestFirst() {
+    setState(() => _newestFirst = !_newestFirst);
+    _saveListPreferences();
+    _scrollListToTop();
+  }
+
+  bool _passesFilter(int index, Chapter? dbCh) {
+    final state = dbCh?.downloadState ?? ChapterDownloadState.notDownloaded;
+    return switch (_filter) {
+      ChapterListFilter.all => true,
+      ChapterListFilter.unread => index > widget.currentChapterIndex,
+      ChapterListFilter.downloaded => state == ChapterDownloadState.downloaded,
+      ChapterListFilter.notDownloaded => state != ChapterDownloadState.downloaded,
+    };
+  }
+
+  /// Selects every chapter between the first and last selected ones, in the
+  /// order the list shows them.
+  void _selectRange(List<String> shownIds) {
+    final positions = [
+      for (var i = 0; i < shownIds.length; i++)
+        if (_selectedChapterIds.contains(shownIds[i])) i,
+    ];
+    if (positions.length < 2) return;
+    setState(() {
+      _selectedChapterIds.addAll(shownIds.sublist(positions.first, positions.last + 1));
     });
   }
 
@@ -208,6 +293,42 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
     await ChapterActionCoordinator.instance.promptDownloadCustomN(
       context,
       book: book,
+      currentReadingIndex: widget.currentChapterIndex,
+    );
+  }
+
+  /// Queues every chapter from the current one to the end, asking first when
+  /// that is a lot of chapters.
+  Future<void> _downloadRemainingInContents() async {
+    if (widget.bookId == null) return;
+    final db = DatabaseService.instance;
+    final book = db.getBookById(widget.bookId!);
+    if (book == null) return;
+    await db.ensureChaptersLoaded(book.id);
+    final remaining = db
+        .getChapters(book.id)
+        .skip(widget.currentChapterIndex.clamp(0, 1 << 30))
+        .where((c) => c.downloadState != ChapterDownloadState.downloaded)
+        .length;
+    if (!mounted) return;
+    if (remaining > 50) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Download $remaining chapters?'),
+          content: const Text('They download in the background and can be paused from Downloads.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Download')),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await ChapterActionCoordinator.instance.downloadNextN(
+      context,
+      book: book,
+      count: 1 << 30,
       currentReadingIndex: widget.currentChapterIndex,
     );
   }
@@ -342,6 +463,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                         case 'custom':
                           await _downloadCustomInContents();
                           break;
+                        case 'remaining':
+                          await _downloadRemainingInContents();
+                          break;
                         case 'select':
                           setState(() => _isSelectionMode = true);
                           break;
@@ -376,6 +500,10 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                       const PopupMenuItem(
                         value: 'custom',
                         child: Text('Download custom count...'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'remaining',
+                        child: Text('Download all remaining'),
                       ),
                       const PopupMenuDivider(),
                       const PopupMenuItem(
@@ -422,9 +550,13 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                'Chapter ${widget.currentChapterIndex + 1} of ${widget.totalChapters > 0 ? widget.totalChapters : widget.chapters.length}',
-                                style: TextStyle(fontSize: 13, color: subtextColor),
+                              Flexible(
+                                child: Text(
+                                  'Chapter ${widget.currentChapterIndex + 1} of ${widget.totalChapters > 0 ? widget.totalChapters : widget.chapters.length}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 13, color: subtextColor),
+                                ),
                               ),
                               const SizedBox(width: 4),
                               Icon(CupertinoIcons.location, size: 12, color: subtextColor),
@@ -567,177 +699,216 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
     final dbChapterMap = {
       for (final c in dbChapters) c.chapterIndex.toInt(): c,
     };
+    Chapter? dbAt(int index) =>
+        (index < dbChapters.length) ? dbChapters[index] : dbChapterMap[index];
 
-    final listWidget = ListView.separated(
-      controller: _chapterScrollController,
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      itemCount: widget.chapters.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
-      ),
-      itemBuilder: (context, index) {
-        final chapter = widget.chapters[index];
-        final isCurrent = index == widget.currentChapterIndex;
-        final dbCh = (index < dbChapters.length) ? dbChapters[index] : dbChapterMap[index];
-        final chId = dbCh?.id ?? 'ch_$index';
-        final isSelected = _selectedChapterIds.contains(chId);
-        final state = dbCh?.downloadState ?? ChapterDownloadState.notDownloaded;
+    final query = _query.trim().toLowerCase();
+    final visible = <int>[
+      for (var i = 0; i < widget.chapters.length; i++)
+        if (_passesFilter(i, dbAt(i)) &&
+            (query.isEmpty ||
+                widget.chapters[i].title.toLowerCase().contains(query) ||
+                '${i + 1}' == query))
+          i,
+    ];
+    _visibleIndices = _newestFirst ? visible.reversed.toList() : visible;
+    final shownIds = [
+      for (final i in _visibleIndices)
+        if (dbAt(i) case final ch?) ch.id,
+    ];
 
-        Widget? trailingStatus;
-        if (widget.bookId != null && dbCh != null) {
-          switch (state) {
-            case ChapterDownloadState.downloaded:
-              trailingStatus = const Icon(
-                CupertinoIcons.checkmark_circle_fill,
-                color: HonColors.accentGreen,
-                size: 18,
-              );
-              break;
-            case ChapterDownloadState.downloading:
-              trailingStatus = const SizedBox(
-                width: 18,
-                height: 18,
-                child: CupertinoActivityIndicator(radius: 8),
-              );
-              break;
-            case ChapterDownloadState.queued:
-              trailingStatus = Icon(
-                CupertinoIcons.clock,
-                color: subtextColor,
-                size: 18,
-              );
-              break;
-            case ChapterDownloadState.paused:
-              trailingStatus = GestureDetector(
-                onTap: () async {
-                  await HonDownloadManager.instance.resumeDownloadForChapter(widget.bookId!, dbCh.id);
-                  if (mounted) setState(() {});
-                },
-                child: const Icon(
-                  CupertinoIcons.pause_circle_fill,
-                  color: HonColors.accentOrange,
-                  size: 18,
-                ),
-              );
-              break;
-            case ChapterDownloadState.failed:
-              trailingStatus = GestureDetector(
-                onTap: () async {
-                  await HonDownloadManager.instance.resumeDownloadForChapter(widget.bookId!, dbCh.id);
-                  if (mounted) setState(() {});
-                },
-                child: Icon(
-                  CupertinoIcons.exclamationmark_circle_fill,
-                  color: Theme.of(context).colorScheme.error,
-                  size: 18,
-                ),
-              );
-              break;
-            case ChapterDownloadState.notDownloaded:
-              trailingStatus = GestureDetector(
-                onTap: () async {
-                  final book =
-                      DatabaseService.instance.getBookById(widget.bookId!);
-                  if (book != null) {
-                    await ChapterActionCoordinator.instance
-                        .downloadChapters(context, book: book, chapters: [dbCh]);
-                    if (mounted) setState(() {});
-                  }
-                },
-                child: Icon(
-                  CupertinoIcons.arrow_down_circle,
-                  color: subtextColor,
-                  size: 18,
-                ),
-              );
-              break;
-          }
-        }
-
-        return _TrackedChapterItem(
-          key: ValueKey(chId),
-          displayIndex: index,
-          onMount: (idx) => _mountedChapterIndices.add(idx),
-          onUnmount: (idx) => _mountedChapterIndices.remove(idx),
-          onMeasured: (idx, height) => _measuredItemHeights[idx] = height,
-          child: InkWell(
-            key: isCurrent ? _currentChapterKey : null,
-            onTap: () {
-              if (_isSelectionMode) {
-                setState(() {
-                  if (_selectedChapterIds.contains(chId)) {
-                    _selectedChapterIds.remove(chId);
-                  } else {
-                    _selectedChapterIds.add(chId);
-                  }
-                });
-                return;
-              }
-              widget.onSelectChapter(index);
-              Navigator.of(context).pop();
-            },
-            onLongPress: () {
-              if (!_isSelectionMode && widget.bookId != null) {
-                setState(() {
-                  _isSelectionMode = true;
-                  _selectedChapterIds.add(chId);
-                });
-              }
-            },
-            borderRadius: BorderRadius.circular(8),
+    final Widget listWidget = _visibleIndices.isEmpty
+        ? Center(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-              child: Row(
-                children: [
-                  if (_isSelectionMode) ...[
-                    Icon(
-                      isSelected
-                          ? CupertinoIcons.checkmark_circle_fill
-                          : CupertinoIcons.circle,
-                      color: isSelected ? HonColors.accentOrange : subtextColor,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 12),
-                  ],
-                  Expanded(
-                    child: Text(
-                      chapter.title,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                        color: isCurrent ? HonColors.accentOrange : textColor,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  if (trailingStatus != null) ...[
-                    trailingStatus,
-                    const SizedBox(width: 8),
-                  ],
-                  Text(
-                    '${index + 1}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
-                      color: isCurrent ? HonColors.accentOrange : subtextColor,
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                query.isNotEmpty ? 'No chapters match "${_query.trim()}".' : 'No chapters in this view.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: subtextColor),
               ),
             ),
+          )
+        : ListView.separated(
+          controller: _chapterScrollController,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          itemCount: _visibleIndices.length,
+          separatorBuilder: (_, __) => Divider(
+            height: 1,
+            color: isDark ? Colors.white10 : Colors.black.withOpacity(0.06),
           ),
-        );
-      },
+          itemBuilder: (context, position) {
+            final index = _visibleIndices[position];
+            final chapter = widget.chapters[index];
+            final isCurrent = index == widget.currentChapterIndex;
+            final dbCh = dbAt(index);
+            final chId = dbCh?.id ?? 'ch_$index';
+            final isSelected = _selectedChapterIds.contains(chId);
+            final state = dbCh?.downloadState ?? ChapterDownloadState.notDownloaded;
+
+            Widget? trailingStatus;
+            if (widget.bookId != null && dbCh != null) {
+              switch (state) {
+                case ChapterDownloadState.downloaded:
+                  trailingStatus = const Icon(
+                    CupertinoIcons.checkmark_circle_fill,
+                    color: HonColors.accentGreen,
+                    size: 18,
+                  );
+                  break;
+                case ChapterDownloadState.downloading:
+                  trailingStatus = const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CupertinoActivityIndicator(radius: 8),
+                  );
+                  break;
+                case ChapterDownloadState.queued:
+                  trailingStatus = Icon(
+                    CupertinoIcons.clock,
+                    color: subtextColor,
+                    size: 18,
+                  );
+                  break;
+                case ChapterDownloadState.paused:
+                  trailingStatus = GestureDetector(
+                    onTap: () async {
+                      await HonDownloadManager.instance.resumeDownloadForChapter(widget.bookId!, dbCh.id);
+                      if (mounted) setState(() {});
+                    },
+                    child: const Icon(
+                      CupertinoIcons.pause_circle_fill,
+                      color: HonColors.accentOrange,
+                      size: 18,
+                    ),
+                  );
+                  break;
+                case ChapterDownloadState.failed:
+                  trailingStatus = GestureDetector(
+                    onTap: () async {
+                      await HonDownloadManager.instance.resumeDownloadForChapter(widget.bookId!, dbCh.id);
+                      if (mounted) setState(() {});
+                    },
+                    child: Icon(
+                      CupertinoIcons.exclamationmark_circle_fill,
+                      color: Theme.of(context).colorScheme.error,
+                      size: 18,
+                    ),
+                  );
+                  break;
+                case ChapterDownloadState.notDownloaded:
+                  trailingStatus = GestureDetector(
+                    onTap: () async {
+                      final book =
+                          DatabaseService.instance.getBookById(widget.bookId!);
+                      if (book != null) {
+                        await ChapterActionCoordinator.instance
+                            .downloadChapters(context, book: book, chapters: [dbCh]);
+                        if (mounted) setState(() {});
+                      }
+                    },
+                    child: Icon(
+                      CupertinoIcons.arrow_down_circle,
+                      color: subtextColor,
+                      size: 18,
+                    ),
+                  );
+                  break;
+              }
+            }
+
+            return _TrackedChapterItem(
+              key: ValueKey(chId),
+              displayIndex: position,
+              onMount: (idx) => _mountedChapterIndices.add(idx),
+              onUnmount: (idx) => _mountedChapterIndices.remove(idx),
+              onMeasured: (idx, height) => _measuredItemHeights[idx] = height,
+              child: InkWell(
+                key: isCurrent ? _currentChapterKey : null,
+                onTap: () {
+                  if (_isSelectionMode) {
+                    setState(() {
+                      if (_selectedChapterIds.contains(chId)) {
+                        _selectedChapterIds.remove(chId);
+                      } else {
+                        _selectedChapterIds.add(chId);
+                      }
+                    });
+                    return;
+                  }
+                  widget.onSelectChapter(index);
+                  Navigator.of(context).pop();
+                },
+                onLongPress: () {
+                  if (!_isSelectionMode && widget.bookId != null) {
+                    setState(() {
+                      _isSelectionMode = true;
+                      _selectedChapterIds.add(chId);
+                    });
+                  }
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+                  child: Row(
+                    children: [
+                      if (_isSelectionMode) ...[
+                        Icon(
+                          isSelected
+                              ? CupertinoIcons.checkmark_circle_fill
+                              : CupertinoIcons.circle,
+                          color: isSelected ? HonColors.accentOrange : subtextColor,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 12),
+                      ],
+                      Expanded(
+                        child: Text(
+                          chapter.title,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                            color: isCurrent ? HonColors.accentOrange : textColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      if (trailingStatus != null) ...[
+                        trailingStatus,
+                        const SizedBox(width: 8),
+                      ],
+                      Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w400,
+                          color: isCurrent ? HonColors.accentOrange : subtextColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+          );
+
+    final toolbar = _buildListToolbar(
+      textColor,
+      subtextColor,
+      isDark,
+      showDownloadFilters: dbChapters.isNotEmpty,
     );
 
     if (!_isSelectionMode) {
-      return listWidget;
+      return Column(children: [toolbar, Expanded(child: listWidget)]);
     }
 
+    final allShownSelected =
+        shownIds.isNotEmpty && shownIds.every(_selectedChapterIds.contains);
     return Column(
       children: [
+        toolbar,
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           decoration: BoxDecoration(
@@ -750,26 +921,56 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
           ),
           child: Row(
             children: [
-              Text(
-                '${_selectedChapterIds.length} selected',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
+              Expanded(
+                child: Text(
+                  '${_selectedChapterIds.length} selected',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
                 ),
               ),
-              const Spacer(),
-              TextButton(
-                onPressed: () {
-                  setState(() {
-                    if (_selectedChapterIds.length == dbChapters.length) {
-                      _selectedChapterIds.clear();
-                    } else {
-                      _selectedChapterIds.addAll(dbChapters.map((c) => c.id));
-                    }
-                  });
+              PopupMenuButton<String>(
+                tooltip: 'Selection options',
+                icon: const Icon(CupertinoIcons.ellipsis_circle, size: 20),
+                onSelected: (value) {
+                  switch (value) {
+                    case 'all':
+                      setState(() => allShownSelected
+                          ? _selectedChapterIds.removeAll(shownIds)
+                          : _selectedChapterIds.addAll(shownIds));
+                    case 'range':
+                      _selectRange(shownIds);
+                    case 'invert':
+                      setState(() {
+                        for (final id in shownIds) {
+                          if (!_selectedChapterIds.remove(id)) _selectedChapterIds.add(id);
+                        }
+                      });
+                    case 'clear':
+                      setState(_selectedChapterIds.clear);
+                  }
                 },
-                child: Text(_selectedChapterIds.length == dbChapters.length ? 'Clear' : 'Select All'),
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'all',
+                    child: Text(allShownSelected ? 'Deselect shown' : 'Select all shown'),
+                  ),
+                  PopupMenuItem(
+                    value: 'range',
+                    enabled: _selectedChapterIds.length >= 2,
+                    child: const Text('Select range between'),
+                  ),
+                  const PopupMenuItem(value: 'invert', child: Text('Invert selection')),
+                  PopupMenuItem(
+                    value: 'clear',
+                    enabled: _selectedChapterIds.isNotEmpty,
+                    child: const Text('Clear selection'),
+                  ),
+                ],
               ),
               IconButton(
                 tooltip: 'Download selected',
@@ -795,6 +996,78 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
         ),
         Expanded(child: listWidget),
       ],
+    );
+  }
+
+  Widget _buildListToolbar(
+    Color textColor,
+    Color subtextColor,
+    bool isDark, {
+    required bool showDownloadFilters,
+  }) {
+    if (widget.chapters.length < 2) return const SizedBox.shrink();
+    final filters = [
+      (ChapterListFilter.all, 'All'),
+      (ChapterListFilter.unread, 'Unread'),
+      if (showDownloadFilters) ...[
+        (ChapterListFilter.downloaded, 'Downloaded'),
+        (ChapterListFilter.notDownloaded, 'Not downloaded'),
+      ],
+    ];
+    final fill = isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 10, 12, 2),
+      child: Column(
+        children: [
+          if (widget.chapters.length >= 20)
+            Padding(
+              padding: const EdgeInsets.only(right: 8, bottom: 8),
+              child: CupertinoSearchTextField(
+                placeholder: 'Search chapters',
+                style: TextStyle(color: textColor, fontSize: 15),
+                backgroundColor: fill,
+                onChanged: (value) {
+                  setState(() => _query = value);
+                  _scrollListToTop();
+                },
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final (filter, label) in filters)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: _FilterPill(
+                            label: label,
+                            selected: _filter == filter,
+                            fill: fill,
+                            textColor: textColor,
+                            onTap: () => _setFilter(filter),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: _newestFirst ? 'Show oldest first' : 'Show newest first',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  _newestFirst ? CupertinoIcons.sort_up : CupertinoIcons.sort_down,
+                  size: 20,
+                  color: _newestFirst ? HonColors.accentOrange : subtextColor,
+                ),
+                onPressed: _toggleNewestFirst,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -929,7 +1202,9 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
         try {
           final loc = jsonDecode(hl.locatorString) as Map<String, dynamic>;
           chIdx = (loc['chapterIndex'] as num?)?.toInt() ?? 0;
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_contents_sheet');
+        }
 
         final hlColor = colorFromKey(hl.color);
 
@@ -1030,6 +1305,50 @@ class _ReaderContentsSheetState extends State<ReaderContentsSheet> {
               style: TextStyle(fontSize: 13, color: subtextColor, height: 1.4),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color fill;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  const _FilterPill({
+    required this.label,
+    required this.selected,
+    required this.fill,
+    required this.textColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? HonColors.accentOrange : fill,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: selected ? Colors.white : textColor,
+            ),
+          ),
         ),
       ),
     );

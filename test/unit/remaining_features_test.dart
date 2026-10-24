@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hon/core/backup/backup_service.dart';
@@ -14,6 +15,7 @@ import 'package:hon/core/models/download_job.dart';
 import 'package:hon/core/models/novel_source.dart';
 import 'package:hon/core/models/reading_progress.dart';
 import 'package:hon/core/updates/chapter_update_service.dart';
+import 'package:hon/core/downloads/download_preferences.dart';
 import 'package:hon/core/downloads/hon_download_manager.dart';
 import 'package:hon/core/sources/source_registry.dart';
 import 'package:hon/core/sources/source_preferences.dart';
@@ -144,6 +146,37 @@ void main() {
       expect(db.getChapters('one').length, 2);
     },
   );
+  test('auto-download queues only chapters an update check found', () async {
+    await db.saveBook(book('one'));
+    await db.setLibraryMembership('one', true);
+    await db.saveChapters('one', [chapter('old', 'one', 0)]);
+    SourceChapter source(String id, int i) => SourceChapter(
+      id: id,
+      title: 'Chapter $id',
+      index: i.toDouble(),
+      url: 'https://example.test/$id',
+    );
+    var chapters = [source('old', 0), source('new', 1)];
+    final updates = ChapterUpdateService(
+      fetch: (_, id) async =>
+          NovelDetails(id: id, title: 'Book', chapters: chapters),
+    );
+
+    // Off by default: the new chapter is listed but not queued.
+    expect(await updates.check(), 1);
+    expect(db.getAllDownloadJobs(), isEmpty);
+
+    await DownloadPreferences.setAutoDownloadNew(true);
+    chapters = [...chapters, source('newer', 2)];
+    expect(await updates.check(), 1);
+    expect(updates.errors, isEmpty);
+    final jobs = db.getAllDownloadJobs();
+    expect(jobs.map((j) => j.chapterId), ['one:newer']);
+    // Queued with the same managed file path the download manager uses.
+    final queued = db.getChapters('one').firstWhere((c) => c.id == 'one:newer');
+    expect(queued.localFilePath, startsWith('${folder.path}/chapters/'));
+    await HonDownloadManager.instance.cancelDownload(jobs.single.id);
+  });
   test(
     'portable backup restores files, locators, collections and paused jobs',
     () async {
@@ -434,9 +467,15 @@ void main() {
       expect(file2.existsSync(), isTrue);
 
       var updatedChapters = db.getChapters('novel1');
-      expect(updatedChapters[0].downloadState, ChapterDownloadState.notDownloaded);
+      expect(
+        updatedChapters[0].downloadState,
+        ChapterDownloadState.notDownloaded,
+      );
       expect(updatedChapters[0].localFilePath, isNull);
-      expect(updatedChapters[1].downloadState, ChapterDownloadState.notDownloaded);
+      expect(
+        updatedChapters[1].downloadState,
+        ChapterDownloadState.notDownloaded,
+      );
       expect(updatedChapters[1].localFilePath, isNull);
       expect(updatedChapters[2].downloadState, ChapterDownloadState.downloaded);
       expect(updatedChapters[2].localFilePath, file2.path);
@@ -455,5 +494,103 @@ void main() {
       expect(updatedChapters.every((c) => c.localFilePath == null), isTrue);
     },
   );
-}
 
+  test('incognito keeps places without touching history or stats', () async {
+    await db.saveBook(book('one'));
+    await db.saveBook(book('two'));
+    final earlier = DateTime(2026, 1, 1);
+    await db.saveProgress(
+      ReadingProgress(bookId: 'one', chapterIndex: 1, lastReadAt: earlier),
+    );
+
+    await db.setIncognito(true);
+    await db.saveProgress(
+      ReadingProgress(
+        bookId: 'one',
+        chapterIndex: 4,
+        lastReadAt: DateTime.now(),
+      ),
+    );
+    await db.saveProgress(
+      ReadingProgress(
+        bookId: 'two',
+        chapterIndex: 2,
+        lastReadAt: DateTime.now(),
+      ),
+    );
+    await db.addReadingTime(600);
+
+    // The started book moves on but keeps its place in history.
+    expect(db.getProgress('one')!.chapterIndex, 4);
+    expect(db.getProgress('one')!.lastReadAt, earlier);
+    // The new one leaves no trace, and no minutes are counted.
+    expect(db.getProgress('two'), isNull);
+    expect(db.getTodayReadingMinutes(), 0);
+
+    await db.setIncognito(false);
+    await db.addReadingTime(600);
+    expect(db.getTodayReadingMinutes(), 10);
+  });
+
+  test('a full update check skips novels marked finished', () async {
+    await db.saveBook(book('ongoing'));
+    await db.saveBook(book('done'));
+    for (final id in ['ongoing', 'done']) {
+      await db.setLibraryMembership(id, true);
+      await db.saveChapters(id, [chapter('$id:a', id, 0)]);
+    }
+    await db.markBookFinished('done', true);
+    final checked = <String>[];
+    final updates = ChapterUpdateService(
+      fetch: (_, id) async {
+        checked.add(id);
+        return NovelDetails(id: id, title: 'Book', chapters: const []);
+      },
+    );
+    await updates.check();
+    expect(
+      checked,
+      isNot(contains(predicate<String>((id) => id.contains('done')))),
+    );
+    expect(checked, isNotEmpty);
+  });
+
+  test(
+    'download progress alone does not wake every database listener',
+    () async {
+      await db.saveBook(book('one'));
+      await db.saveChapters('one', [chapter('one:a', 'one', 0)]);
+      final now = DateTime.now();
+      await db.updateDownloadJob(
+        DownloadJob(
+          id: 'job',
+          bookId: 'one',
+          chapterId: 'one:a',
+          chapterTitle: 'Chapter 0',
+          sourceId: 'source',
+          status: DownloadStatus.running,
+          progress: 0.1,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      Future<void> write(DownloadJobsTableCompanion row) async {
+        await (sql.update(
+          sql.downloadJobsTable,
+        )..where((t) => t.id.equals('job'))).write(row);
+        await db.refreshDownloadJob('job');
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+
+      final changes = db.changeNotifier.value;
+      final ticks = db.downloadProgressNotifier.value;
+      await write(const DownloadJobsTableCompanion(progress: Value(0.5)));
+      expect(db.getDownloadJob('job')!.progress, 0.5);
+      expect(db.changeNotifier.value, changes);
+      expect(db.downloadProgressNotifier.value, ticks + 1);
+
+      await write(const DownloadJobsTableCompanion(status: Value('failed')));
+      expect(db.changeNotifier.value, greaterThan(changes));
+    },
+  );
+}

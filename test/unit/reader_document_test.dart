@@ -89,5 +89,23 @@ void main() {
     expect(doc.blocks.first.text, 'Chapter 81: The Forgotten Shore');
     expect(doc.blocks[1].text, contains('The dawn brought no warmth'));
   });
-}
 
+  test('ReaderDocument.parse splits a novel name glued to the chapter title', () {
+    const html = '''
+      <div><span>Shadow Slave</span><span>Chapter 1</span></div>
+      <p>Sunny woke up in the cold.</p>
+    ''';
+    final doc = ReaderDocument.parse(html, title: 'Chapter 1');
+    expect(doc.blocks.first.heading, isTrue);
+    expect(doc.blocks.first.text, 'Chapter 1');
+    expect(doc.blocks[1].text, contains('Sunny woke up'));
+    expect(doc.blocks.length, 2);
+  });
+
+  test('ReaderDocument.parse styles a plain-text chapter title as a heading', () {
+    const html = '<p>Chapter 2</p><p>The second day.</p>';
+    final doc = ReaderDocument.parse(html, title: 'Chapter 2');
+    expect(doc.blocks.first.heading, isTrue);
+    expect(doc.blocks.where((b) => b.heading).length, 1);
+  });
+}

@@ -46,6 +46,7 @@ void main() {
       expect(settings.intervalHours, equals(12));
       expect(settings.unmeteredOnly, isTrue);
       expect(settings.requiresBatteryNotLow, isTrue);
+      expect(settings.requiresCharging, isFalse);
       expect(settings.lastCheckTime, equals(DateTime.fromMillisecondsSinceEpoch(1700000000000)));
       expect(settings.lastCheckStatus, equals('Found 2 new chapters in 1 book'));
     });
@@ -57,9 +58,11 @@ void main() {
         intervalHours: 6,
         unmeteredOnly: false,
         requiresBatteryNotLow: false,
+        requiresCharging: true,
       );
 
       final settings = await service.getSettings();
+      expect(settings.requiresCharging, isTrue);
       expect(settings.enabled, isFalse);
       expect(settings.intervalHours, equals(6));
       expect(settings.unmeteredOnly, isFalse);

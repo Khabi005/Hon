@@ -2,6 +2,27 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 class BookCoverWidget extends StatelessWidget {
+  /// Cover files already seen on disk, so scrolling a big library doesn't
+  /// stat every file on every build. Missing files are checked again each
+  /// build, so a repaired cover shows up.
+  static final Set<String> _existingFiles = {};
+
+  /// Covers that arrive after the first frame fade in instead of popping.
+  static Widget _fadeIn(
+    BuildContext context,
+    Widget child,
+    int? frame,
+    bool wasSynchronouslyLoaded,
+  ) {
+    if (wasSynchronouslyLoaded) return child;
+    return AnimatedOpacity(
+      opacity: frame == null ? 0 : 1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+      child: child,
+    );
+  }
+
   final String? coverPath;
   final String title;
   final String author;
@@ -57,6 +78,7 @@ class BookCoverWidget extends StatelessWidget {
               height: h,
               cacheWidth: decodeWidth,
               fit: BoxFit.cover,
+              frameBuilder: _fadeIn,
               errorBuilder: (_, __, ___) => _buildFallbackCover(w, h),
             );
           } else {
@@ -64,13 +86,16 @@ class BookCoverWidget extends StatelessWidget {
             // Missing managed covers can be repaired after the first frame.
             // Keep a fallback widget until a file exists, so the repair builds
             // a fresh Image state instead of retaining an errored stream.
-            imageContent = file.existsSync()
+            final exists = _existingFiles.contains(coverPath!) ||
+                (file.existsSync() && _existingFiles.add(coverPath!));
+            imageContent = exists
                 ? Image.file(
                     file,
                     width: w,
                     height: h,
                     cacheWidth: decodeWidth,
                     fit: BoxFit.cover,
+                    frameBuilder: _fadeIn,
                     errorBuilder: (_, __, ___) => _buildFallbackCover(w, h),
                   )
                 : _buildFallbackCover(w, h);
@@ -84,14 +109,15 @@ class BookCoverWidget extends StatelessWidget {
           height: height != null && height!.isFinite ? height : null,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(borderRadius),
+            // Soft, wide shadow like Apple Books rather than a hard drop.
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.18),
-                blurRadius: 8,
-                offset: const Offset(1, 4),
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
               BoxShadow(
-                color: Colors.black.withOpacity(0.08),
+                color: Colors.black.withValues(alpha: 0.06),
                 blurRadius: 2,
                 offset: const Offset(0, 1),
               ),
@@ -102,7 +128,8 @@ class BookCoverWidget extends StatelessWidget {
             child: Stack(
               children: [
                 Positioned.fill(child: imageContent),
-                if (showSpineShadow)
+                // The spine sheen reads as noise on small thumbnails.
+                if (showSpineShadow && w >= 120)
                   Positioned(
                     left: 0,
                     top: 0,

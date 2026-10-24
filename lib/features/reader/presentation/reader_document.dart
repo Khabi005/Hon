@@ -14,6 +14,8 @@ import 'package:path/path.dart' as p;
 
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/files/storage_service.dart';
+import '../../../core/utils/log_ignored.dart';
+import '../../../core/utils/reading_time.dart';
 
 /// A location in the original chapter, independent of page size and typography.
 class ReaderTextAnchor {
@@ -153,6 +155,26 @@ class ReaderDocument {
   final List<ReaderBlock> blocks;
   const ReaderDocument(this.blocks);
 
+  static final _wordsAfter = Expando<List<int>>('wordsAfter');
+
+  /// Words from [anchor] to the end of the chapter. Per-block counts are
+  /// worked out once per document, so this is cheap to call on every build.
+  int wordsFrom(ReaderTextAnchor anchor) {
+    final after = _wordsAfter[this] ??= () {
+      // after[i] = words in blocks i+1 .. end.
+      final list = List<int>.filled(blocks.length + 1, 0);
+      for (var i = blocks.length - 1; i >= 0; i--) {
+        list[i] = list[i + 1] + (i + 1 < blocks.length ? countWords(blocks[i + 1].text) : 0);
+      }
+      return list;
+    }();
+    if (blocks.isEmpty || anchor.block >= blocks.length) return 0;
+    final index = anchor.block < 0 ? 0 : anchor.block;
+    final text = blocks[index].text;
+    final start = anchor.offset.clamp(0, text.length);
+    return countWords(text.substring(start)) + after[index];
+  }
+
   static Future<ReaderDocument> parseAsync(String source, {String? title, String? baseUrl}) =>
       Isolate.run(() => ReaderDocument.parse(source, title: title, baseUrl: baseUrl));
 
@@ -192,6 +214,18 @@ class ReaderDocument {
       'table',
       'tr',
       'td',
+      'th',
+      'dl',
+      'dt',
+      'dd',
+      'aside',
+      'nav',
+      'center',
+      'address',
+      'details',
+      'summary',
+      'caption',
+      'hgroup',
     };
     void visit(
       dom.Node node, {
@@ -311,7 +345,24 @@ class ReaderDocument {
           }
         }
       }
-      if (!hasExistingHeading) {
+      if (hasExistingHeading) {
+        final first = blocks.first;
+        final firstNorm = norm(first.text);
+        if (firstNorm == normTitle && !first.heading) {
+          // The source sent the chapter title as plain text: style it.
+          blocks[0] = ReaderBlock(runs: first.runs, heading: true);
+        } else if (firstNorm != normTitle &&
+            firstNorm.endsWith(normTitle) &&
+            first.text.length <= cleanTitle.length + 80) {
+          // Some sources put the novel name and chapter title in sibling
+          // inline elements ("Shadow Slave" + "Chapter 1"), which read as
+          // "Shadow SlaveChapter 1". Show just the chapter title.
+          blocks[0] = ReaderBlock(
+            heading: true,
+            runs: [ReaderRun(cleanTitle, const TextStyle())],
+          );
+        }
+      } else {
         blocks.insert(
           0,
           ReaderBlock(
@@ -353,6 +404,9 @@ class ReaderDocument {
         continue;
       }
       final text = block.text;
+      // Headings render inside Padding(top: 28, bottom: 18) on every page
+      // they appear on; leaving it out made pages overflow by that much.
+      final chrome = block.heading ? 46.0 : 0.0;
       var start = 0;
       while (start < text.length) {
         final painter = TextPainter(
@@ -371,7 +425,8 @@ class ReaderDocument {
         final lines = painter.computeLineMetrics();
         final fits = lines
             .takeWhile(
-              (line) => line.baseline + line.descent <= remaining + 0.01,
+              (line) =>
+                  line.baseline + line.descent + chrome <= remaining + 0.01,
             )
             .toList();
         if (fits.isEmpty && page.isNotEmpty) {
@@ -389,7 +444,7 @@ class ReaderDocument {
         // Include the newline consumed at a page boundary.
         if (start + count < text.length && text[start + count] == '\n') count++;
         if (count <= 0) count = text.length - start;
-        final used = last.baseline + last.descent;
+        final used = last.baseline + last.descent + chrome;
         final end = math.min(text.length, start + count);
         page.add(
           ReaderFragment(index, start, end, used, end == text.length ? gap : 0),
@@ -471,7 +526,9 @@ class _ReaderImageState extends State<_ReaderImage> {
         tmp.writeAsBytesSync(bytes, flush: true);
         tmp.renameSync(file.path);
       }
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'reader_document');
+    }
   }
   @override
   void initState() { super.initState(); _decode(); }

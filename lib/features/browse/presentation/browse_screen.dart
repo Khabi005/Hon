@@ -1,7 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../../../app/theme/hon_colors.dart';
-import '../../../shared/widgets/hon_screen_header.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 import '../../../core/sources/source_registry.dart';
 import '../../../core/sources/installed_extension_service.dart';
 import 'source_catalog_screen.dart';
@@ -133,29 +133,33 @@ class _BrowseScreenState extends State<BrowseScreen> {
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           slivers: [
             if (SourceRegistry.instance.isPreparing)
-              const SliverToBoxAdapter(child: ListTile(
-                leading: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-                title: Text('Preparing bundled sources…'),
-              )),
-            SliverToBoxAdapter(
-              child: HonScreenHeader(
-                title: 'Browse',
-                actions: [
-                  IconButton(
-                    icon: Icon(
-                      CupertinoIcons.square_stack_3d_up,
-                      color: textSecondary,
-                      size: 22,
-                    ),
-                    tooltip: 'Extension repositories',
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const ExtensionRepositoriesScreen(),
-                      ),
+              const SliverToBoxAdapter(
+                child: ListTile(
+                  leading: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('Preparing bundled sources…'),
+                ),
+              ),
+            SliverHonLargeTitle(
+              title: 'Browse',
+              actions: [
+                IconButton(
+                  icon: Icon(
+                    CupertinoIcons.square_stack_3d_up,
+                    color: textSecondary,
+                    size: 22,
+                  ),
+                  tooltip: 'Extension repositories',
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const ExtensionRepositoriesScreen(),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
 
             // Segmented Control: Sources | Extensions (Matching Reference Screenshot)
@@ -277,11 +281,15 @@ class _BrowseScreenState extends State<BrowseScreen> {
     final bgColor = source.isInstalled
         ? const Color(0xFF1B4965)
         : (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA));
-    final textColor = source.isInstalled || isDark ? Colors.white : Colors.black87;
+    final textColor = source.isInstalled || isDark
+        ? Colors.white
+        : Colors.black87;
 
     Widget letterFallback() => Center(
       child: Text(
-        source.name.isNotEmpty ? source.name.substring(0, 1).toUpperCase() : '?',
+        source.name.isNotEmpty
+            ? source.name.substring(0, 1).toUpperCase()
+            : '?',
         style: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.bold,

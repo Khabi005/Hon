@@ -65,21 +65,27 @@ class HonUpdateCheckWorker(
         const val MAX_BOOKS_PER_RUN = 40
         const val MIN_DELAY_PER_SOURCE_MS = 500L
 
-        fun buildConstraints(unmeteredOnly: Boolean, batteryNotLow: Boolean): Constraints {
+        fun buildConstraints(
+            unmeteredOnly: Boolean,
+            batteryNotLow: Boolean,
+            charging: Boolean = false
+        ): Constraints {
             return Constraints.Builder()
                 .setRequiredNetworkType(if (unmeteredOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
                 .setRequiresBatteryNotLow(batteryNotLow)
+                .setRequiresCharging(charging)
                 .build()
         }
 
         fun buildPeriodicWorkRequest(
             intervalHours: Long,
             unmeteredOnly: Boolean,
-            batteryNotLow: Boolean
+            batteryNotLow: Boolean,
+            charging: Boolean = false
         ): PeriodicWorkRequest {
             val clampedInterval = intervalHours.coerceAtLeast(1)
             return PeriodicWorkRequestBuilder<HonUpdateCheckWorker>(clampedInterval, TimeUnit.HOURS)
-                .setConstraints(buildConstraints(unmeteredOnly, batteryNotLow))
+                .setConstraints(buildConstraints(unmeteredOnly, batteryNotLow, charging))
                 .addTag("hon_update_check")
                 .build()
         }
@@ -89,14 +95,15 @@ class HonUpdateCheckWorker(
             enabled: Boolean,
             intervalHours: Long = 24,
             unmeteredOnly: Boolean = true,
-            batteryNotLow: Boolean = true
+            batteryNotLow: Boolean = true,
+            charging: Boolean = false
         ) {
             val manager = WorkManager.getInstance(context)
             if (!enabled) {
                 manager.cancelUniqueWork(WORK_NAME)
                 return
             }
-            val request = buildPeriodicWorkRequest(intervalHours, unmeteredOnly, batteryNotLow)
+            val request = buildPeriodicWorkRequest(intervalHours, unmeteredOnly, batteryNotLow, charging)
             manager.enqueueUniquePeriodicWork(
                 WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
@@ -136,7 +143,9 @@ class HonUpdateCheckWorker(
             networkFetcher: suspend (sourceId: String, novelUrl: String) -> List<ChapterData>?,
             notifier: (newChapters: Int, booksCount: Int) -> Unit,
             isStoppedCheck: () -> Boolean = { false },
-            delayProvider: suspend (ms: Long) -> Unit = { delay(it) }
+            delayProvider: suspend (ms: Long) -> Unit = { delay(it) },
+            // Chapters added since the last check (never on a book's first check).
+            onNewChapters: (bookId: String, sourceId: String, chapters: List<ExistingChapter>) -> Unit = { _, _, _ -> }
         ): UpdateCheckResult {
             if (database == null) {
                 return UpdateCheckResult(0, 0, 0, 1, "Database not available")
@@ -287,6 +296,11 @@ class HonUpdateCheckWorker(
                     if (newlyAddedCount > 0) {
                         totalNewChapters += newlyAddedCount
                         booksWithUpdates++
+                        try {
+                            onNewChapters(bookId, sourceId, newChapters)
+                        } catch (_: Exception) {
+                            // Saving the chapter list matters more than queueing them.
+                        }
                     }
                 } catch (e: Exception) {
                     failures++
@@ -330,7 +344,15 @@ class HonUpdateCheckWorker(
             enabledSourceIds = enabledSources,
             networkFetcher = { sourceId, novelUrl -> fetchChaptersFromSource(sourceId, novelUrl) },
             notifier = { newChapters, booksCount -> postUpdateNotification(newChapters, booksCount) },
-            isStoppedCheck = { isStopped }
+            isStoppedCheck = { isStopped },
+            onNewChapters = { bookId, sourceId, chapters ->
+                if (db != null && AutoDownloadQueue.isEnabled(context)) {
+                    val jobs = AutoDownloadQueue.persist(
+                        db, bookId, sourceId, chapters, AutoDownloadQueue.chaptersDir(context)
+                    )
+                    AutoDownloadQueue.schedule(context, jobs)
+                }
+            }
         )
 
         db?.close()

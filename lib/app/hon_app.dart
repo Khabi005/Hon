@@ -57,8 +57,7 @@ class _HonAppState extends ConsumerState<HonApp> with WidgetsBindingObserver {
       SharedPreferences.getInstance()
           .then((prefs) => prefs.reload())
           .catchError((_) {});
-      DatabaseService.instance.reloadFromDatabase();
-      DatabaseService.instance.refreshAllDownloads();
+      DatabaseService.instance.reloadIfChangedExternally();
     }
   }
 
@@ -95,6 +94,7 @@ class _HonAppState extends ConsumerState<HonApp> with WidgetsBindingObserver {
       theme: appearance(HonTheme.lightTheme),
       darkTheme: appearance(HonTheme.darkTheme),
       themeMode: ThemeMode.system,
+      scrollBehavior: HonTheme.scrollBehavior,
       builder: (context, child) => rich
           ? GlassBackdrop(
               dark: Theme.of(context).brightness == Brightness.dark,

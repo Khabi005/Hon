@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,7 @@ import '../models/chapter_deletion_result.dart';
 import '../files/storage_service.dart';
 import '../utils/epub_parser.dart';
 import 'app_database.dart';
+import '../utils/log_ignored.dart';
 
 export '../models/chapter_deletion_result.dart';
 
@@ -67,8 +69,21 @@ class DatabaseService {
   final ValueNotifier<int> changeNotifier = ValueNotifier<int>(0);
   final ValueNotifier<int> libraryChangeNotifier = ValueNotifier<int>(0);
 
-  void addListener(VoidCallback listener) => changeNotifier.addListener(listener);
-  void removeListener(VoidCallback listener) => changeNotifier.removeListener(listener);
+  /// Ticks while a download's progress moves without its status or the
+  /// downloaded count changing. Kept off [changeNotifier] so screens that
+  /// don't show progress (Home, Library) don't rebuild every 150 ms.
+  final ValueNotifier<int> downloadProgressNotifier = ValueNotifier<int>(0);
+
+  /// Listens to every change, download progress included.
+  void addListener(VoidCallback listener) {
+    changeNotifier.addListener(listener);
+    downloadProgressNotifier.addListener(listener);
+  }
+
+  void removeListener(VoidCallback listener) {
+    changeNotifier.removeListener(listener);
+    downloadProgressNotifier.removeListener(listener);
+  }
 
   /// Resets in-memory instance and custom DB (useful for tests)
   @visibleForTesting
@@ -91,6 +106,7 @@ class DatabaseService {
 
     // 4. Clean up any legacy synthetic demo fixtures seeded by earlier versions
     _cleanLegacySyntheticDemos();
+    _externalDataVersion = await _readDataVersion();
   }
 
   int _notificationBatch = 0;
@@ -99,6 +115,28 @@ class DatabaseService {
       changeNotifier.value++;
       if (library) libraryChangeNotifier.value++;
     }
+  }
+
+  Timer? _progressNotifyTimer;
+
+  /// Native progress events can arrive many times a second per job. Coalesce
+  /// them so Home, the tab bar and Downloads rebuild at most ~7 times a second.
+  bool _downloadSettled = false;
+
+  /// Coalesces download notifications to one per 150 ms. [settled] marks a
+  /// change beyond progress (a status or the downloaded count), which goes
+  /// to every listener; progress alone only reaches progress listeners.
+  void _notifyDownloadProgress({bool settled = true}) {
+    _downloadSettled |= settled;
+    if (_progressNotifyTimer?.isActive ?? false) return;
+    _progressNotifyTimer = Timer(const Duration(milliseconds: 150), () {
+      if (_downloadSettled) {
+        _notify(library: false);
+      } else if (_notificationBatch == 0) {
+        downloadProgressNotifier.value++;
+      }
+      _downloadSettled = false;
+    });
   }
 
   Future<void> reloadPreferences() async {
@@ -492,7 +530,9 @@ class DatabaseService {
         for (final item in rows('highlights')) {
           try {
             await saveHighlight(Highlight.fromMap(item));
-          } catch (_) {}
+          } catch (e) {
+            logIgnored(e, 'database_service');
+          }
         }
         final settingsMap = data['bookReaderSettings'] as Map?;
         if (settingsMap != null) {
@@ -502,7 +542,9 @@ class DatabaseService {
                 entry.key.toString(),
                 Map<String, dynamic>.from(entry.value as Map),
               );
-            } catch (_) {}
+            } catch (e) {
+              logIgnored(e, 'database_service');
+            }
           }
         }
       });
@@ -748,7 +790,9 @@ class DatabaseService {
                 mode: drift.InsertMode.insertOrReplace,
               );
             }
-          } catch (_) {}
+          } catch (e) {
+            logIgnored(e, 'database_service');
+          }
         }
 
         for (final l in legacyLibEntries) {
@@ -810,7 +854,9 @@ class DatabaseService {
               );
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'database_service');
+        }
       }
 
       // 2. Rebuild library_collection_memberships_table from library_entries_table.collection_ids
@@ -999,7 +1045,9 @@ class DatabaseService {
       try {
         _bookReaderSettings[row.bookId] =
             Map<String, dynamic>.from(jsonDecode(row.settingsJson) as Map);
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'database_service');
+      }
     }
   }
 
@@ -1046,7 +1094,9 @@ class DatabaseService {
     if (database == null) return;
     final row = await (database.select(database.downloadJobsTable)
       ..where((t) => t.id.equals(jobId))).getSingleOrNull();
-    if (row == null) { _downloadJobs.remove(jobId); _notify(library: false); return; }
+    if (row == null) { _downloadJobs.remove(jobId); _notifyDownloadProgress(); return; }
+    final previousStatus = _downloadJobs[row.id]?.status;
+    final previousDownloaded = _downloadedCounts[row.bookId];
     _downloadJobs[row.id] = DownloadJob(
       id: row.id, bookId: row.bookId, chapterId: row.chapterId,
       chapterTitle: row.chapterTitle, sourceId: row.sourceId,
@@ -1084,7 +1134,11 @@ class DatabaseService {
     } else if (row.status == 'completed') {
       _downloadedCounts[row.bookId] = (_downloadedCounts[row.bookId] ?? 0) + 1;
     }
-    _notify(library: false);
+    _notifyDownloadProgress(
+      settled:
+          previousStatus != _downloadJobs[row.id]!.status ||
+          previousDownloaded != _downloadedCounts[row.bookId],
+    );
   }
 
   /// Refreshes all download jobs from Drift SQLite database into in-memory cache
@@ -1123,6 +1177,36 @@ class DatabaseService {
       await loadChapters(bookId);
     }
     _notify(library: true);
+  }
+
+  int? _externalDataVersion;
+
+  /// SQLite's `data_version` for this connection. It only moves when another
+  /// connection (the Android download and update workers) commits, so the
+  /// app's own writes never make it look stale.
+  Future<int?> _readDataVersion() async {
+    final database = _db;
+    if (database == null) return null;
+    try {
+      final row = await database
+          .customSelect('PRAGMA data_version')
+          .getSingle();
+      return row.data.values.first as int?;
+    } catch (e) {
+      debugPrint('DatabaseService: data_version unavailable: $e');
+      return null;
+    }
+  }
+
+  /// App resume path. Reloading every table on each resume made returning
+  /// from the EPUB reader (its own Activity) stutter, so only reload when a
+  /// worker actually wrote while we were away.
+  Future<void> reloadIfChangedExternally() async {
+    final version = await _readDataVersion();
+    if (version != null && version == _externalDataVersion) return;
+    await reloadFromDatabase();
+    await refreshAllDownloads();
+    _externalDataVersion = version ?? await _readDataVersion();
   }
 
   /// Reconciles chapter files written by Android WorkManager while Flutter was
@@ -1420,7 +1504,9 @@ class DatabaseService {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'database_service');
+        }
       }
     }
 
@@ -1630,7 +1716,24 @@ class DatabaseService {
   // --- Reading Progress ---
   ReadingProgress? getProgress(String bookId) => _readingProgress[bookId];
 
+  static const incognitoKey = 'hon_incognito';
+
+  /// Incognito reading: no history, no reading time. Books already started
+  /// still remember their place, without moving up in history; books opened
+  /// for the first time leave no trace.
+  bool get incognito => _prefs?.getBool(incognitoKey) ?? false;
+
+  Future<void> setIncognito(bool value) async {
+    await _prefs?.setBool(incognitoKey, value);
+    _notify();
+  }
+
   Future<void> saveProgress(ReadingProgress progress) async {
+    if (incognito) {
+      final previous = _readingProgress[progress.bookId];
+      if (previous == null) return;
+      progress = progress.copyWith(lastReadAt: previous.lastReadAt);
+    }
     _readingProgress[progress.bookId] = progress;
     final entry = _libraryEntries[progress.bookId];
     if (entry != null) {
@@ -2340,6 +2443,7 @@ class DatabaseService {
   }
 
   Future<void> addReadingTime(int seconds) async {
+    if (incognito) return;
     final now = DateTime.now();
     final dateKey = 'hon_reading_secs_${now.year}_${now.month}_${now.day}';
     final current = _prefs?.getInt(dateKey) ?? 0;

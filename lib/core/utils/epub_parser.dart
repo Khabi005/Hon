@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
 import 'package:path/path.dart' as p;
+import 'log_ignored.dart';
 
 class ParsedEpubMetadata {
   final String title;
@@ -119,7 +120,7 @@ class EpubParser {
     );
     final rootfile = containerXml.findAllElements('rootfile').firstOrNull;
     final opfPath = rootfile?.getAttribute('full-path') ?? 'OEBPS/content.opf';
-    final opfDir = p.dirname(opfPath);
+    final opfDir = p.posix.dirname(opfPath);
 
     // 2. Read OPF
     final opfFile = archive.findFile(opfPath);
@@ -213,7 +214,7 @@ class EpubParser {
       try {
         final fullNcxPath = opfDir == '.'
             ? ncxHref
-            : p.normalize('$opfDir/$ncxHref');
+            : p.posix.normalize('$opfDir/$ncxHref');
         final ncxFile = archive.findFile(fullNcxPath);
         if (ncxFile != null) {
           final ncxDoc = XmlDocument.parse(
@@ -238,7 +239,9 @@ class EpubParser {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'epub_parser');
+      }
     }
 
     // Try parsing Table of Contents from EPUB 3 Nav if present
@@ -246,7 +249,7 @@ class EpubParser {
       try {
         final fullNavPath = opfDir == '.'
             ? navHref
-            : p.normalize('$opfDir/$navHref');
+            : p.posix.normalize('$opfDir/$navHref');
         final navFile = archive.findFile(fullNavPath);
         if (navFile != null) {
           final navDoc = XmlDocument.parse(
@@ -262,7 +265,9 @@ class EpubParser {
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'epub_parser');
+      }
     }
 
     // Spine
@@ -278,7 +283,7 @@ class EpubParser {
       if (itemMeta == null) continue;
 
       final href = itemMeta['href']!;
-      final fullPath = opfDir == '.' ? href : p.normalize('$opfDir/$href');
+      final fullPath = opfDir == '.' ? href : p.posix.normalize('$opfDir/$href');
       final contentFile = archive.findFile(fullPath);
       if (contentFile == null) continue;
 
@@ -301,7 +306,9 @@ class EpubParser {
           if (h1 != null && h1.innerText.trim().isNotEmpty) {
             chapterTitle = h1.innerText.trim();
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'epub_parser');
+        }
       }
 
       chapters.add(

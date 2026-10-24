@@ -3,15 +3,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../app/theme/app_appearance.dart';
+import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../core/native/readium_reader_service.dart';
+import '../../../shared/widgets/book_open_route.dart';
 import 'pdf_reader_screen.dart';
 import 'reader_screen.dart';
 
 class ReaderNavigator {
   /// Opens a book in the appropriate reader (EPUB/WebNovel or PDF)
   /// restoring its last saved location or navigating to a specific chapter/page.
+  /// With [origin], the cover's on-screen bounds, the reader grows out of it.
   static Future<void> openBook(
     BuildContext context,
     Book book, {
@@ -21,6 +24,7 @@ class ReaderNavigator {
     String? locator,
     String? initialChapterContent,
     bool fromCatalogue = false,
+    Rect? origin,
   }) async {
     // If not explicitly provided, look up saved progress from DatabaseService
     final savedProgress = DatabaseService.instance.getProgress(book.id);
@@ -40,7 +44,9 @@ class ReaderNavigator {
 
     if (book.format == BookFormat.pdf) {
       await Navigator.of(context).push(
-        MaterialPageRoute(
+        BookOpenRoute.to<void>(
+          context,
+          origin: origin,
           builder: (_) => PdfReaderScreen(
             book: book,
             initialPage: targetPageIndex > 0 ? targetPageIndex : 1,
@@ -61,40 +67,30 @@ class ReaderNavigator {
           // Keep the last valid native preferences if stored Dart preferences are damaged.
         }
       }
-      final bookOverrides =
-          DatabaseService.instance.getBookReaderSettings(book.id);
+      final bookOverrides = DatabaseService.instance.getBookReaderSettings(
+        book.id,
+      );
       double fontSize =
-          (((readerPrefs['size'] as num?)?.toDouble() ?? 18.0) / 18.0)
-              .clamp(0.5, 2.5);
+          (((readerPrefs['size'] as num?)?.toDouble() ?? 18.0) / 18.0).clamp(
+            0.5,
+            2.5,
+          );
       String theme = readerPrefs['theme'] as String? ?? 'calm';
       bool isScroll = readerPrefs['layout'] == 'verticalScroll';
       Map<String, dynamic> typography = Map<String, dynamic>.from(readerPrefs);
 
       if (bookOverrides != null) {
-        if (bookOverrides['fontSize'] is num) {
-          fontSize =
-              (bookOverrides['fontSize'] as num).toDouble().clamp(0.5, 2.5);
-        }
-        if (bookOverrides['theme'] is String) {
-          theme = bookOverrides['theme'] as String;
-        }
-        if (bookOverrides['isScroll'] is bool) {
-          isScroll = bookOverrides['isScroll'] as bool;
-        }
-        if (bookOverrides['typography'] is String) {
-          try {
-            final typo = jsonDecode(bookOverrides['typography'] as String);
-            if (typo is Map) {
-              typography.addAll(Map<String, dynamic>.from(typo));
-            }
-          } catch (_) {}
-        } else if (bookOverrides['typography'] is Map) {
-          typography.addAll(
-              Map<String, dynamic>.from(bookOverrides['typography'] as Map));
-        }
+        // Per-book settings are saved in the Dart preference format
+        // ('size', 'layout', 'font'…); fromMap also reads older native keys.
+        final saved = ReaderPreferencesState.fromMap(bookOverrides);
+        fontSize = (saved.fontSize / 18.0).clamp(0.5, 2.5);
+        theme = saved.themePreset.name;
+        isScroll = saved.layoutMode == ReaderLayoutMode.verticalScroll;
+        typography.addAll(saved.toMap());
       }
 
-      final appAppearance = preferences.getString(appAppearanceKey) ??
+      final appAppearance =
+          preferences.getString(appAppearanceKey) ??
           preferences.getString('hon_app_appearance');
       final isGlass = appAppearance == AppAppearance.liquidGlass.name;
 
@@ -161,6 +157,8 @@ class ReaderNavigator {
         if (shouldFallback == true && context.mounted) {
           await Navigator.of(context).push(
             MaterialPageRoute(
+              // Modal, like Apple Books: no edge swipe-back to fight page turns.
+              fullscreenDialog: true,
               builder: (_) => ReaderScreen(
                 book: book,
                 restoreSavedProgress: false,
@@ -177,7 +175,9 @@ class ReaderNavigator {
       }
     } else {
       await Navigator.of(context).push(
-        MaterialPageRoute(
+        BookOpenRoute.to<void>(
+          context,
+          origin: origin,
           builder: (_) => ReaderScreen(
             book: book,
             restoreSavedProgress: false,

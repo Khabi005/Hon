@@ -13,6 +13,7 @@ import '../../../shared/widgets/book_cover_widget.dart';
 import '../../../shared/widgets/hon_empty_state.dart';
 import '../../browse/presentation/source_catalog_screen.dart';
 import '../../reader/presentation/reader_navigator.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -296,16 +297,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           key: const PageStorageKey('search-scroll'),
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           slivers: [
-            // Top App Bar
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                child: Text(
-                  'Search',
-                  style: HonTypography.largeTitle(color: textPrimary),
-                ),
-              ),
-            ),
+            const SliverHonLargeTitle(title: 'Search'),
 
             // Search Bar Input
             SliverToBoxAdapter(

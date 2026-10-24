@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../../core/utils/log_ignored.dart';
 
 enum ReaderThemePreset { original, quiet, paper, bold, calm, focus }
 
@@ -228,7 +229,9 @@ class ReaderPreferencesState {
           if (decoded is Map) {
             map.addAll(Map<String, dynamic>.from(decoded));
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_theme');
+        }
       } else if (map['typography'] is Map) {
         map.addAll(Map<String, dynamic>.from(map['typography'] as Map));
       }

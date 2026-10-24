@@ -9,6 +9,7 @@ import '../../../app/theme/hon_typography.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/book.dart';
 import '../../../shared/widgets/book_cover_widget.dart';
+import '../../../shared/widgets/book_open_route.dart';
 import '../../reader/presentation/reader_navigator.dart';
 import '../../settings/presentation/settings_screen.dart';
 import 'widgets/continue_reading_card.dart';
@@ -16,6 +17,8 @@ import 'widgets/reading_goals_sheet.dart';
 import 'widgets/reading_week.dart';
 import 'widgets/source_discovery_card.dart';
 import 'reading_history_screen.dart';
+import '../../../shared/widgets/pressable_scale.dart';
+import '../../../shared/widgets/hon_large_title_header.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -68,78 +71,56 @@ class HomeScreen extends ConsumerWidget {
         child: CustomScrollView(
           key: const PageStorageKey('home-scroll'),
           slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 16, 8),
-              sliver: SliverToBoxAdapter(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            DateFormat(
-                              'EEEE, d MMMM',
-                            ).format(DateTime.now()).toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 10,
-                              letterSpacing: 1.2,
-                              fontWeight: FontWeight.w600,
-                              color: secondary,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Home',
-                            style: HonTypography.largeTitle(color: primary),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Reading goals',
-                      onPressed: goals,
-                      icon: SizedBox(
-                        width: 30,
-                        height: 30,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            CircularProgressIndicator(
-                              value: goal > 0
-                                  ? (minutes / goal).clamp(0, 1)
-                                  : 0,
-                              strokeWidth: 2.5,
-                              backgroundColor: surface,
-                              color: HonColors.accentBlue,
-                            ),
-                            Text(
-                              '$minutes',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: primary,
-                              ),
-                            ),
-                          ],
+            SliverHonLargeTitle(
+              title: 'Home',
+              eyebrow: [
+                DateFormat('EEEE, d MMMM').format(DateTime.now()),
+                if (DatabaseService.instance.incognito) 'Incognito',
+              ].join(' · '),
+              actions: [
+                IconButton(
+                  tooltip: 'Reading goals',
+                  onPressed: goals,
+                  icon: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        CircularProgressIndicator(
+                          value: goal > 0 ? (minutes / goal).clamp(0, 1) : 0,
+                          strokeWidth: 2.5,
+                          backgroundColor: surface,
+                          color: HonColors.accentBlue,
                         ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Settings',
-                      icon: Icon(CupertinoIcons.gear_alt, color: primary),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
+                        Text(
+                          '$minutes',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: primary,
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                IconButton(
+                  tooltip: 'Settings',
+                  icon: Icon(CupertinoIcons.gear_alt, color: primary),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
+                ),
+              ],
             ),
             if (continuing.isNotEmpty) ...[
-              _heading('Continue Reading', primary, action: history, compact: true),
+              _heading(
+                'Continue Reading',
+                primary,
+                action: history,
+                compact: true,
+              ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
                 sliver: SliverToBoxAdapter(
@@ -325,34 +306,34 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _heading(String title, Color color, {VoidCallback? action, bool compact = false}) =>
-      SliverPadding(
-        padding: EdgeInsets.fromLTRB(24, compact ? 12 : 20, 20, compact ? 6 : 10),
-        sliver: SliverToBoxAdapter(
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: HonTypography.sectionHeader(color: color).copyWith(
-                    fontSize: compact ? 19 : 21,
-                  ),
-                ),
-              ),
-              if (action != null)
-                IconButton(
-                  tooltip: 'See all $title',
-                  onPressed: action,
-                  icon: Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 16,
-                    color: color,
-                  ),
-                ),
-            ],
+  Widget _heading(
+    String title,
+    Color color, {
+    VoidCallback? action,
+    bool compact = false,
+  }) => SliverPadding(
+    padding: EdgeInsets.fromLTRB(24, compact ? 12 : 20, 20, compact ? 6 : 10),
+    sliver: SliverToBoxAdapter(
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: HonTypography.sectionHeader(
+                color: color,
+              ).copyWith(fontSize: compact ? 19 : 21),
+            ),
           ),
-        ),
-      );
+          if (action != null)
+            IconButton(
+              tooltip: 'See all $title',
+              onPressed: action,
+              icon: Icon(CupertinoIcons.chevron_right, size: 16, color: color),
+            ),
+        ],
+      ),
+    ),
+  );
 
   Widget _shortcut(
     String title,
@@ -362,12 +343,13 @@ class HomeScreen extends ConsumerWidget {
     Color primary,
     Color secondary,
     VoidCallback onTap,
-  ) => Material(
-    color: surface,
-    borderRadius: BorderRadius.circular(16),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
+  ) => PressableScale(
+    onTap: onTap,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(16),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -406,22 +388,29 @@ class HomeScreen extends ConsumerWidget {
         separatorBuilder: (_, __) => const SizedBox(width: 18),
         itemBuilder: (_, index) {
           final book = books[index];
+          final cover = CoverOrigin();
           return Semantics(
             button: true,
             label: 'Read ${book.title}',
-            child: GestureDetector(
-              onTap: () => ReaderNavigator.openBook(context, book),
+            child: PressableScale(
+              onTap: () => ReaderNavigator.openBook(
+                context,
+                book,
+                origin: cover.rect,
+              ),
               child: SizedBox(
                 width: 96,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    BookCoverWidget(
-                      title: book.title,
-                      author: book.author,
-                      coverPath: book.coverPath,
-                      width: 96,
-                      height: 144,
+                    cover.wrap(
+                      BookCoverWidget(
+                        title: book.title,
+                        author: book.author,
+                        coverPath: book.coverPath,
+                        width: 96,
+                        height: 144,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Text(

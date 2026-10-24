@@ -8,6 +8,9 @@ class HonTheme {
   static final ThemeData lightTheme = _build(Brightness.light);
   static final ThemeData darkTheme = _build(Brightness.dark);
 
+  /// Bouncing overscroll everywhere instead of Android's stretch.
+  static const ScrollBehavior scrollBehavior = _HonScrollBehavior();
+
   static ThemeData _build(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     final ink = dark ? HonColors.darkTextPrimary : HonColors.lightTextPrimary;
@@ -37,11 +40,22 @@ class HonTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      // Inter is the closest open match to SF Pro; serif stays for titles.
+      fontFamily: 'Inter',
       brightness: brightness,
       colorScheme: scheme,
       scaffoldBackgroundColor: dark
           ? HonColors.darkBackground
           : HonColors.lightBackground,
+      // iOS feel: slide transitions with edge swipe-back, no ink ripples.
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+        },
+      ),
+      splashFactory: NoSplash.splashFactory,
       cupertinoOverrideTheme: CupertinoThemeData(
         brightness: brightness,
         primaryColor: ink,
@@ -81,7 +95,6 @@ class HonTheme {
           minimumSize: const Size(48, 48),
           shape: const StadiumBorder(),
           textStyle: const TextStyle(
-            fontFamily: 'Roboto',
             fontWeight: FontWeight.w600,
             fontSize: 14,
           ),
@@ -98,7 +111,6 @@ class HonTheme {
         style: TextButton.styleFrom(
           minimumSize: const Size(44, 44),
           textStyle: const TextStyle(
-            fontFamily: 'Roboto',
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -127,10 +139,26 @@ class HonTheme {
         showDragHandle: true,
         clipBehavior: Clip.antiAlias,
       ),
+      // iOS-style alerts: narrower, centred title in UI weight, quieter body.
       dialogTheme: DialogThemeData(
         backgroundColor: surface,
         surfaceTintColor: Colors.transparent,
         shape: shape,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
+        titleTextStyle: TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -.3,
+          color: ink,
+        ),
+        contentTextStyle: TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 14,
+          height: 1.35,
+          color: secondary,
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       ),
       popupMenuTheme: PopupMenuThemeData(
         color: surface,
@@ -162,4 +190,19 @@ class HonTheme {
       ),
     );
   }
+}
+
+class _HonScrollBehavior extends MaterialScrollBehavior {
+  const _HonScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
 }

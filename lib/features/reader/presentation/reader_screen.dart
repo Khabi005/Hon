@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import '../../../app/bootstrap/providers.dart';
+import 'reader_auto_scroll.dart';
+import 'reader_tts.dart';
 import '../../../app/theme/reader_theme.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/sources/source_registry.dart';
@@ -27,7 +29,11 @@ import '../sheets/themes_settings_sheet.dart';
 import '../sheets/reader_search_dialog.dart';
 import '../../../core/models/novel_source.dart';
 import '../../../core/sources/chapter_content_sanitizer.dart';
+import '../../../core/utils/reading_time.dart';
+import '../../../core/downloads/download_preferences.dart';
+import '../../../core/models/chapter.dart';
 import '../../browse/presentation/source_catalog_screen.dart';
+import '../../../core/utils/log_ignored.dart';
 
 class ReaderScreen extends ConsumerStatefulWidget {
   final Book book;
@@ -39,6 +45,10 @@ class ReaderScreen extends ConsumerStatefulWidget {
   final String? initialChapterContent;
   final bool fromCatalogue;
 
+  /// Replaces the platform voice in tests.
+  @visibleForTesting
+  final SpeechEngine? speechEngine;
+
   const ReaderScreen({
     super.key,
     required this.book,
@@ -49,27 +59,29 @@ class ReaderScreen extends ConsumerStatefulWidget {
     this.initialLocator,
     this.initialChapterContent,
     this.fromCatalogue = false,
+    this.speechEngine,
   });
 
   @override
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-enum ChapterLoadResult {
-  refreshedOnline,
-  offlineFallback,
-  skipped,
-  failed,
-}
+enum ChapterLoadResult { refreshedOnline, offlineFallback, skipped, failed }
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   bool _showControls = true;
+  late final ReaderAutoScroller _autoScroller;
+  late final ReaderTts _tts;
+  bool _volumeKeyPaging = false;
   bool _isLoading = true;
   String? _errorMessage;
 
   List<EpubChapterItem> _chapters = [];
   int _scrollBaseIndex = 0;
+  // Chapter at scroll offset 0. Earlier chapters are prepended above it in a
+  // reverse-growing sliver, so loading one never moves the text on screen.
+  int _scrollAnchorIndex = 0;
   final Map<int, GlobalKey> _chapterKeys = {};
   bool _prependingChapter = false;
   int _currentChapterIndex = 0;
@@ -89,7 +101,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Set<int> _loadingChapters = {};
   final Map<int, String> _chapterErrors = {};
 
-  Future<ChapterLoadResult> _ensureChapterContent(int index, {bool force = false}) async {
+  Future<ChapterLoadResult> _ensureChapterContent(
+    int index, {
+    bool force = false,
+  }) async {
     if (_loadingChapters.contains(index)) {
       return ChapterLoadResult.skipped;
     }
@@ -141,7 +156,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
       if (!mounted) return ChapterLoadResult.skipped;
       final chapter = _chapters[index];
-      final document = await ReaderDocument.parseAsync(content, title: chapter.title, baseUrl: chapter.contentHref);
+      final document = await ReaderDocument.parseAsync(
+        content,
+        title: chapter.title,
+        baseUrl: chapter.contentHref,
+      );
       if (!mounted) return ChapterLoadResult.skipped;
       setState(() {
         _chapters[index] = EpubChapterItem(
@@ -155,7 +174,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _layoutSignature = null;
       });
       if (index == _currentChapterIndex) _resumeReadingSession();
-      return usedOfflineFallback ? ChapterLoadResult.offlineFallback : ChapterLoadResult.refreshedOnline;
+      return usedOfflineFallback
+          ? ChapterLoadResult.offlineFallback
+          : ChapterLoadResult.refreshedOnline;
     } catch (error) {
       if (mounted) {
         // Only show error in state if chapter had no prior content loaded,
@@ -219,6 +240,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Map<String, TapGestureRecognizer> _linkRecognizers = {};
   ReaderTextAnchor _anchor = const ReaderTextAnchor(0);
   List<List<ReaderFragment>> _pagedPages = [];
+
+  /// Pages of the chapters either side of the current one, worked out at
+  /// idle time so turning into them doesn't lay out a whole chapter in the
+  /// middle of the swipe. Keyed by the same signature as [_layoutSignature].
+  final Map<String, List<List<ReaderFragment>>> _pageCache = {};
   String? _layoutSignature;
   bool _hasAnchor = false;
   bool _restoringAnchor = false;
@@ -285,7 +311,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _restoringAnchor = true;
     _scrollController.jumpTo(
       (_scrollController.offset + delta).clamp(
-        0.0,
+        _scrollController.position.minScrollExtent,
         _scrollController.position.maxScrollExtent,
       ),
     );
@@ -344,7 +370,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
-    final allHighlights = DatabaseService.instance.getHighlights(widget.book.id);
+    final allHighlights = DatabaseService.instance.getHighlights(
+      widget.book.id,
+    );
     final blockHighlights = <HighlightSpan>[];
     final blockNotes = <Highlight>[];
     for (final h in allHighlights) {
@@ -354,36 +382,52 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final blk = (loc['block'] as num?)?.toInt();
         if (ch == chapter) {
           if (blk == index) {
-            final s = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+            final s =
+                (loc['startOffset'] as num?)?.toInt() ??
+                (loc['offset'] as num?)?.toInt() ??
+                0;
             final e = (loc['endOffset'] as num?)?.toInt() ?? block.text.length;
-            blockHighlights.add(HighlightSpan(
-              start: s,
-              end: e,
-              color: _highlightColor(h.color),
-              note: h.note,
-            ));
-            if (h.note != null && h.note!.trim().isNotEmpty && !blockNotes.contains(h)) {
+            blockHighlights.add(
+              HighlightSpan(
+                start: s,
+                end: e,
+                color: _highlightColor(h.color),
+                note: h.note,
+              ),
+            );
+            if (h.note != null &&
+                h.note!.trim().isNotEmpty &&
+                !blockNotes.contains(h)) {
               blockNotes.add(h);
             }
           } else if (loc['spans'] is List) {
             for (final spanItem in loc['spans'] as List) {
-              if (spanItem is Map && (spanItem['block'] as num?)?.toInt() == index) {
+              if (spanItem is Map &&
+                  (spanItem['block'] as num?)?.toInt() == index) {
                 final s = (spanItem['startOffset'] as num?)?.toInt() ?? 0;
-                final e = (spanItem['endOffset'] as num?)?.toInt() ?? block.text.length;
-                blockHighlights.add(HighlightSpan(
-                  start: s,
-                  end: e,
-                  color: _highlightColor(h.color),
-                  note: h.note,
-                ));
-                if (h.note != null && h.note!.trim().isNotEmpty && !blockNotes.contains(h)) {
+                final e =
+                    (spanItem['endOffset'] as num?)?.toInt() ??
+                    block.text.length;
+                blockHighlights.add(
+                  HighlightSpan(
+                    start: s,
+                    end: e,
+                    color: _highlightColor(h.color),
+                    note: h.note,
+                  ),
+                );
+                if (h.note != null &&
+                    h.note!.trim().isNotEmpty &&
+                    !blockNotes.contains(h)) {
                   blockNotes.add(h);
                 }
               }
             }
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        logIgnored(e, 'reader_screen');
+      }
     }
 
     final richText = Builder(
@@ -426,17 +470,33 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         ),
       ),
     );
-    final selectableRichText = SelectionListener(
-      selectionNotifier: _selectionNotifierFor(chapter, index),
+    final selectableRichText = _TrackedSelection(
+      registry: _selectionNotifiers,
+      id: start == 0 ? '$chapter:$index' : '$chapter:$index@$start',
       child: richText,
     );
 
+    final spoken =
+        _tts.active &&
+        _tts.position?.chapter == chapter &&
+        _tts.position?.block == index;
+    // Always wrapped, so starting and stopping speech never changes the
+    // tree shape around the text and its selection notifier.
+    final marked = DecoratedBox(
+      decoration: BoxDecoration(
+        color: spoken
+            ? prefs.themeConfig.textColor.withValues(alpha: 0.08)
+            : const Color(0x00000000),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: selectableRichText,
+    );
     final contentWidget = block.heading
         ? Padding(
             padding: const EdgeInsets.only(top: 28, bottom: 18),
-            child: selectableRichText,
+            child: marked,
           )
-        : selectableRichText;
+        : marked;
 
     if (blockNotes.isEmpty) return contentWidget;
 
@@ -453,12 +513,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               decoration: BoxDecoration(
                 color: _highlightColor(noteHl.color).withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(6),
-                border: Border(left: BorderSide(color: _highlightColor(noteHl.color), width: 3)),
+                border: Border(
+                  left: BorderSide(
+                    color: _highlightColor(noteHl.color),
+                    width: 3,
+                  ),
+                ),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(CupertinoIcons.pencil, size: 13, color: prefs.themeConfig.secondaryTextColor),
+                  Icon(
+                    CupertinoIcons.pencil,
+                    size: 13,
+                    color: prefs.themeConfig.secondaryTextColor,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -481,24 +550,24 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   late PageController _pageController;
   late ScrollController _scrollController;
   Timer? _saveDebounceTimer;
+  DateTime _lastVisibleCheck = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime? _sessionStartTime;
+  DateTime? _lastReadingActivity;
   bool _isForegrounded = true;
   late ReaderPreferencesNotifier _prefsNotifier;
   final Map<String, SelectionListenerNotifier> _selectionNotifiers = {};
 
-  SelectionListenerNotifier _selectionNotifierFor(int chapter, int block) {
-    return _selectionNotifiers.putIfAbsent(
-      '$chapter:$block',
-      () => SelectionListenerNotifier(),
-    );
-  }
+  /// Live selection notifiers by `chapter:block` (or `chapter:block@start`
+  /// for a paged fragment), filled in by [_TrackedSelection].
 
   @override
   void initState() {
     super.initState();
     _prefsNotifier = ref.read(readerPreferencesProvider.notifier);
     _prefsNotifier.setActiveBookId(widget.book.id);
-    final bookOverrides = DatabaseService.instance.getBookReaderSettings(widget.book.id);
+    final bookOverrides = DatabaseService.instance.getBookReaderSettings(
+      widget.book.id,
+    );
     if (bookOverrides != null) {
       _prefsNotifier.loadFromState(
         ReaderPreferencesState.fromMap(bookOverrides),
@@ -512,11 +581,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _sessionStartTime = null;
     _currentChapterIndex = widget.initialChapterIndex;
     _currentPageIndex = widget.initialPageIndex;
-    _scrollBaseIndex = _currentChapterIndex;
+    _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
     _pageController = PageController(initialPage: _currentPageIndex + 1);
     _scrollController = ScrollController();
 
     _scrollController.addListener(_onScroll);
+    _autoScroller = ReaderAutoScroller(
+      vsync: this,
+      controller: _scrollController,
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+    );
+    _tts = ReaderTts(
+      engine: widget.speechEngine ?? PlatformSpeechEngine(),
+      blocksOf: _speechBlocks,
+      chapterCount: () => _chapters.length,
+      onPosition: _showSpokenBlock,
+    )..addListener(_onTtsChanged);
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    ReaderInputPreferences.volumeKeys().then((on) => _volumeKeyPaging = on);
     _loadBookContent();
   }
 
@@ -536,13 +620,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _pauseReadingSession() {
     if (_sessionStartTime != null) {
-      final elapsed = DateTime.now().difference(_sessionStartTime!).inSeconds;
+      final elapsed = countedReadingSeconds(
+        _sessionStartTime!,
+        _lastReadingActivity,
+        DateTime.now(),
+      );
       if (elapsed > 0) {
         DatabaseService.instance.addReadingTime(elapsed);
       }
       _sessionStartTime =
           null; // Crucial: STOP timer so background time is never counted!
     }
+  }
+
+  /// Scrolls, taps and page turns keep the session counting. After a long
+  /// idle gap the counted part is banked and a new session starts now.
+  void _noteReadingActivity() {
+    final now = DateTime.now();
+    final start = _sessionStartTime;
+    if (start != null && readingWentIdle(start, _lastReadingActivity, now)) {
+      final elapsed = countedReadingSeconds(start, _lastReadingActivity, now);
+      if (elapsed > 0) DatabaseService.instance.addReadingTime(elapsed);
+      _sessionStartTime = now;
+    }
+    _lastReadingActivity = now;
   }
 
   void _resumeReadingSession() {
@@ -563,6 +664,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _pauseReadingSession();
     _sessionStartTime = null;
     _saveDebounceTimer?.cancel();
+    _prepaginateTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    _autoScroller.dispose();
+    _tts
+      ..removeListener(_onTtsChanged)
+      ..dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     for (final recognizer in _linkRecognizers.values) {
@@ -577,11 +684,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_isOrientationLocked) {
       SystemChrome.setPreferredOrientations(const []);
     }
-    _prefsNotifier.setActiveBookId(null);
-    _prefsNotifier.reloadDefaults();
-    for (final notifier in _selectionNotifiers.values) {
-      notifier.dispose();
-    }
+    // Changing provider state while this element unmounts notifies widgets
+    // mid-teardown, so reset after the frame. Skip it if another reader has
+    // already taken over the preferences for its own book.
+    final prefs = _prefsNotifier;
+    final bookId = widget.book.id;
+    Future.microtask(() {
+      if (!prefs.mounted || prefs.activeBookId != bookId) return;
+      prefs.setActiveBookId(null);
+      prefs.reloadDefaults();
+    });
     _selectionNotifiers.clear();
     super.dispose();
   }
@@ -641,7 +753,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     child: child,
   );
 
-  Future<void> _highlightSelectedText([String color = 'yellow', String? note]) async {
+  Future<void> _highlightSelectedText([
+    String color = 'yellow',
+    String? note,
+  ]) async {
     final text = _selectedQuote?.trim();
     if (text == null || text.isEmpty) return;
 
@@ -656,34 +771,61 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     // 0. Primary: Capture the real selection directly from SelectionListenerNotifiers
     final activeSelections = <({int block, int start, int end, String text})>[];
-    for (int i = 0; i < blocks.length; i++) {
-      final notifier = _selectionNotifiers['$_currentChapterIndex:$i'];
-      if (notifier != null && notifier.registered) {
+    for (final entry in _selectionNotifiers.entries) {
+      final key = entry.key.split(':');
+      if (key.length != 2 || key[0] != '$_currentChapterIndex') continue;
+      final part = key[1].split('@');
+      final i = int.tryParse(part[0]) ?? -1;
+      // Paged fragments render from `base`, so their offsets are relative.
+      final base = part.length > 1 ? int.tryParse(part[1]) ?? 0 : 0;
+      if (i < 0 || i >= blocks.length) continue;
+      final notifier = entry.value;
+      if (notifier.registered) {
         try {
           final range = notifier.selection.range;
           if (range != null) {
-            final startOffset = math.min(range.startOffset, range.endOffset);
-            final endOffset = math.max(range.startOffset, range.endOffset);
+            final int low = math.min(range.startOffset, range.endOffset);
+            final int high = math.max(range.startOffset, range.endOffset);
+            final startOffset = base + low;
+            final endOffset = base + high;
             if (endOffset > startOffset) {
               final bText = blocks[i].text;
               final s = startOffset.clamp(0, bText.length);
               final e = endOffset.clamp(0, bText.length);
               if (e > s) {
-                activeSelections.add((block: i, start: s, end: e, text: bText.substring(s, e)));
+                activeSelections.add((
+                  block: i,
+                  start: s,
+                  end: e,
+                  text: bText.substring(s, e),
+                ));
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_screen');
+        }
       }
     }
 
+    activeSelections.sort(
+      (a, b) => a.block != b.block
+          ? a.block.compareTo(b.block)
+          : a.start.compareTo(b.start),
+    );
     if (activeSelections.isNotEmpty) {
       foundBlock = activeSelections.first.block;
       foundStart = activeSelections.first.start;
       foundEnd = activeSelections.first.end;
       if (activeSelections.length > 1) {
         multiSpans = activeSelections
-            .map((s) => {'block': s.block, 'startOffset': s.start, 'endOffset': s.end})
+            .map(
+              (s) => {
+                'block': s.block,
+                'startOffset': s.start,
+                'endOffset': s.end,
+              },
+            )
             .toList();
         actualSelectedText = activeSelections.map((s) => s.text).join('\n\n');
       } else {
@@ -700,9 +842,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         );
       } else {
         _captureAnchor();
-        for (int i = math.max(0, _anchor.block - 1);
-            i <= math.min(blocks.length - 1, _anchor.block + 3);
-            i++) {
+        for (
+          int i = math.max(0, _anchor.block - 1);
+          i <= math.min(blocks.length - 1, _anchor.block + 3);
+          i++
+        ) {
           visibleBlockIndices.add(i);
         }
       }
@@ -745,8 +889,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         if (paragraphs.length > 1) {
           final searchBlocks = [
             ...visibleBlockIndices,
-            ...List.generate(blocks.length, (i) => i)
-                .where((i) => !visibleBlockIndices.contains(i)),
+            ...List.generate(
+              blocks.length,
+              (i) => i,
+            ).where((i) => !visibleBlockIndices.contains(i)),
           ];
           for (final startB in searchBlocks) {
             if (startB + paragraphs.length - 1 >= blocks.length) continue;
@@ -806,14 +952,23 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     int pageIdx = _currentPageIndex;
     if (_pagedPages.isNotEmpty) {
-      final p = _pagedPages
-          .indexWhere((page) => page.any((f) => f.block == foundBlock));
+      final p = _pagedPages.indexWhere(
+        (page) => page.any((f) => f.block == foundBlock),
+      );
       if (p != -1) pageIdx = p;
     }
 
-    final blockText = (foundBlock >= 0 && foundBlock < blocks.length) ? blocks[foundBlock].text : '';
-    final prefixContext = blockText.substring(math.max(0, foundStart - 32), math.max(0, foundStart));
-    final suffixContext = blockText.substring(math.min(blockText.length, foundEnd), math.min(blockText.length, foundEnd + 32));
+    final blockText = (foundBlock >= 0 && foundBlock < blocks.length)
+        ? blocks[foundBlock].text
+        : '';
+    final prefixContext = blockText.substring(
+      math.max(0, foundStart - 32),
+      math.max(0, foundStart),
+    );
+    final suffixContext = blockText.substring(
+      math.min(blockText.length, foundEnd),
+      math.min(blockText.length, foundEnd + 32),
+    );
 
     final locatorMap = <String, dynamic>{
       'engine': 'hon-html-v2',
@@ -865,35 +1020,54 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (bm.locatorString != null && bm.locatorString!.isNotEmpty) {
       try {
         final loc = jsonDecode(bm.locatorString!) as Map<String, dynamic>;
-        chIdx = (loc['chapter'] as num?)?.toInt() ??
+        chIdx =
+            (loc['chapter'] as num?)?.toInt() ??
             (loc['chapterIndex'] as num?)?.toInt() ??
             bm.pageIndex;
         blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
         offset = (loc['offset'] as num?)?.toInt() ?? 0;
-        pageIdx = (loc['page'] as num?)?.toInt() ?? (loc['pageIndex'] as num?)?.toInt() ?? 0;
-      } catch (_) {}
+        pageIdx =
+            (loc['page'] as num?)?.toInt() ??
+            (loc['pageIndex'] as num?)?.toInt() ??
+            0;
+      } catch (e) {
+        logIgnored(e, 'reader_screen');
+      }
     }
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
 
-    final isPaginated = ref.read(readerPreferencesProvider).layoutMode == ReaderLayoutMode.paginated;
+    final isPaginated =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.paginated;
     setState(() {
       _currentChapterIndex = chIdx;
       _anchor = ReaderTextAnchor(blockIdx, offset);
       _hasAnchor = true;
       _layoutSignature = null;
-      _scrollBaseIndex = chIdx;
+      _scrollBaseIndex = _scrollAnchorIndex = chIdx;
       _chapterKeys.clear();
-      _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, chIdx);
+      _isBookmarked = DatabaseService.instance.isBookmarked(
+        widget.book.id,
+        chIdx,
+      );
     });
 
     if (isPaginated) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_pagedPages.isNotEmpty) {
-          final targetPage = _pagedPages.indexWhere((page) =>
-              page.any((f) => f.block == blockIdx && offset >= f.start && (f.end == 0 || offset <= f.end)));
-          final finalPage = targetPage != -1 ? targetPage : pageIdx.clamp(0, _pagedPages.length - 1);
+          final targetPage = _pagedPages.indexWhere(
+            (page) => page.any(
+              (f) =>
+                  f.block == blockIdx &&
+                  offset >= f.start &&
+                  (f.end == 0 || offset <= f.end),
+            ),
+          );
+          final finalPage = targetPage != -1
+              ? targetPage
+              : pageIdx.clamp(0, _pagedPages.length - 1);
           setState(() => _currentPageIndex = finalPage);
           if (_pageController.hasClients) {
             _pageController.jumpToPage(finalPage + 1);
@@ -906,7 +1080,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final key = _blockKeys['$chIdx:$blockIdx'];
         final ctx = key?.currentContext;
         if (ctx != null) {
-          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0.1,
+          );
         } else {
           _restoreScrollAnchor();
         }
@@ -928,30 +1106,49 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         offset = (firstSpan['startOffset'] as num?)?.toInt() ?? 0;
       } else {
         blockIdx = (loc['block'] as num?)?.toInt() ?? 0;
-        offset = (loc['startOffset'] as num?)?.toInt() ?? (loc['offset'] as num?)?.toInt() ?? 0;
+        offset =
+            (loc['startOffset'] as num?)?.toInt() ??
+            (loc['offset'] as num?)?.toInt() ??
+            0;
       }
       pageIdx = (loc['pageIndex'] as num?)?.toInt() ?? 0;
-    } catch (_) {}
+    } catch (e) {
+      logIgnored(e, 'reader_screen');
+    }
 
     if (chIdx < 0 || chIdx >= _chapters.length) return;
 
-    final isPaginated = ref.read(readerPreferencesProvider).layoutMode == ReaderLayoutMode.paginated;
+    final isPaginated =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.paginated;
     setState(() {
       _currentChapterIndex = chIdx;
       _anchor = ReaderTextAnchor(blockIdx, offset);
       _hasAnchor = true;
       _layoutSignature = null;
-      _scrollBaseIndex = chIdx;
+      _scrollBaseIndex = _scrollAnchorIndex = chIdx;
       _chapterKeys.clear();
-      _isBookmarked = DatabaseService.instance.isBookmarked(widget.book.id, chIdx);
+      _isBookmarked = DatabaseService.instance.isBookmarked(
+        widget.book.id,
+        chIdx,
+      );
     });
 
     if (isPaginated) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (_pagedPages.isNotEmpty) {
-          final targetPage = _pagedPages.indexWhere((page) => page.any((f) => f.block == blockIdx && offset >= f.start && (f.end == 0 || offset <= f.end)));
-          final finalPage = targetPage != -1 ? targetPage : pageIdx.clamp(0, _pagedPages.length - 1);
+          final targetPage = _pagedPages.indexWhere(
+            (page) => page.any(
+              (f) =>
+                  f.block == blockIdx &&
+                  offset >= f.start &&
+                  (f.end == 0 || offset <= f.end),
+            ),
+          );
+          final finalPage = targetPage != -1
+              ? targetPage
+              : pageIdx.clamp(0, _pagedPages.length - 1);
           setState(() => _currentPageIndex = finalPage);
           if (_pageController.hasClients) {
             _pageController.jumpToPage(finalPage + 1);
@@ -964,7 +1161,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final key = _blockKeys['$chIdx:$blockIdx'];
         final ctx = key?.currentContext;
         if (ctx != null) {
-          Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+          Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0.1,
+          );
         } else {
           _restoreScrollAnchor();
         }
@@ -1036,6 +1237,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
+    _noteReadingActivity();
     _saveDebounceTimer?.cancel();
     _saveDebounceTimer = Timer(
       const Duration(milliseconds: 600),
@@ -1045,13 +1247,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   Future<void> _loadBookContent() async {
     try {
-      final bookSettings =
-          DatabaseService.instance.getBookReaderSettings(widget.book.id);
+      final bookSettings = DatabaseService.instance.getBookReaderSettings(
+        widget.book.id,
+      );
       if (bookSettings != null) {
-        ref.read(readerPreferencesProvider.notifier).loadFromState(
-          ReaderPreferencesState.fromMap(bookSettings),
-          bookId: widget.book.id,
-        );
+        ref
+            .read(readerPreferencesProvider.notifier)
+            .loadFromState(
+              ReaderPreferencesState.fromMap(bookSettings),
+              bookId: widget.book.id,
+            );
       } else {
         await ref.read(readerPreferencesProvider.notifier).reloadDefaults();
         ref
@@ -1073,7 +1278,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             );
             _hasAnchor = true;
           }
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'reader_screen');
+        }
       }
       if (savedProgress != null) {
         if (widget.initialChapterIndex == 0 && savedProgress.chapterIndex > 0) {
@@ -1107,7 +1314,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               }
             }
             if (body.isNotEmpty) {
-              body = ChapterContentSanitizer.sanitize(body, chapterTitle: ch.title);
+              body = ChapterContentSanitizer.sanitize(
+                body,
+                chapterTitle: ch.title,
+              );
             }
             loadedChapters.add(
               EpubChapterItem(
@@ -1141,7 +1351,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               0,
               loadedChapters.length - 1,
             );
-            _scrollBaseIndex = _currentChapterIndex;
+            _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
             _isBookmarked = DatabaseService.instance.isBookmarked(
               widget.book.id,
               _currentChapterIndex,
@@ -1213,7 +1423,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                   resolvedChapterIndex = matchIdx;
                 }
               }
-            } catch (_) {}
+            } catch (e) {
+              logIgnored(e, 'reader_screen');
+            }
           }
 
           if (mounted) {
@@ -1225,7 +1437,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               } else {
                 _currentChapterIndex = 0;
               }
-              _scrollBaseIndex = _currentChapterIndex;
+              _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
               _isBookmarked = DatabaseService.instance.isBookmarked(
                 widget.book.id,
                 _currentChapterIndex,
@@ -1341,7 +1553,276 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     DatabaseService.instance.saveProgress(progress);
   }
 
+  void _onTtsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<List<String>?> _speechBlocks(int chapter) async {
+    if (chapter < 0 || chapter >= _chapters.length) return null;
+    if (_chapters[chapter].htmlContent.isEmpty) {
+      await _ensureChapterContent(chapter);
+    }
+    if (!mounted || _chapters[chapter].htmlContent.isEmpty) return null;
+    return [
+      for (final block in _document(chapter).blocks)
+        block.image != null || block.divider ? '' : block.text,
+    ];
+  }
+
+  /// Keeps the paragraph being read on screen, turning to its chapter or
+  /// page when needed.
+  void _showSpokenBlock(SpeechPosition position) {
+    if (!mounted) return;
+    _noteReadingActivity();
+    final scrollMode =
+        ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.verticalScroll;
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 300);
+    if (scrollMode) {
+      bool reveal() {
+        final box = _blockKeys['${position.chapter}:${position.block}']
+            ?.currentContext
+            ?.findRenderObject();
+        if (box is! RenderBox || !box.attached || !box.hasSize) return false;
+        final top = box.localToGlobal(Offset.zero).dy;
+        final screen = MediaQuery.sizeOf(context).height;
+        final visibleTop = MediaQuery.paddingOf(context).top + 68;
+        if (top < visibleTop || top + 40 > screen - 140) {
+          Scrollable.ensureVisible(
+            box.paintBounds.isEmpty ? context : _blockKeys['${position.chapter}:${position.block}']!.currentContext!,
+            alignment: 0.2,
+            duration: duration,
+            curve: Curves.easeOut,
+          );
+        }
+        return true;
+      }
+
+      if (!reveal()) {
+        if (position.chapter != _currentChapterIndex) {
+          _jumpToChapter(position.chapter);
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) reveal();
+        });
+      }
+      return;
+    }
+    if (position.chapter != _currentChapterIndex) {
+      _changePagedChapter(position.chapter);
+      return;
+    }
+    final page = _pagedPages.indexWhere(
+      (fragments) => fragments.any((f) => f.block == position.block),
+    );
+    if (page >= 0 && page != _currentPageIndex && _pageController.hasClients) {
+      _pageController.animateToPage(
+        page + 1,
+        duration: duration,
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _toggleListening() {
+    if (_tts.active) {
+      _tts.stop();
+      return;
+    }
+    _captureAnchor();
+    _autoScroller.stop();
+    _tts.play(_currentChapterIndex, _anchor.block);
+    setState(() => _showControls = false);
+  }
+
+  Widget _buildSpeechControls(ReaderThemeConfig themeConfig) {
+    Widget button(String tooltip, IconData icon, VoidCallback onTap) =>
+        IconButton(
+          tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, size: 20, color: themeConfig.textColor),
+          onPressed: onTap,
+        );
+    final rate = _tts.rate;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: themeConfig.uiControlsBackground.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 14,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            button(
+              'Previous paragraph',
+              CupertinoIcons.backward_fill,
+              () => _tts.skip(-1),
+            ),
+            button(
+              _tts.playing ? 'Pause' : 'Play',
+              _tts.playing
+                  ? CupertinoIcons.pause_fill
+                  : CupertinoIcons.play_fill,
+              () => _tts.playing ? _tts.pause() : _tts.resume(),
+            ),
+            button(
+              'Next paragraph',
+              CupertinoIcons.forward_fill,
+              () => _tts.skip(1),
+            ),
+            TextButton(
+              onPressed: _tts.cycleRate,
+              child: Text(
+                '${rate == rate.roundToDouble() ? rate.toStringAsFixed(0) : rate}×',
+                semanticsLabel: 'Speed $rate times',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: themeConfig.textColor,
+                ),
+              ),
+            ),
+            button('Stop audiobook mode', CupertinoIcons.xmark, _tts.stop),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// With "Volume keys turn pages" on, volume down goes forward and volume
+  /// up goes back, a page in paged mode or a screen in scroll mode.
+  bool _onHardwareKey(KeyEvent event) {
+    if (!_volumeKeyPaging || !mounted) return false;
+    final key = event.logicalKey;
+    final forward = key == LogicalKeyboardKey.audioVolumeDown;
+    if (!forward && key != LogicalKeyboardKey.audioVolumeUp) return false;
+    // Leave the volume alone while a sheet or menu is on top.
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    if (event is! KeyUpEvent) _turnPage(forward);
+    return true;
+  }
+
+  void _turnPage(bool forward) {
+    _noteReadingActivity();
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 250);
+    if (ref.read(readerPreferencesProvider).layoutMode ==
+        ReaderLayoutMode.verticalScroll) {
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      final step = position.viewportDimension * 0.85 * (forward ? 1 : -1);
+      final target = (position.pixels + step).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
+      );
+      if (duration == Duration.zero) {
+        _scrollController.jumpTo(target);
+      } else {
+        _scrollController.animateTo(
+          target,
+          duration: duration,
+          curve: Curves.easeOut,
+        );
+      }
+    } else if (_pageController.hasClients) {
+      if (forward) {
+        _pageController.nextPage(duration: duration, curve: Curves.easeOut);
+      } else {
+        _pageController.previousPage(duration: duration, curve: Curves.easeOut);
+      }
+    }
+  }
+
+  ({Offset position, Duration time, bool hadSelection})? _contentTapStart;
+
+  void _onContentPointerDown(PointerDownEvent event) {
+    _contentTapStart = (
+      position: event.position,
+      time: event.timeStamp,
+      // A tap that clears a selection shouldn't also toggle the controls.
+      hadSelection: _selectedQuote?.isNotEmpty == true,
+    );
+  }
+
+  void _onContentPointerUp(PointerUpEvent event) {
+    final start = _contentTapStart;
+    _contentTapStart = null;
+    if (start == null || start.hadSelection) return;
+    final moved = (event.position - start.position).distance;
+    final held = event.timeStamp - start.time;
+    if (moved > kTouchSlop || held > const Duration(milliseconds: 300)) return;
+    // Let a tapped link handle the tap alone.
+    if (_hitsLink(event.position)) return;
+    _toggleControls();
+  }
+
+  bool _hitsLink(Offset globalPosition) {
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      result,
+      globalPosition,
+      View.of(context).viewId,
+    );
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is TextSpan && target.recognizer != null) return true;
+    }
+    return false;
+  }
+
+  Timer? _prepaginateTimer;
+
+  /// Lays out the next chapter, then the previous one, each a moment after
+  /// the page settles, one chapter per timer so neither shares a frame with
+  /// a page turn.
+  void _prepaginateNeighbours(
+    List<List<ReaderFragment>> Function(int chapter) paginate,
+    String Function(int chapter) signatureFor,
+  ) {
+    final current = _currentChapterIndex;
+    final neighbours = [
+      for (final chapter in [current + 1, current - 1])
+        if (chapter >= 0 && chapter < _chapters.length) chapter,
+    ];
+    final wanted = neighbours.map(signatureFor).toSet();
+    _pageCache.removeWhere((key, _) => !wanted.contains(key));
+    _prepaginateTimer?.cancel();
+    void next(int i) {
+      if (i >= neighbours.length) return;
+      _prepaginateTimer = Timer(const Duration(milliseconds: 250), () {
+        // Skip if the reader moved on or the layout changed meanwhile.
+        if (!mounted ||
+            _currentChapterIndex != current ||
+            _layoutSignature != signatureFor(current)) {
+          return;
+        }
+        final chapter = neighbours[i];
+        final key = signatureFor(chapter);
+        if (!_pageCache.containsKey(key) &&
+            _chapters[chapter].htmlContent.isNotEmpty) {
+          _pageCache[key] = paginate(chapter);
+        }
+        next(i + 1);
+      });
+    }
+
+    next(0);
+  }
+
   void _toggleControls() {
+    _noteReadingActivity();
+    // Refresh the position so the footer's time left is current.
+    if (!_showControls) _captureAnchor();
     setState(() {
       _showControls = !_showControls;
     });
@@ -1355,7 +1836,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         _anchor = const ReaderTextAnchor(0);
         _hasAnchor = true;
         _layoutSignature = null;
-        _scrollBaseIndex = index;
+        _scrollBaseIndex = _scrollAnchorIndex = index;
         _chapterKeys.clear();
         _isBookmarked = DatabaseService.instance.isBookmarked(
           widget.book.id,
@@ -1388,11 +1869,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           previous.paragraphSpacing != next.paragraphSpacing ||
           previous.textIndent != next.textIndent ||
           previous.isJustified != next.isJustified;
+      if (previous.layoutMode != next.layoutMode) _autoScroller.stop();
       if (!reflowsText) return;
       _captureAnchor();
       if (next.layoutMode == ReaderLayoutMode.verticalScroll &&
           previous.layoutMode != next.layoutMode) {
-        _scrollBaseIndex = _currentChapterIndex;
+        _scrollBaseIndex = _scrollAnchorIndex = _currentChapterIndex;
         _chapterKeys.clear();
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1410,60 +1892,89 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: themeConfig.systemBrightness == Brightness.dark
-          ? SystemUiOverlayStyle.light
-          : SystemUiOverlayStyle.dark,
-      child: Scaffold(
-        backgroundColor: themeConfig.backgroundColor,
-        body: SafeArea(
-          top: false,
-          bottom: false,
-          child: Stack(
-            children: [
-              // Main Reading Content Area
-              GestureDetector(
-                onTap: _toggleControls,
-                behavior: HitTestBehavior.opaque,
-                child: prefs.layoutMode == ReaderLayoutMode.verticalScroll
-                    ? _buildScrollView(prefs, themeConfig)
-                    : _buildPagedView(prefs, themeConfig),
-              ),
+    return PopScope(
+      // System back skips the X button, so flush the debounced scroll save.
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) return;
+        _saveDebounceTimer?.cancel();
+        _saveProgress();
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: themeConfig.systemBrightness == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: Scaffold(
+          backgroundColor: themeConfig.backgroundColor,
+          body: SafeArea(
+            top: false,
+            bottom: false,
+            child: Stack(
+              children: [
+                // Main Reading Content Area. Taps are read from raw pointer
+                // events: the text's SelectionArea wins the gesture arena for
+                // taps, so a GestureDetector here only saw taps on margins.
+                Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: _onContentPointerDown,
+                  onPointerUp: _onContentPointerUp,
+                  onPointerCancel: (_) => _contentTapStart = null,
+                  child: prefs.layoutMode == ReaderLayoutMode.verticalScroll
+                      ? _buildScrollView(prefs, themeConfig)
+                      : _buildPagedView(prefs, themeConfig),
+                ),
 
-              // Ambient Top Header Overlay
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedSlide(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 200),
-                  offset: _showControls ? Offset.zero : const Offset(0, -1),
-                  child: ReaderControlsVisibility(
-                    visible: _showControls,
-                    child: _buildTopHeader(themeConfig),
+                // Ambient Top Header Overlay
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedSlide(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    offset: _showControls ? Offset.zero : const Offset(0, -1),
+                    child: ReaderControlsVisibility(
+                      visible: _showControls,
+                      child: _buildTopHeader(themeConfig),
+                    ),
                   ),
                 ),
-              ),
 
-              // Ambient Bottom Bar Overlay
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedSlide(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 200),
-                  offset: _showControls ? Offset.zero : const Offset(0, 1),
-                  child: ReaderControlsVisibility(
-                    visible: _showControls,
-                    child: _buildBottomBar(themeConfig),
+                if (_tts.active)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom:
+                        MediaQuery.paddingOf(context).bottom +
+                        (_showControls ? 66 : 16),
+                    child: Center(child: _buildSpeechControls(themeConfig)),
+                  ),
+                if (_autoScroller.running && _showControls)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: MediaQuery.paddingOf(context).bottom + 66,
+                    child: Center(child: _buildAutoScrollControls(themeConfig)),
+                  ),
+
+                // Ambient Bottom Bar Overlay
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: AnimatedSlide(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 200),
+                    offset: _showControls ? Offset.zero : const Offset(0, 1),
+                    child: ReaderControlsVisibility(
+                      visible: _showControls,
+                      child: _buildBottomBar(themeConfig),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1492,88 +2003,139 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       );
     }
 
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) {
-        if (notification is OverscrollNotification &&
-            notification.overscroll < 0 &&
-            _scrollBaseIndex > 0 &&
-            !_prependingChapter) {
-          _prependingChapter = true;
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _prependPreviousChapter(),
-          );
-        }
-        if (notification is ScrollUpdateNotification ||
-            notification is ScrollEndNotification) {
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => _updateVisibleChapter(),
-          );
-        }
-        return false;
-      },
-      child: ListView.builder(
-        key: ValueKey('scroll_$_scrollBaseIndex'),
-        controller: _scrollController,
-        physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          prefs.horizontalMargin,
-          MediaQuery.of(context).padding.top + 68,
-          prefs.horizontalMargin,
-          MediaQuery.of(context).padding.bottom + 52,
-        ),
-        itemCount: _chapters.length - _scrollBaseIndex,
-        itemBuilder: (context, index) {
-          final chapterIndex = _scrollBaseIndex + index;
-          if (_chapters[chapterIndex].htmlContent.isEmpty) {
-            return SizedBox(
-              key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
-              height: MediaQuery.sizeOf(context).height * 0.8,
-              child: _missingChapter(chapterIndex, themeConfig),
+    final topPadding = MediaQuery.of(context).padding.top + 68;
+    final horizontal = EdgeInsets.symmetric(horizontal: prefs.horizontalMargin);
+    final before = _scrollAnchorIndex - _scrollBaseIndex;
+    return Listener(
+      onPointerDown: (_) => _autoScroller.hold(true),
+      onPointerUp: (_) => _autoScroller.hold(false),
+      onPointerCancel: (_) => _autoScroller.hold(false),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          // Bouncing physics never reports overscroll, so load the previous
+          // chapter as the reader nears the top instead of waiting for it.
+          final metrics = notification.metrics;
+          if (notification is ScrollUpdateNotification &&
+              metrics.axis == Axis.vertical &&
+              metrics.pixels <
+                  metrics.minScrollExtent + metrics.viewportDimension &&
+              (notification.scrollDelta ?? 0) < 0 &&
+              _scrollBaseIndex > 0 &&
+              !_prependingChapter) {
+            _prependingChapter = true;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _prependPreviousChapter(),
             );
           }
-          return _selectableContent(
-            Column(
-              key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (chapterIndex > _scrollBaseIndex) const SizedBox(height: 52),
-                for (
-                  var block = 0;
-                  block < _document(chapterIndex).blocks.length;
-                  block++
-                )
-                  Padding(
-                    padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
-                    child: _blockWidget(
-                      chapterIndex,
-                      block,
-                      prefs,
-                      track: true,
-                    ),
-                  ),
-                const SizedBox(height: 24),
-              ],
-            ),
-          );
+          // Walking every chapter's render box is costly; do it at most every
+          // 100 ms while scrolling, and always once the scroll settles.
+          final now = DateTime.now();
+          final settle = notification is ScrollEndNotification;
+          if ((settle || notification is ScrollUpdateNotification) &&
+              (settle ||
+                  now.difference(_lastVisibleCheck) >
+                      const Duration(milliseconds: 100))) {
+            _lastVisibleCheck = now;
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _updateVisibleChapter(),
+            );
+          }
+          return false;
         },
+        child: CustomScrollView(
+          key: ValueKey('scroll_$_scrollAnchorIndex'),
+          controller: _scrollController,
+          physics: const BouncingScrollPhysics(),
+          center: _scrollCenterKey,
+          slivers: [
+            // Earlier chapters, nearest first, growing upwards from offset 0.
+            SliverPadding(
+              padding: horizontal,
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => index == before
+                      ? SizedBox(height: topPadding)
+                      : _scrollChapter(
+                          _scrollAnchorIndex - 1 - index,
+                          prefs,
+                          themeConfig,
+                        ),
+                  childCount: before == 0 ? 0 : before + 1,
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              key: _scrollCenterKey,
+              child: SizedBox(height: topPadding),
+            ),
+            SliverPadding(
+              padding: horizontal.copyWith(
+                bottom: MediaQuery.of(context).padding.bottom + 52,
+              ),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _scrollChapter(
+                    _scrollAnchorIndex + index,
+                    prefs,
+                    themeConfig,
+                  ),
+                  childCount: _chapters.length - _scrollAnchorIndex,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  final Key _scrollCenterKey = UniqueKey();
+
+  Widget _scrollChapter(
+    int chapterIndex,
+    ReaderPreferencesState prefs,
+    ReaderThemeConfig themeConfig,
+  ) {
+    if (_chapters[chapterIndex].htmlContent.isEmpty) {
+      return SizedBox(
+        key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
+        height: MediaQuery.sizeOf(context).height * 0.8,
+        child: _missingChapter(chapterIndex, themeConfig),
+      );
+    }
+    return _selectableContent(
+      Column(
+        key: _chapterKeys.putIfAbsent(chapterIndex, GlobalKey.new),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (
+            var block = 0;
+            block < _document(chapterIndex).blocks.length;
+            block++
+          )
+            Padding(
+              padding: EdgeInsets.only(bottom: prefs.paragraphSpacing),
+              child: _blockWidget(chapterIndex, block, prefs, track: true),
+            ),
+          // The gap sits below each chapter, so adding one above never
+          // changes the height of the chapter being read.
+          const SizedBox(height: 76),
+        ],
       ),
     );
   }
 
   void _prependPreviousChapter() {
-    if (_scrollBaseIndex <= 0 || !_scrollController.hasClients) {
+    if (!mounted || _scrollBaseIndex <= 0) {
       _prependingChapter = false;
       return;
     }
-    final oldOffset = _scrollController.offset;
     final previous = _scrollBaseIndex - 1;
-    setState(() => _scrollBaseIndex = previous);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      final box = _chapterKeys[previous]?.currentContext?.findRenderObject();
-      if (box is RenderBox) {
-        _scrollController.jumpTo(oldOffset + box.size.height);
-      }
+    // Make sure its text is loaded; the empty placeholder would otherwise
+    // be replaced by the real chapter above the reader a moment later.
+    _ensureChapterContent(previous).whenComplete(() {
+      if (!mounted) return;
+      setState(() => _scrollBaseIndex = previous);
       _prependingChapter = false;
     });
   }
@@ -1612,6 +2174,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       }
     }
     if (visible != null && visible != _currentChapterIndex) {
+      if (visible == _currentChapterIndex + 1) {
+        unawaited(_finishedChapter(_currentChapterIndex));
+      }
       setState(() {
         _pauseReadingSession();
         _currentChapterIndex = visible!;
@@ -1623,6 +2188,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         );
       });
     }
+  }
+
+  /// With "Delete chapters after reading" on, reading on into the next
+  /// chapter removes the finished one's offline file. Its text stays loaded,
+  /// so scrolling back this session still shows it.
+  Future<void> _finishedChapter(int index) async {
+    if (widget.book.format != BookFormat.webNovel) return;
+    if (index < 0 || index >= _chapters.length) return;
+    if (!await DownloadPreferences.deleteAfterReading()) return;
+    final id = _chapters[index].id;
+    final db = DatabaseService.instance;
+    final chapter = db
+        .getChapters(widget.book.id)
+        .where((c) => c.id == id)
+        .firstOrNull;
+    if (chapter == null ||
+        chapter.downloadState != ChapterDownloadState.downloaded) {
+      return;
+    }
+    await db.deleteDownloadedChapters(widget.book.id, [chapter]);
   }
 
   Widget _buildPagedView(
@@ -1647,15 +2232,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           100.0,
           double.infinity,
         );
-        final signature =
-            '$_currentChapterIndex:$width:$height:${MediaQuery.textScalerOf(context)}:${prefs.fontSize}:${prefs.fontFamily}:${prefs.lineHeight}:${prefs.paragraphSpacing}:${prefs.isJustified}';
+        final scaler = MediaQuery.textScalerOf(context);
+        final direction = Directionality.of(context);
+        String signatureFor(int chapter) =>
+            '$chapter:$width:$height:$scaler:${prefs.fontSize}:${prefs.fontFamily}:${prefs.lineHeight}:${prefs.paragraphSpacing}:${prefs.isJustified}';
+        final signature = signatureFor(_currentChapterIndex);
         if (_layoutSignature != signature) {
-          final pages = _document(_currentChapterIndex).paginate(
-            prefs,
-            width,
-            height,
-            MediaQuery.textScalerOf(context),
-            Directionality.of(context),
+          final pages =
+              _pageCache.remove(signature) ??
+              _document(
+                _currentChapterIndex,
+              ).paginate(prefs, width, height, scaler, direction);
+          _prepaginateNeighbours(
+            (chapter) => _document(
+              chapter,
+            ).paginate(prefs, width, height, scaler, direction),
+            signatureFor,
           );
           _pagedPages = pages;
           _chapterPageCount = pages.length;
@@ -1726,6 +2318,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             physics: const BouncingScrollPhysics(),
             itemCount: pages.length + 2,
             onPageChanged: (page) {
+              _noteReadingActivity();
               if (_changingPagedChapter) return;
               if (page == 0 && _currentChapterIndex > 0) {
                 _changePagedChapter(_currentChapterIndex - 1, atEnd: true);
@@ -1790,6 +2383,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   void _changePagedChapter(int index, {bool atEnd = false}) {
     if (index < 0 || index >= _chapters.length) return;
+    if (index == _currentChapterIndex + 1) {
+      unawaited(_finishedChapter(_currentChapterIndex));
+    }
     _changingPagedChapter = true;
     _pendingPagedEnd = atEnd;
     if (_pageController.hasClients) _pageController.jumpToPage(1);
@@ -1817,14 +2413,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   }
 
   Widget _buildTopHeader(ReaderThemeConfig themeConfig) {
-    final remaining = _chapters.length - _currentChapterIndex - 1;
     final isWebNovel = widget.book.format == BookFormat.webNovel;
+    final chapterTitle = _chapters.isEmpty
+        ? ''
+        : _chapters[_currentChapterIndex].title.trim();
     return ReaderHeader(
       theme: themeConfig,
       location: '${_currentChapterIndex + 1}',
-      status: remaining > 0
-          ? '$remaining ${remaining == 1 ? 'chapter' : 'chapters'} left'
-          : 'Last chapter',
+      // Like Apple Books: name where you are; the footer carries progress.
+      status: chapterTitle.isNotEmpty ? chapterTitle : widget.book.title,
       onBack: isWebNovel ? _backToCatalogue : null,
       backLabel: 'Catalogue',
       onPrevious: !isWebNovel && _currentChapterIndex > 0
@@ -1842,9 +2439,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (widget.fromCatalogue) {
       Navigator.of(context).pop();
     } else {
-      final sourceId = widget.book.sourceId ??
-          (widget.book.id.contains(':') ? widget.book.id.split(':').first : 'unknown');
-      final sourceNovelId = widget.book.sourceNovelId ??
+      final sourceId =
+          widget.book.sourceId ??
+          (widget.book.id.contains(':')
+              ? widget.book.id.split(':').first
+              : 'unknown');
+      final sourceNovelId =
+          widget.book.sourceNovelId ??
           (widget.book.id.contains(':')
               ? widget.book.id.substring(widget.book.id.indexOf(':') + 1)
               : widget.book.id);
@@ -1865,11 +2466,64 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
   }
 
+  Widget _buildAutoScrollControls(ReaderThemeConfig themeConfig) {
+    Widget button(String tooltip, IconData icon, VoidCallback onTap) =>
+        IconButton(
+          tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          icon: Icon(icon, size: 18, color: themeConfig.textColor),
+          onPressed: onTap,
+        );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: themeConfig.uiControlsBackground.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            button('Slower', CupertinoIcons.minus, () => _autoScroller.changeSpeed(-ReaderAutoScroller.speedStep)),
+            Text(
+              'Auto-scroll ${_autoScroller.speed.round()}',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: themeConfig.textColor),
+            ),
+            button('Faster', CupertinoIcons.plus, () => _autoScroller.changeSpeed(ReaderAutoScroller.speedStep)),
+            button('Stop auto-scroll', CupertinoIcons.stop_fill, _autoScroller.stop),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "12 min left" for the rest of the current chapter, once it is parsed.
+  String? _timeLeftInChapter() {
+    final document = _documents[_currentChapterIndex];
+    if (document == null) return null;
+    var anchor = _anchor;
+    if (!_scrollController.hasClients && _pagedPages.isNotEmpty) {
+      final page =
+          _pagedPages[_currentPageIndex.clamp(0, _pagedPages.length - 1)];
+      if (page.isNotEmpty) {
+        anchor = ReaderTextAnchor(page.first.block, page.first.start);
+      }
+    }
+    return minutesLeftLabel(document.wordsFrom(anchor));
+  }
+
   Widget _buildBottomBar(ReaderThemeConfig themeConfig) {
     final total = _chapters.isNotEmpty ? _chapters.length : _totalPages;
+    final timeLeft = _timeLeftInChapter();
     return ReaderFooter(
       theme: themeConfig,
-      progress: 'Chapter ${_currentChapterIndex + 1} of $total',
+      progress: [
+        'Chapter ${_currentChapterIndex + 1} of $total',
+        ?timeLeft,
+      ].join(' · '),
       onReload: _reloadCurrentChapter,
       onMenu: () {
         ReaderMenuPopup.show(
@@ -1892,6 +2546,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           onOpenSearch: () {
             _showBookSearch();
           },
+          isListening: _tts.active,
+          onToggleListen: _toggleListening,
+          isAutoScrolling: _autoScroller.running,
+          onToggleAutoScroll:
+              ref.read(readerPreferencesProvider).layoutMode ==
+                  ReaderLayoutMode.verticalScroll
+              ? () {
+                  _autoScroller.toggle();
+                  if (_autoScroller.running) {
+                    setState(() => _showControls = false);
+                  }
+                }
+              : null,
           onOpenThemes: () {
             ThemesSettingsSheet.show(context, bookId: widget.book.id);
           },
@@ -2002,4 +2669,55 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       }
     }
   }
+}
+
+/// Gives each rendered piece of text its own [SelectionListenerNotifier] and
+/// publishes it in [registry] under [id] while mounted. A notifier can only
+/// serve one listener, and the same paragraph can be built twice at once
+/// (two pages mid-swipe, or old and new layouts while switching modes).
+class _TrackedSelection extends StatefulWidget {
+  const _TrackedSelection({
+    required this.registry,
+    required this.id,
+    required this.child,
+  });
+
+  final Map<String, SelectionListenerNotifier> registry;
+  final String id;
+  final Widget child;
+
+  @override
+  State<_TrackedSelection> createState() => _TrackedSelectionState();
+}
+
+class _TrackedSelectionState extends State<_TrackedSelection> {
+  final _notifier = SelectionListenerNotifier();
+
+  @override
+  void initState() {
+    super.initState();
+    widget.registry[widget.id] = _notifier;
+  }
+
+  @override
+  void didUpdateWidget(_TrackedSelection old) {
+    super.didUpdateWidget(old);
+    if (old.id != widget.id || old.registry != widget.registry) {
+      if (old.registry[old.id] == _notifier) old.registry.remove(old.id);
+      widget.registry[widget.id] = _notifier;
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.registry[widget.id] == _notifier) {
+      widget.registry.remove(widget.id);
+    }
+    _notifier.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SelectionListener(selectionNotifier: _notifier, child: widget.child);
 }

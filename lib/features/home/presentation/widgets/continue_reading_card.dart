@@ -5,8 +5,11 @@ import '../../../../core/database/database_service.dart';
 import '../../../../core/models/book.dart';
 import '../../../../core/models/reading_progress.dart';
 import '../../../../shared/widgets/book_cover_widget.dart';
+import '../../../../shared/widgets/book_open_route.dart';
 import '../../../reader/presentation/reader_navigator.dart';
 import '../../../../app/theme/hon_colors.dart';
+import '../../../../shared/widgets/pressable_scale.dart';
+import '../../../../shared/widgets/cover_tint.dart';
 
 class ContinueReadingCard extends StatelessWidget {
   final Book book;
@@ -27,25 +30,30 @@ class ContinueReadingCard extends StatelessWidget {
         : 0;
 
     final colors = Theme.of(context).colorScheme;
+    final cover = CoverOrigin();
     return Semantics(
       button: true,
       label: 'Continue reading ${book.title}, $pct percent read',
-      child: GestureDetector(
-        onTap: () => ReaderNavigator.openBook(context, book),
-        child: GlassSurface(
+      child: PressableScale(
+        onTap: () =>
+            ReaderNavigator.openBook(context, book, origin: cover.rect),
+        child: _CoverTintedSurface(
+          coverPath: book.coverPath,
           width: width,
           radius: 18,
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               // Left: Book Cover
-              BookCoverWidget(
-                title: book.title,
-                author: book.author,
-                coverPath: book.coverPath,
-                width: 64,
-                height: 96,
-                borderRadius: 6,
+              cover.wrap(
+                BookCoverWidget(
+                  title: book.title,
+                  author: book.author,
+                  coverPath: book.coverPath,
+                  width: 64,
+                  height: 96,
+                  borderRadius: 6,
+                ),
               ),
               const SizedBox(width: 14),
 
@@ -201,7 +209,8 @@ class GroupedContinueReadingCard extends StatelessWidget {
 
     final secondaryBooks = books.skip(1).take(2).toList();
 
-    return GlassSurface(
+    return _CoverTintedSurface(
+      coverPath: primaryBook.coverPath,
       width: double.infinity,
       radius: 20,
       padding: const EdgeInsets.all(14),
@@ -261,16 +270,21 @@ class GroupedContinueReadingCard extends StatelessWidget {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            Text(
-                              '$primaryPct% read',
-                              style: TextStyle(
-                                color: colors.onSurfaceVariant,
-                                fontSize: 12,
-                                height: 1.2,
-                                fontWeight: FontWeight.w500,
+                            // Expanded so large text truncates the label
+                            // instead of pushing Resume off the card.
+                            Expanded(
+                              child: Text(
+                                '$primaryPct% read',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: colors.onSurfaceVariant,
+                                  fontSize: 12,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
-                            const Spacer(),
                             FilledButton.tonal(
                               style: FilledButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
@@ -280,8 +294,10 @@ class GroupedContinueReadingCard extends StatelessWidget {
                                 ),
                                 minimumSize: const Size(0, 32),
                               ),
-                              onPressed: () =>
-                                  ReaderNavigator.openBook(context, primaryBook),
+                              onPressed: () => ReaderNavigator.openBook(
+                                context,
+                                primaryBook,
+                              ),
                               child: const Text(
                                 'Resume',
                                 style: TextStyle(
@@ -402,9 +418,7 @@ class GroupedContinueReadingCard extends StatelessWidget {
                         Icon(
                           CupertinoIcons.chevron_right,
                           size: 14,
-                          color: colors.onSurfaceVariant.withValues(
-                            alpha: 0.7,
-                          ),
+                          color: colors.onSurfaceVariant.withValues(alpha: 0.7),
                         ),
                       ],
                     ),
@@ -446,6 +460,42 @@ class GroupedContinueReadingCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// The card surface washed with a little of the cover's colour.
+class _CoverTintedSurface extends StatelessWidget {
+  const _CoverTintedSurface({
+    required this.coverPath,
+    required this.child,
+    this.width,
+    this.radius = 22,
+    this.padding = EdgeInsets.zero,
+  });
+
+  final String? coverPath;
+  final Widget child;
+  final double? width;
+  final double radius;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final card = child;
+    return CoverTintBuilder(
+      coverPath: coverPath,
+      builder: (context, tint, strength) => GlassSurface(
+        width: width,
+        radius: radius,
+        padding: padding,
+        color: tint == null
+            ? null
+            : Color.lerp(colors.surface, tint, (dark ? .24 : .13) * strength),
+        child: card,
       ),
     );
   }

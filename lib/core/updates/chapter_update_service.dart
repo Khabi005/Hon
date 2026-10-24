@@ -9,7 +9,10 @@ import '../database/database_service.dart';
 import '../models/book.dart';
 import '../models/chapter.dart';
 import '../models/novel_source.dart';
+import '../downloads/download_preferences.dart';
+import '../downloads/hon_download_manager.dart';
 import '../sources/source_registry.dart';
+import '../utils/log_ignored.dart';
 
 class ChapterUpdateService extends ChangeNotifier {
   static final instance = ChapterUpdateService();
@@ -58,7 +61,9 @@ class ChapterUpdateService extends ChangeNotifier {
               }
             }
           });
-        } catch (_) {}
+        } catch (e) {
+          logIgnored(e, 'chapter_update_service');
+        }
       }
     }
 
@@ -68,8 +73,11 @@ class ChapterUpdateService extends ChangeNotifier {
           ..limit(2000))
         .get();
 
+    // Typed explicitly: an inferred List<Map<String, String>> rejects the
+    // Map<String, dynamic> entries a later check inserts, which failed every
+    // in-app check that found new chapters once any history existed.
     history = rows
-        .map((r) => {
+        .map<Map<String, dynamic>>((r) => {
               'bookId': r.bookId,
               'chapterId': r.chapterId,
               'title': r.title,
@@ -165,8 +173,10 @@ class ChapterUpdateService extends ChangeNotifier {
 
     try {
       await init();
+      // A full check skips novels marked finished, like the background check.
       final books = (only == null ? db.getLibraryBooks() : [only])
           .where((book) => book.format == BookFormat.webNovel)
+          .where((book) => only != null || db.getLibraryEntry(book.id)?.isFinished != true)
           .toList();
 
       if (books.isEmpty) return 0;
@@ -219,6 +229,7 @@ class ChapterUpdateService extends ChangeNotifier {
           final now = DateTime.now();
           final chapters = <Chapter>[];
           final newHistoryEntries = <Map<String, dynamic>>[];
+          final newChapters = <Chapter>[];
 
           // Count normalized title occurrences across all incoming chapters
           final incomingTitleCounts = <String, int>{};
@@ -307,6 +318,7 @@ class ChapterUpdateService extends ChangeNotifier {
               // Do NOT mark all chapters as new on the initial check (B4)
               if (!isInitialCheck) {
                 added++;
+                newChapters.add(chapter);
                 newHistoryEntries.add({
                   'bookId': book.id,
                   'chapterId': chapter.id,
@@ -387,6 +399,11 @@ class ChapterUpdateService extends ChangeNotifier {
               updatedAt: now,
             ),
           );
+
+          if (newChapters.isNotEmpty && await DownloadPreferences.autoDownloadNew()) {
+            final saved = db.getBookById(book.id) ?? book;
+            await HonDownloadManager.instance.queueChapters(saved, newChapters);
+          }
         } catch (error) {
           errors[book.id] = '$error';
         }
