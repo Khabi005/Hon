@@ -228,7 +228,7 @@ class ReaderMenuPopup extends StatelessWidget {
 
             if (onToggleListen != null) ...[
               _buildMenuItem(
-                title: isListening ? 'Stop Listening' : 'Listen',
+                title: isListening ? 'Stop Audiobook Mode' : 'Audiobook Mode',
                 icon: isListening
                     ? CupertinoIcons.speaker_slash
                     : CupertinoIcons.headphones,

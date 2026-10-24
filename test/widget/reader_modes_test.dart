@@ -415,7 +415,7 @@ void main() {
     expect(scroll.offset, greaterThan(stopped + 300));
   });
 
-  testWidgets('Listen reads aloud and highlights the paragraph', (
+  testWidgets('Audiobook mode reads aloud and highlights the paragraph', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -474,7 +474,7 @@ void main() {
     await settle();
     await tester.tap(find.byTooltip('Reader menu'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Listen'));
+    await tester.tap(find.text('Audiobook Mode'));
     await settle();
     // The chapter heading is read first, then the text.
     expect(engine.spoken, ['Chapter One']);
@@ -490,7 +490,7 @@ void main() {
     await settle();
     expect(find.byTooltip('Play'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Stop listening'));
+    await tester.tap(find.byTooltip('Stop audiobook mode'));
     await settle();
     expect(find.byTooltip('Play'), findsNothing);
     expect(find.byTooltip('Pause'), findsNothing);

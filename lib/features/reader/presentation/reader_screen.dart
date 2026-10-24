@@ -1691,7 +1691,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                 ),
               ),
             ),
-            button('Stop listening', CupertinoIcons.xmark, _tts.stop),
+            button('Stop audiobook mode', CupertinoIcons.xmark, _tts.stop),
           ],
         ),
       ),
